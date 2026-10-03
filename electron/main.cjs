@@ -17,6 +17,7 @@ app.setPath('sessionData', join(userData, 'Chromium'));
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 if (dev) app.commandLine.appendSwitch('remote-debugging-port', '9222');
 let mainWindow, tray, backend, stateTimer, quitting = false, finished = false;
+let downloadedUpdate = null, updateDismissed = false, updateRestarting = false, updateError = null;
 
 const trusted = value => {
     try {
@@ -67,22 +68,25 @@ async function checkForMacUpdates() {
 function startWindowsUpdater() {
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
-    autoUpdater.on('error', error => console.error('[lowcord] Update check failed:', error.message));
-    autoUpdater.on('update-downloaded', ({ version }) => {
-        if (!mainWindow || mainWindow.isDestroyed()) return;
-        void dialog.showMessageBox(mainWindow, {
-            type: 'info', title: 'OrbitCord update ready',
-            message: `OrbitCord ${version} has downloaded and is ready to install.`,
-            detail: 'Restart OrbitCord now to finish installing the update, or choose Later to install it when you quit.',
-            buttons: ['Restart now', 'Later'], defaultId: 0, cancelId: 1,
-        }).then(({ response }) => { if (response === 0) autoUpdater.quitAndInstall(); })
-            .catch(error => console.error('[lowcord] Update prompt failed:', error.message));
-    });
     const check = () => autoUpdater.checkForUpdates().catch(error =>
         console.error('[lowcord] Update check failed:', error.message));
     setTimeout(check, 10_000).unref();
     setInterval(check, 24 * 60 * 60 * 1000).unref();
 }
+const updateNoticeState = () => downloadedUpdate && !updateDismissed
+    ? { version: downloadedUpdate, restarting: updateRestarting, error: updateError } : null;
+const publishUpdateNotice = () => {
+    if (mainWindow && !mainWindow.isDestroyed() && trusted(mainWindow.webContents.getURL())) {
+        mainWindow.webContents.send('lowcord:update-state', updateNoticeState());
+    }
+};
+const updateFailed = error => {
+    console.error('[lowcord] Update failed:', error.message);
+    if (!updateRestarting) return;
+    updateRestarting = false;
+    updateError = 'Couldn’t restart. Try again, or quit OrbitCord to install.';
+    publishUpdateNotice();
+};
 const saveState = () => {
     clearTimeout(stateTimer);
     if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve();
@@ -175,6 +179,29 @@ async function start() {
     ipcMain.handle('lowcord:notify', (event, title, body) => { assertSender(event); return backend.call('notify', { title, body }); });
     ipcMain.handle('lowcord:log', (event, message) => { assertSender(event); return backend.call('log', { message }); });
     ipcMain.handle('lowcord:open-external', (event, url) => { assertSender(event); return backend.call('open_external', { url }); });
+    ipcMain.handle('lowcord:update-state', event => { assertSender(event); return updateNoticeState(); });
+    ipcMain.handle('lowcord:update-dismiss', event => {
+        assertSender(event);
+        if (updateRestarting) return;
+        updateDismissed = true;
+        publishUpdateNotice();
+    });
+    ipcMain.handle('lowcord:update-restart', event => {
+        assertSender(event);
+        if (!downloadedUpdate || updateDismissed || updateRestarting) return;
+        updateRestarting = true;
+        updateError = null;
+        publishUpdateNotice();
+        try { autoUpdater.quitAndInstall(); } catch (error) { updateFailed(error); }
+    });
+    autoUpdater.on('error', updateFailed);
+    autoUpdater.on('update-downloaded', ({ version }) => {
+        if (typeof version !== 'string' || !version || downloadedUpdate === version) return;
+        downloadedUpdate = version;
+        updateDismissed = updateRestarting = false;
+        updateError = null;
+        publishUpdateNotice();
+    });
     ipcMain.handle('lowcord:badge', (event, count) => {
         assertSender(event);
         if (!Number.isSafeInteger(count) || count < 0 || count > 1000000) throw new Error('Invalid badge');

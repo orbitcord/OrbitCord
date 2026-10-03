@@ -79,6 +79,84 @@ test('Rust saves window state across Electron restarts and quits with its parent
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('downloaded update shows a quiet corner notice, dismisses across reloads and restarts only on a real click', async ({}, testInfo) => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-update-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('load');
+        const notice = page.locator('#orbitcord-update-notice');
+        await expect(notice).toHaveCount(0);
+        await app.evaluate(({ dialog }, updaterPath) => {
+            global.testUpdater = process.mainModule.require(updaterPath).autoUpdater;
+            global.updateRestarts = 0;
+            global.updateDialogs = 0;
+            dialog.showMessageBox = async () => { global.updateDialogs++; return { response:1 }; };
+            global.testUpdater.quitAndInstall = () => { global.updateRestarts++; };
+            global.testUpdater.emit('update-downloaded', { version:'0.1.3' });
+        }, resolve('node_modules/electron-updater'));
+        await expect(notice.getByRole('heading', { name:'Update ready' })).toBeVisible();
+        await expect(notice).toContainText('OrbitCord 0.1.3 is ready to install.');
+        expect(await notice.getByRole('heading').evaluate(heading => getComputedStyle(heading).fontFamily)).toContain('Segoe UI');
+        expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
+        // A page reload restores the pending notice from the main process.
+        await page.reload();
+        await expect(notice).toBeVisible();
+        await page.evaluate(() => {
+            document.body.style.background = '#313338';
+            document.documentElement.style.setProperty('--background-floating', '#18191c');
+            document.documentElement.style.setProperty('--text-normal', '#f2f3f5');
+            document.documentElement.style.setProperty('--header-primary', '#f2f3f5');
+            document.documentElement.style.setProperty('--text-muted', '#b5bac1');
+        });
+        const bounds = await notice.boundingBox();
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(page.viewportSize()?.width ?? 1280);
+        expect(bounds.y).toBe(72);
+        await page.screenshot({ path:testInfo.outputPath('update-notice-dark.png') });
+        // Discord page scripts cannot trigger a restart by synthesizing a click.
+        await notice.getByRole('button', { name:'Restart', exact:true }).evaluate(button => button.click());
+        expect(await app.evaluate(() => global.updateRestarts)).toBe(0);
+        await notice.getByRole('button', { name:'Later', exact:true }).click();
+        await expect(notice).toHaveCount(0);
+        await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.3' }));
+        await page.reload();
+        await expect(notice).toHaveCount(0);
+        await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.4' }));
+        await expect(notice).toContainText('0.1.4');
+        await notice.getByRole('button', { name:'Dismiss update notice' }).click();
+        await expect(notice).toHaveCount(0);
+        await app.evaluate(({ BrowserWindow }) => {
+            BrowserWindow.getAllWindows()[0].setBounds({ width:520, height:400 });
+            global.testUpdater.emit('update-downloaded', { version:'0.1.5' });
+            global.testUpdater.quitAndInstall = () => global.testUpdater.emit('error', new Error('Installer unavailable'));
+        });
+        await expect(notice).toBeVisible();
+        await page.evaluate(() => {
+            document.body.style.background = '#fff';
+            document.documentElement.style.setProperty('--background-floating', '#fff');
+            document.documentElement.style.setProperty('--text-normal', '#313338');
+            document.documentElement.style.setProperty('--header-primary', '#111214');
+            document.documentElement.style.setProperty('--text-muted', '#4e5058');
+        });
+        expect((await notice.boundingBox()).width).toBeLessThanOrEqual(488);
+        await page.screenshot({ path:testInfo.outputPath('update-notice-light-small.png') });
+        await notice.getByRole('button', { name:'Restart', exact:true }).click();
+        await expect(notice.getByRole('alert')).toContainText('Couldn’t restart');
+        await expect(notice.getByRole('button', { name:'Restart', exact:true })).toBeEnabled();
+        await app.evaluate(() => { global.testUpdater.quitAndInstall = () => { global.updateRestarts++; }; });
+        await notice.getByRole('button', { name:'Restart', exact:true }).click();
+        await expect(notice.getByRole('button', { name:'Restarting…' })).toBeDisabled();
+        await expect(notice.getByRole('alert')).toBeHidden();
+        expect(await app.evaluate(() => global.updateRestarts)).toBe(1);
+        // A duplicate downloaded event must not reset the restarting state.
+        await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
+        await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
+        expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
+            .toEqual(['notify', 'setBadge', 'log', 'openExternal']);
+        expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
+    } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
+});
+
 test('opened image menu copies full image pixels and saves the original file', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'orbitcord-image-menu-'));
     const app = await launch(dir);

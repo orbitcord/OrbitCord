@@ -50,6 +50,7 @@ export async function prepare(release = false, { platform = process.platform, ar
     // synchronously at document start. No eval, script tag or CSP bypass.
     const contents = `const { contextBridge, ipcRenderer } = require('electron');
 if (process.isMainFrame) {
+    require('./electron/update-notice.cjs').setupUpdateNotice(ipcRenderer);
     contextBridge.exposeInMainWorld('__LOWCORD_NATIVE__', {
         notify: (title, body) => ipcRenderer.invoke('lowcord:notify', title, body),
         setBadge: count => ipcRenderer.invoke('lowcord:badge', count),
