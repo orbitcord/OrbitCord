@@ -16,6 +16,8 @@
         .timestamp_test { color:var(--text-muted); font-size:11px; }
         .avatar_test { position:absolute; left:16px; top:8px; width:32px; height:32px; border-radius:50%; }
         .messageContent_test { overflow-wrap:anywhere; }
+        /* Discord dims optimistic text until the server acknowledges it. */
+        .isSending_test { opacity:0.5; }
         .messageContent_test pre { white-space:pre; }
         .emoji_test { display:inline; width:20px; height:20px; }
         .repliedMessage_test { position:relative; display:flex; gap:8px; margin-left:56px; }

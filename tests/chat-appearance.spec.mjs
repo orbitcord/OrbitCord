@@ -16,6 +16,87 @@ const edge = locator => locator.evaluate(node => {
     if (node.hasAttribute("data-lowcord-media")) return parseFloat(style.paddingRight);
     return parseFloat(node.dataset.lowcordAlign === "right" ? style.marginRight : style.marginLeft);
 });
+
+for (const style of ["bubbles", "avatars"]) {
+    test(`new and acknowledged messages are styled before their first paint, ${style}`, async ({ page }) => {
+        await load(page);
+        await settings(page, { style });
+        await expect(bubble(page, 1)).toHaveAttribute("data-lowcord-style", style);
+        const frames = await page.evaluate(async () => {
+            const read = id => {
+                const surface = document.querySelector(`#chat-messages-100-${id} .message_test`);
+                const css = getComputedStyle(surface);
+                return { side: surface.dataset.lowcordBubble, align: surface.dataset.lowcordAlign,
+                    style: surface.dataset.lowcordStyle, color: css.backgroundColor,
+                    avatar: Boolean(surface.querySelector('.lowcord-bubble-avatar')) };
+            };
+            // Two callbacks in the SAME frame: Discord commits in the first,
+            // then we inspect the style the browser is about to paint. Waiting
+            // for a later frame (or a locator assertion) would miss the flash.
+            const commitFrame = (id, commit) => new Promise(resolve => {
+                requestAnimationFrame(commit);
+                requestAnimationFrame(() => resolve(read(id)));
+            });
+            const pending = await commitFrame('pending', () => fixture.add('pending', 'self',
+                '<div class="messageContent_test">Just sent</div>'));
+            const confirmed = await commitFrame('confirmed', () => {
+                fixture.messages.confirmed = { ...fixture.messages.pending, id: 'confirmed' };
+                delete fixture.messages.pending;
+                fixture.emit();
+                // React can replace the surface when a pending message is
+                // acknowledged, or recycle a virtualized timeline row.
+                const row = document.querySelector('#chat-messages-100-pending');
+                row.id = 'chat-messages-100-confirmed';
+                row.innerHTML = '<div class="message_test" data-list-item-id="chat-messages___100-confirmed"><div class="contents_test"><div class="messageContent_test">Just sent</div></div></div>';
+            });
+            return [pending, confirmed];
+        });
+        expect(frames).toEqual(Array(2).fill({ side: 'outgoing', align: 'right', style,
+            color: 'rgb(0, 107, 230)', avatar: style === 'avatars' }));
+    });
+}
+
+for (const style of ["bubbles", "avatars"]) {
+    test(`pending rows keep their bubble while the nonce leaves MessageStore, ${style}`, async ({ page }) => {
+        await load(page);
+        await settings(page, { style });
+        const snapshots = await page.evaluate(async () => {
+            const row = fixture.add('nonce', 'self', '<div class="messageContent_test isSending_test">Just sent</div>', { state: 'SENDING' });
+            const read = () => {
+                const surface = row.firstElementChild;
+                const box = surface.getBoundingClientRect();
+                return { side: surface.dataset.lowcordBubble, align: surface.dataset.lowcordAlign,
+                    background: getComputedStyle(surface).backgroundColor, x: box.x, width: box.width };
+            };
+            await new Promise(requestAnimationFrame);
+            const pending = read();
+            const message = fixture.messages.nonce;
+            // Real acknowledgement order: remove the nonce and notify stores,
+            // then React replaces the still-visible pending row in a later frame.
+            fixture.messages.confirmed = { ...message, id: 'confirmed', state: 'SENT' };
+            delete fixture.messages.nonce;
+            fixture.emit();
+            await new Promise(requestAnimationFrame);
+            const gap = read();
+            await new Promise(requestAnimationFrame);
+            row.id = 'chat-messages-100-confirmed';
+            row.querySelector('.messageContent_test').classList.remove('isSending_test');
+            await new Promise(requestAnimationFrame);
+            const confirmed = read();
+            // Recycling this row for an unknown message must not inherit the
+            // old sender, bubble, timestamp or avatar from the cache.
+            row.id = 'chat-messages-100-unknown';
+            await new Promise(requestAnimationFrame);
+            return { pending, gap, confirmed, reused: read() };
+        });
+        expect(snapshots.pending.side).toBe('outgoing');
+        expect(snapshots.gap).toEqual(snapshots.pending);
+        expect(snapshots.confirmed).toEqual(snapshots.pending);
+        expect(snapshots.reused.side).toBeUndefined();
+        expect(snapshots.reused.background).toBe('rgba(0, 0, 0, 0)');
+    });
+}
+
 async function cleanMedia(page) {
     expect(await page.locator("[data-media] [data-lowcord-bubble]").count()).toBe(0);
     const { style, timestamps } = await page.evaluate(() => window.__lowcordChatAppearance.options);
@@ -27,6 +108,79 @@ async function cleanMedia(page) {
         const style = getComputedStyle(node);
         return style.backgroundColor === "rgba(0, 0, 0, 0)" && style.borderTopWidth === "0px" && style.borderRadius === "0px";
     }))).toBe(true);
+}
+
+for (const style of ["bubbles", "avatars"]) {
+    test(`optimistic React rows are bubbles before MessageStore publishes them, ${style}`, async ({ page }) => {
+        await load(page);
+        await settings(page, { style });
+        await expect(bubble(page, 1)).toHaveAttribute('data-lowcord-style', style);
+        const result = await page.evaluate(async () => {
+            const { message } = fixture.renderMessage('optimistic', 'self', 'Just sent');
+            const read = () => {
+                const row = document.querySelector('#chat-messages-100-optimistic');
+                if (!row) return null;
+                const surface = row.firstElementChild;
+                return { side: surface.dataset.lowcordBubble, align: surface.dataset.lowcordAlign,
+                    background: getComputedStyle(surface).backgroundColor,
+                    opacity: getComputedStyle(surface.querySelector('.messageContent_test')).opacity };
+            };
+            // Inspect the first frame that contains the committed row, before
+            // publishing to the store. An eventual locator check misses this.
+            const firstPaint = await new Promise(resolve => {
+                const sample = () => { const state = read(); if (state) resolve(state); else requestAnimationFrame(sample); };
+                requestAnimationFrame(sample);
+            });
+            fixture.messages.optimistic = message;
+            fixture.emit();
+            await new Promise(requestAnimationFrame);
+            return { firstPaint, afterPublish: read() };
+        });
+        expect(result.firstPaint).toEqual({ side: 'outgoing', align: 'right', background: 'rgb(0, 107, 230)', opacity: '1' });
+        expect(result.firstPaint).toEqual(result.afterPublish);
+    });
+}
+
+for (const style of ["bubbles", "avatars"]) for (const kind of ["text", "caption", "emoji"]) {
+    test(`pending ${kind} keeps the same opacity when acknowledged, ${style}`, async ({ page }) => {
+        await load(page);
+        await settings(page, { style });
+        const snapshots = await page.evaluate(async kind => {
+            const content = kind === 'emoji' ? '😀' : 'Just sent';
+            const media = kind === 'caption' ? '<div class="container_test"><div class="attachment_test upload_test">Uploading</div></div>' : '';
+            const row = fixture.add('pending', 'self',
+                `<div class="messageContent_test isSending_test">${content}</div>${media}`,
+                { state: 'SENDING', content });
+            const text = row.querySelector('.messageContent_test');
+            const read = () => {
+                const s = row.firstElementChild;
+                return { opacity: getComputedStyle(text).opacity,
+                    color: getComputedStyle(text).color, background: getComputedStyle(s).backgroundColor,
+                    x: s.getBoundingClientRect().x, width: s.getBoundingClientRect().width };
+            };
+            await new Promise(requestAnimationFrame);
+            const pending = read();
+            // Discord replaces the local nonce and removes isSending_ after
+            // acknowledgement. The bubble's text must not brighten suddenly.
+            fixture.messages.confirmed = { ...fixture.messages.pending, id: 'confirmed', state: 'SENT' };
+            delete fixture.messages.pending;
+            row.id = 'chat-messages-100-confirmed';
+            text.classList.remove('isSending_test');
+            fixture.emit();
+            await new Promise(requestAnimationFrame);
+            return { pending, confirmed: read() };
+        }, kind);
+        expect(snapshots.pending.opacity).toBe('1');
+        expect(snapshots.pending).toEqual(snapshots.confirmed);
+        // Only text in an enabled appearance is affected. Native sending
+        // feedback still dims text when bubbles are disabled.
+        await page.evaluate(() => {
+            window.__lowcordChatAppearance.setEnabled(false);
+            document.querySelector('#chat-messages-100-confirmed .messageContent_test').classList.add('isSending_test');
+        });
+        expect(await page.locator('#chat-messages-100-confirmed .messageContent_test')
+            .evaluate(node => getComputedStyle(node).opacity)).toBe('0.5');
+    });
 }
 
 for (const style of ["bubbles", "avatars"]) {
@@ -437,6 +591,34 @@ for (const style of ["bubbles", "avatars"]) for (const width of [1000, 520]) {
         expect(result).toEqual({ visible: true, right: await edge(row.locator(".message_test")), textClear: true, mediaClear: true, fits: true });
     });
 }
+
+test("message bursts stay batched and stop scanning when idle", async ({ page }) => {
+    await load(page);
+    await settings(page, { style: 'avatars' });
+    await expect(bubble(page, 1)).toHaveAttribute('data-lowcord-style', 'avatars');
+    const scans = await page.evaluate(async () => {
+        const waitFrames = async () => {
+            for (let i = 0; i < 4; i++) await new Promise(requestAnimationFrame);
+        };
+        await waitFrames();
+        let count = 0;
+        const query = document.querySelectorAll.bind(document);
+        document.querySelectorAll = selector => {
+            if (selector === '[id^="chat-messages-"]') count++;
+            return query(selector);
+        };
+        for (let id = 100; id < 120; id++) fixture.add(id, 'self', '<div class="messageContent_test">Sent</div>');
+        await waitFrames();
+        const burst = count;
+        count = 0;
+        await waitFrames();
+        document.querySelectorAll = query;
+        return { burst, idle: count };
+    });
+    expect(scans.burst).toBeGreaterThan(0);
+    expect(scans.burst).toBeLessThanOrEqual(4);
+    expect(scans.idle).toBe(0);
+});
 
 test("unrelated shell mutations do not rescan the message timeline", async ({page}) => {
     await load(page);

@@ -18,6 +18,26 @@ const fixture = window.fixture = {
         fixture.emit();
         return row;
     },
+    // Model an optimistic React commit before MessageStore publishes it. The
+    // renderer already owns the message even while getMessage returns nothing.
+    renderMessage(id, author, content, data = {}) {
+        const message = { id: String(id), channel_id: fixture.selected, author: { id: author },
+            type: 0, content, timestamp: "2026-10-03T05:00:00Z", state: 'SENDING', ...data };
+        function Message({ message, channel }) {
+            const h = React.createElement;
+            return h('li', { id: `chat-messages-${channel.id}-${message.id}` },
+                h('div', { className: 'message_test', 'data-list-item-id': `chat-messages___${channel.id}-${message.id}` },
+                    h('div', { className: 'contents_test' },
+                        h('img', { className: 'avatar_test', src: picture, alt: '' }),
+                        h('h3', { className: 'header_test' }, 'You'),
+                        h('div', { className: 'messageContent_test' + (message.state === 'SENDING' ? ' isSending_test' : '') }, message.content))));
+        }
+        const host = document.createElement('div');
+        document.querySelector('#timeline').append(host);
+        const root = createRoot(host);
+        root.render(React.createElement(Message, { message, channel: { ...fixture.channel, id: fixture.selected } }));
+        return { message, root, host };
+    },
     // Discord renders attachments in a grid beside contents_, not inside it.
     accessories(row) {
         const accessories = row.querySelector(".contents_test > .container_test");

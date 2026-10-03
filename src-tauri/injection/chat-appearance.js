@@ -52,6 +52,10 @@ function setupLowcordChatAppearance() {
     const properties = ["--lowcord-bubble-color", "--lowcord-bubble-text", "--lowcord-reply-max-width", "--lowcord-actions-max-width",
         "--lowcord-actions-inset", "--lowcord-actions-top", "--lowcord-actions-bridge-height"];
     const stores = new Map();
+    // The pending nonce leaves MessageStore before React replaces its row.
+    // Keep that row's last message until the DOM identity changes. Weak keys
+    // let virtualized/unmounted rows and their message data be collected.
+    const rowMessages = new WeakMap();
     let enabled = true;
     let observer;
     const resizedTimelines = new Set();
@@ -297,6 +301,31 @@ function setupLowcordChatAppearance() {
         } else placeActions(surface, row, alignment);
     }
 
+    function rowMessage(row, channelID, messageID) {
+        const message = stores.get("MessageStore")?.getMessage(channelID, messageID);
+        if (message) {
+            rowMessages.set(row, { channelID, messageID, message });
+            return message;
+        }
+        const previous = rowMessages.get(row);
+        if (previous?.channelID === channelID && previous.messageID === messageID) return previous.message;
+        // On an initial optimistic commit React can also get ahead of the
+        // store. Read the message already rendered by its owning component;
+        // never patch React/Discord or infer a sender from visible text.
+        const key = Object.keys(row).find(name => name.startsWith("__reactFiber$"));
+        for (let fiber = key && row[key], depth = 0; fiber && depth < 12; fiber = fiber.return, depth++) {
+            for (const props of [fiber.memoizedProps, fiber.alternate?.memoizedProps]) {
+                const rendered = props?.message;
+                if (rendered?.id === messageID && (props.channel?.id === channelID || rendered.channel_id === channelID)) {
+                    rowMessages.set(row, { channelID, messageID, message: rendered });
+                    return rendered;
+                }
+            }
+        }
+        rowMessages.delete(row);
+        return null;
+    }
+
     function refresh() {
         frame = undefined;
         if (!enabled) return;
@@ -311,7 +340,7 @@ function setupLowcordChatAppearance() {
         document.querySelectorAll('[id^="chat-messages-"]').forEach(row => {
             const match = /^chat-messages-(\d+)-(.+)$/.exec(row.id);
             const message = match?.[1] === channelID
-                ? stores.get("MessageStore")?.getMessage(channelID, match[2]) : null;
+                ? rowMessage(row, channelID, match[2]) : null;
             const surface = row.querySelector('[data-list-item-id^="chat-messages"]')
                 ?? row.querySelector('[class*="message_"]');
             if (!surface) return;
@@ -369,8 +398,10 @@ function setupLowcordChatAppearance() {
         if (!enabled) { clearBubbles(); return; }
         for (const store of stores.values()) store.addChangeListener?.(scheduleRefresh);
         if (document.body) {
-            // Discord virtualizes the timeline. Reapply to inserted or reused
-            // rows, batching mutation bursts into one animation frame.
+            // Discord virtualizes the timeline. MutationObserver already
+            // batches each DOM commit and runs before paint. Deferring again
+            // to rAF lets rows committed during a frame paint once without
+            // their bubble (including pending -> confirmed replacements).
             observer ??= new MutationObserver(records => {
                 // The app shell, member list, composer and settings animate
                 // independently. Only timeline changes need a message scan.
@@ -379,7 +410,11 @@ function setupLowcordChatAppearance() {
                     record.target.closest(rowSelector) ||
                     [...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element &&
                         (node.matches(rowSelector) || node.querySelector(rowSelector)))
-                ))) scheduleRefresh();
+                ))) {
+                    // A store event may already have queued the same work.
+                    if (frame !== undefined) cancelAnimationFrame(frame);
+                    refresh();
+                }
             });
             observer.observe(document.body, { childList: true, subtree: true,
                 attributes: true, attributeFilter: ["id", "class"] });

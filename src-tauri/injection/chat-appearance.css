@@ -62,6 +62,13 @@
     line-height: 1.375;
     color: inherit !important;
 }
+/* Discord's isSending_ text starts at half opacity, then brightens when the
+   nonce becomes a confirmed message. Keep customized text visually stable;
+   scope this to message text so native upload progress and errors stay intact. */
+[id^="chat-messages-"] > [data-lowcord-bubble="outgoing"] [class*="messageContent_"][class*="isSending_"],
+[id^="chat-messages-"] > [data-lowcord-media="outgoing"] > [class*="contents_"] > [class*="messageContent_"][class*="isSending_"] {
+    opacity: 1 !important;
+}
 [id^="chat-messages-"] > [data-lowcord-bubble] [class*="messageContent_"] a { color: inherit !important; text-decoration: underline; }
 [id^="chat-messages-"] > [data-lowcord-bubble] [class*="messageContent_"] pre { box-sizing: border-box; max-width: 100%; overflow-x: auto; }
 /* Reactions and link previews on a text message stay inside its bubble. */
