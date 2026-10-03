@@ -10,7 +10,7 @@
 [id^="chat-messages-"]:has(> [data-lowcord-continuation="true"]) { padding-top: 2px !important; }
 [id^="chat-messages-"]:has(> [data-lowcord-timed]) { padding-bottom: 18px !important; }
 /* The quote card sits above a reply bubble; the row reserves its height. */
-[id^="chat-messages-"]:has(> [data-lowcord-bubble] > [class*="repliedMessage_"]) { padding-top: 64px !important; }
+[id^="chat-messages-"]:has(> :is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"]) { padding-top: 64px !important; }
 /* Translated outgoing media must not widen the timeline. */
 [id^="chat-messages-"]:has(> [data-lowcord-media]) { overflow-x: clip; }
 
@@ -160,7 +160,7 @@
 /* The original reply element is a separate card above the message bubble.
    Absolute positioning decouples its width from even a one-word response;
    the timeline row reserves the card's height without moving React nodes. */
-[id^="chat-messages-"] > [data-lowcord-bubble] > [class*="repliedMessage_"] {
+[id^="chat-messages-"] > :is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] {
     position: absolute !important;
     bottom: calc(100% + 6px) !important;
     top: auto !important;
@@ -187,17 +187,21 @@
     line-height: 16px !important;
     text-align: left;
 }
-[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="right"] > [class*="repliedMessage_"] {
+[id^="chat-messages-"] > :is([data-lowcord-bubble], [data-lowcord-media])[data-lowcord-align="right"] > [class*="repliedMessage_"] {
     left: auto !important; right: 0 !important; padding: 7px 32px 7px 0 !important; text-align: right; justify-items: end;
 }
+/* Media rows span the timeline, so the quote starts at their gutter instead. */
+[id^="chat-messages-"] > [data-lowcord-media] { position: relative !important; }
+[id^="chat-messages-"] > [data-lowcord-media] > [class*="repliedMessage_"] { left: var(--lowcord-edge) !important; }
+[id^="chat-messages-"] > [data-lowcord-media][data-lowcord-align="right"] > [class*="repliedMessage_"] { left: auto !important; right: var(--lowcord-edge) !important; }
 /* A dotted elbow runs from the quoted text down to the top of the reply bubble. */
-[data-lowcord-bubble] > [class*="repliedMessage_"]::before {
+:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"]::before {
     content: "" !important; display: block !important;
     position: absolute; left: 14px; top: 14px; bottom: -6px; width: 12px;
     border-left: 2px dotted var(--text-muted, #949ba4); border-top: 2px dotted var(--text-muted, #949ba4);
     border-top-left-radius: 10px; pointer-events: none;
 }
-[data-lowcord-bubble][data-lowcord-align="right"] > [class*="repliedMessage_"]::before {
+:is([data-lowcord-bubble], [data-lowcord-media])[data-lowcord-align="right"] > [class*="repliedMessage_"]::before {
     left: auto; right: 14px; border-left: 0; border-top-left-radius: 0;
     border-right: 2px dotted var(--text-muted, #949ba4); border-top-right-radius: 10px;
 }
@@ -206,13 +210,13 @@
     margin: 0 !important; padding: 0 !important; text-indent: 0 !important; background: none;
 }
 [id^="chat-messages-"] > [data-lowcord-emoji="true"][data-lowcord-align="right"] > [class*="contents_"] { text-align: right; }
-[data-lowcord-bubble] [class*="repliedMessageClickableSpine_"] { display: none !important; }
-[data-lowcord-bubble] > [class*="repliedMessage_"] > [class*="username_"],
-[data-lowcord-bubble] > [class*="repliedMessage_"] > :has([class*="username_"]) {
+:is([data-lowcord-bubble], [data-lowcord-media]) [class*="repliedMessageClickableSpine_"] { display: none !important; }
+:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > [class*="username_"],
+:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > :has([class*="username_"]) {
     grid-column: var(--lowcord-reply-text-column); grid-row: 1; min-width: 0; max-width: 100%;
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
-[data-lowcord-bubble] > [class*="repliedMessage_"] [class*="username_"] {
+:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] [class*="username_"] {
     position: static !important;
     font-size: 12px !important;
     line-height: 16px !important;
@@ -220,7 +224,7 @@
     margin: 0 !important;
     color: var(--text-normal, #f2f3f5) !important;
 }
-[data-lowcord-bubble] [class*="repliedTextPreview_"] {
+:is([data-lowcord-bubble], [data-lowcord-media]) [class*="repliedTextPreview_"] {
     grid-column: var(--lowcord-reply-text-column); grid-row: 2;
     display: -webkit-box !important;
     -webkit-box-orient: vertical;
@@ -234,32 +238,32 @@
     white-space: normal !important;
     color: var(--text-muted, #949ba4) !important;
 }
-[data-lowcord-bubble] [class*="repliedTextContent_"] {
+:is([data-lowcord-bubble], [data-lowcord-media]) [class*="repliedTextContent_"] {
     display: inline !important;
     white-space: normal !important;
     font-size: inherit !important;
     line-height: inherit !important;
     color: inherit !important;
 }
-[data-lowcord-bubble] > [class*="repliedMessage_"] > [class*="replyAvatar_"],
-[data-lowcord-bubble] > [class*="repliedMessage_"] > :has([class*="replyAvatar_"]) {
+:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > [class*="replyAvatar_"],
+:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > :has([class*="replyAvatar_"]) {
     display: none !important;
     grid-column: var(--lowcord-reply-avatar-column, 1); grid-row: 1 / 3; align-self: center;
 }
-[data-lowcord-bubble] [class*="replyAvatar_"] { display: none !important; width: 20px !important; height: 20px !important; margin: 0 !important; }
-[data-lowcord-bubble][data-lowcord-style="avatars"] > [class*="repliedMessage_"] {
+:is([data-lowcord-bubble], [data-lowcord-media]) [class*="replyAvatar_"] { display: none !important; width: 20px !important; height: 20px !important; margin: 0 !important; }
+:is([data-lowcord-bubble], [data-lowcord-media])[data-lowcord-style="avatars"] > [class*="repliedMessage_"] {
     grid-template-columns: 20px minmax(0, 1fr);
     --lowcord-reply-text-column: 2;
 }
 /* Mirror the avatar with the quote text, keeping their shared 8px gap.
    A left-hand avatar column beside right-aligned text leaves a large hole. */
-[data-lowcord-bubble][data-lowcord-style="avatars"][data-lowcord-align="right"] > [class*="repliedMessage_"] {
+:is([data-lowcord-bubble], [data-lowcord-media])[data-lowcord-style="avatars"][data-lowcord-align="right"] > [class*="repliedMessage_"] {
     grid-template-columns: minmax(0, 1fr) 20px;
     --lowcord-reply-text-column: 1;
     --lowcord-reply-avatar-column: 2;
 }
-[data-lowcord-bubble][data-lowcord-style="avatars"] > [class*="repliedMessage_"] > :has([class*="replyAvatar_"]) { display: flex !important; }
-[data-lowcord-bubble][data-lowcord-style="avatars"] [class*="replyAvatar_"] { display: block !important; }
+:is([data-lowcord-bubble], [data-lowcord-media])[data-lowcord-style="avatars"] > [class*="repliedMessage_"] > :has([class*="replyAvatar_"]) { display: flex !important; }
+:is([data-lowcord-bubble], [data-lowcord-media])[data-lowcord-style="avatars"] [class*="replyAvatar_"] { display: block !important; }
 
 /* The outer action container can have zero width in Discord. Give it an
    intrinsic width and reset the inner bar's right anchoring and translation,
