@@ -45,6 +45,8 @@ jobs:
         run: pnpm build:mac
       - if: matrix.platform == 'windows'
         run: pnpm build
+      - if: matrix.platform == 'windows'
+        run: pnpm exec node scripts/update-manifest.mjs
       - uses: actions/upload-artifact@v4
         if: matrix.platform == 'macos'
         with:
@@ -55,7 +57,10 @@ jobs:
         if: matrix.platform == 'windows'
         with:
           name: release-${{ matrix.platform }}
-          path: dist/*.exe
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+            dist/latest.yml
           if-no-files-found: error
   publish:
     needs: build

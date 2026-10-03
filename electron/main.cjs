@@ -2,6 +2,7 @@ const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, session, screen, d
 const { join } = require('node:path');
 const { NativeBackend } = require('./native.cjs');
 const { migrateProfile } = require('./profile.cjs');
+const { autoUpdater } = require('electron-updater');
 
 app.setName('OrbitCord');
 app.setAppUserModelId('dev.lowcord.app'); // Stable identity preserves existing installs and notifications.
@@ -34,7 +35,7 @@ const show = () => {
     mainWindow.focus();
 };
 const openExternal = url => backend.call('open_external', { url }).catch(error => console.error('[lowcord]', error.message));
-async function checkForUpdates() {
+async function checkForMacUpdates() {
     try {
         const response = await fetch('https://api.github.com/repos/orbitcord/OrbitCord/releases/latest', {
             headers: { accept: 'application/vnd.github+json', 'user-agent': 'OrbitCord' },
@@ -62,6 +63,25 @@ async function checkForUpdates() {
     } catch (error) {
         console.error('[lowcord] Update check failed:', error.message);
     }
+}
+function startWindowsUpdater() {
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.on('error', error => console.error('[lowcord] Update check failed:', error.message));
+    autoUpdater.on('update-downloaded', ({ version }) => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        void dialog.showMessageBox(mainWindow, {
+            type: 'info', title: 'OrbitCord update ready',
+            message: `OrbitCord ${version} has downloaded and is ready to install.`,
+            detail: 'Restart OrbitCord now to finish installing the update, or choose Later to install it when you quit.',
+            buttons: ['Restart now', 'Later'], defaultId: 0, cancelId: 1,
+        }).then(({ response }) => { if (response === 0) autoUpdater.quitAndInstall(); })
+            .catch(error => console.error('[lowcord] Update prompt failed:', error.message));
+    });
+    const check = () => autoUpdater.checkForUpdates().catch(error =>
+        console.error('[lowcord] Update check failed:', error.message));
+    setTimeout(check, 10_000).unref();
+    setInterval(check, 24 * 60 * 60 * 1000).unref();
 }
 const saveState = () => {
     clearTimeout(stateTimer);
@@ -183,7 +203,8 @@ async function start() {
         tray.on('click', show);
     }
     await mainWindow.loadURL(testing ? testURL.href : 'https://discord.com/channels/@me');
-    if (!testing) void checkForUpdates();
+    if (!testing && app.isPackaged && process.platform === 'win32') startWindowsUpdater();
+    else if (!testing && process.platform === 'darwin') void checkForMacUpdates();
 }
 
 if (!testing && !app.requestSingleInstanceLock()) app.quit();

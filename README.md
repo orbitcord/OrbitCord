@@ -18,7 +18,7 @@ To open it, Control-click OrbitCord in Applications, choose **Open**, then confi
 
 ### Windows
 
-Run the setup EXE and follow the installer. If SmartScreen warns you, choose **More info**, then **Run anyway**.
+Run the setup EXE and follow the installer. If SmartScreen warns you, choose **More info**, then **Run anyway**. OrbitCord checks for updates, downloads them in the background, and asks you to restart to install.
 
 ## License
 
