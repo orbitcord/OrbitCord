@@ -1,0 +1,29 @@
+{
+  "name": "orbitcord",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "description": "Lightweight Discord desktop client",
+  "author": "orbitcord",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "prepare": "node scripts/build.mjs",
+    "build": "node scripts/build.mjs --release && electron-builder --config electron-builder.cjs --publish never",
+    "build:dir": "node scripts/build.mjs --release && electron-builder --config electron-builder.cjs --dir",
+    "build:installers": "node scripts/installers.mjs",
+    "build:mac": "node scripts/installers.mjs --mac",
+    "build:win": "node scripts/installers.mjs --win",
+    "test": "playwright test",
+    "test:electron": "node scripts/build.mjs && playwright test --config playwright.electron.config.mjs",
+    "test:native": "cargo test --locked --manifest-path src-tauri/Cargo.toml"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3",
+    "esbuild": "^0.28.2",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "main": "electron/main.cjs"
+}

@@ -1,0 +1,27 @@
+<!doctype html>
+<html class="theme-dark"><head><meta charset="utf-8"><title>Lowcord renderer fixture</title></head>
+<body>
+    <main id="app-mount">
+        <p>Real Chromium media decoding fixture</p>
+        <video id="video" controls playsinline width="160" height="90" src="/media/sample.mp4"></video>
+        <audio id="audio" controls src="/media/sample.m4a"></audio>
+        <video id="gif" muted autoplay loop playsinline aria-label="GIF" src="/media/sample.mp4"></video>
+        <video id="webm" controls src="/media/sample.webm"></video>
+        <iframe title="Untrusted frame" src="/electron-child"></iframe>
+        <img id="inline-image" width="32" height="24" src="/media/sample.png" alt="Inline image">
+        <button id="open-image" onclick="document.getElementById('image-viewer').hidden=false">Open image</button>
+        <div id="image-viewer" role="dialog" aria-label="Image viewer" hidden>
+            <img id="viewer-image" src="/media/sample.png" width="160" height="120" alt="Zoomed image">
+            <button onclick="document.getElementById('image-viewer').hidden=true">Close image</button>
+        </div>
+    </main>
+    <!-- Injection must have installed hooks before any page scripts run. -->
+    <script>
+        window.earlyInjection = {
+            initialized: window.__LOWCORD_INIT__ === true,
+            hooked: window.webpackChunkdiscord_app?.length > 0,
+            extensions: window.Lowcord?.extensions?.catalog.length,
+            fetchHooked: !Function.prototype.toString.call(window.fetch).includes('[native code]'),
+        };
+    </script>
+</body></html>

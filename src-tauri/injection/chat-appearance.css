@@ -1,0 +1,419 @@
+/* Only ordinary messages in enabled channels receive these attributes. Discord retains ownership
+   of the message, reply navigation, media players, menus and reactions.
+   Every surface rule is scoped as a direct child of the timeline row. Discord's
+   own message rules are !important and load later; the extra row selector is
+   what lets ours win on both logical and physical padding. */
+
+/* Rows. One spacing scale for text and media: 8px between groups, 2px inside
+   a group, room under the last message for its timestamp. */
+[id^="chat-messages-"]:has(> [data-lowcord-cluster]) { margin: 0 !important; padding: 8px 0 0 !important; }
+[id^="chat-messages-"]:has(> [data-lowcord-continuation="true"]) { padding-top: 2px !important; }
+[id^="chat-messages-"]:has(> [data-lowcord-timed]) { padding-bottom: 18px !important; }
+/* The quote card sits above a reply bubble; the row reserves its height. */
+[id^="chat-messages-"]:has(> [data-lowcord-bubble] > [class*="repliedMessage_"]) { padding-top: 64px !important; }
+/* Translated outgoing media must not widen the timeline. */
+[id^="chat-messages-"]:has(> [data-lowcord-media]) { overflow-x: clip; }
+
+[id^="chat-messages-"] > [data-lowcord-cluster] {
+    --lowcord-gutter: 16px;
+    --lowcord-face: 0px;
+    --lowcord-radius: 18px;
+    --lowcord-stack: 4px;
+    --lowcord-edge: calc(var(--lowcord-gutter) + var(--lowcord-face));
+    position: relative !important;
+    min-height: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
+[id^="chat-messages-"] > [data-lowcord-cluster][data-lowcord-style="avatars"] { --lowcord-face: 36px; }
+
+/* Text bubbles. */
+[id^="chat-messages-"] > [data-lowcord-bubble] {
+    box-sizing: border-box;
+    display: block !important;
+    overflow: visible !important;
+    width: fit-content !important;
+    min-width: 0 !important;
+    max-width: min(72%, 520px, calc(100% - 2 * var(--lowcord-edge))) !important;
+    margin-left: var(--lowcord-edge) !important;
+    margin-right: auto !important;
+    padding: 7px 12px !important;
+    padding-inline: 12px !important;
+    border-radius: var(--lowcord-radius);
+    background: var(--lowcord-bubble-color) !important;
+    color: var(--lowcord-bubble-text) !important;
+}
+[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="right"] {
+    margin-left: auto !important;
+    margin-right: var(--lowcord-edge) !important;
+}
+[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="left"][data-lowcord-cluster="start"] { border-bottom-left-radius: var(--lowcord-stack); }
+[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="left"][data-lowcord-cluster="middle"] { border-top-left-radius: var(--lowcord-stack); border-bottom-left-radius: var(--lowcord-stack); }
+[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="left"][data-lowcord-cluster="end"] { border-top-left-radius: var(--lowcord-stack); }
+[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="right"][data-lowcord-cluster="start"] { border-bottom-right-radius: var(--lowcord-stack); }
+[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="right"][data-lowcord-cluster="middle"] { border-top-right-radius: var(--lowcord-stack); border-bottom-right-radius: var(--lowcord-stack); }
+[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="right"][data-lowcord-cluster="end"] { border-top-right-radius: var(--lowcord-stack); }
+[id^="chat-messages-"] > [data-lowcord-bubble] > [class*="contents_"] { margin: 0 !important; padding: 0 !important; min-width: 0; position: static !important; }
+[id^="chat-messages-"] > [data-lowcord-bubble] [class*="messageContent_"] {
+    margin: 0 !important;
+    padding: 0 !important;
+    text-indent: 0 !important;
+    overflow-wrap: anywhere;
+    line-height: 1.375;
+    color: inherit !important;
+}
+[id^="chat-messages-"] > [data-lowcord-bubble] [class*="messageContent_"] a { color: inherit !important; text-decoration: underline; }
+[id^="chat-messages-"] > [data-lowcord-bubble] [class*="messageContent_"] pre { box-sizing: border-box; max-width: 100%; overflow-x: auto; }
+/* Reactions and link previews on a text message stay inside its bubble. */
+[id^="chat-messages-"] > [data-lowcord-bubble] > [class*="container_"]:not([class*="buttonContainer_"]) {
+    min-width: 0; max-width: 100%; margin: 6px 0 0 !important; padding: 0 !important;
+}
+[id^="chat-messages-"] > [data-lowcord-bubble] [class*="reactions_"] { margin: 0 !important; padding: 0 !important; }
+[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="right"] [class*="reactions_"] { justify-content: flex-end; }
+[id^="chat-messages-"] > [data-lowcord-bubble][class*="mentioned_"] { box-shadow: inset 3px 0 var(--brand-500, #5865f2); }
+
+/* Discord's faces, names and inline times. Lowcord draws its own face and
+   footer time; one-to-one DMs already name the person in the header. */
+[id^="chat-messages-"] > [data-lowcord-cluster] > [class*="contents_"] > [class*="avatar_"],
+[id^="chat-messages-"] > [data-lowcord-cluster] > [class*="contents_"] > [class*="avatarDecoration_"],
+[id^="chat-messages-"] > [data-lowcord-cluster] > [class*="contents_"] > [class*="decoration_"],
+[id^="chat-messages-"] > [data-lowcord-cluster] > [class*="contents_"] > [class*="header_"],
+[id^="chat-messages-"] > [data-lowcord-cluster] [class*="timestamp_"] { display: none !important; }
+/* Group DMs: the sender's name opens each incoming group. */
+[id^="chat-messages-"] > [data-lowcord-cluster][data-lowcord-media="incoming"][data-lowcord-show-author="true"][data-lowcord-continuation="false"] > [class*="contents_"] > [class*="header_"],
+[id^="chat-messages-"] > [data-lowcord-bubble="incoming"][data-lowcord-show-author="true"][data-lowcord-continuation="false"] > [class*="contents_"] > [class*="header_"] {
+    display: block !important;
+    min-height: 0 !important;
+    margin: 0 0 3px !important;
+    font-size: 12px;
+    line-height: 16px;
+}
+[id^="chat-messages-"] > [data-lowcord-bubble] > [class*="contents_"] > [class*="header_"] [class*="username_"] { color: inherit !important; }
+
+/* Media, uploads, stickers and forwards keep Discord's renderer without a
+   bubble. The row uses the same gutters as bubbles on both sides. */
+[id^="chat-messages-"] > [data-lowcord-media] {
+    padding: 2px var(--lowcord-edge) !important;
+    padding-inline: var(--lowcord-edge) !important;
+}
+[id^="chat-messages-"] > [data-lowcord-media] > [class*="contents_"] { margin: 0 !important; padding: 0 !important; position: static !important; }
+/* A caption reads as a bubble above its media. */
+[id^="chat-messages-"] > [data-lowcord-media][data-lowcord-caption] > [class*="contents_"] > [class*="messageContent_"] {
+    box-sizing: border-box;
+    width: fit-content !important;
+    max-width: min(72%, 520px) !important;
+    margin: 0 0 4px !important;
+    padding: 7px 12px !important;
+    text-indent: 0 !important;
+    overflow-wrap: anywhere;
+    line-height: 1.375;
+    border-radius: var(--lowcord-radius);
+    background: var(--lowcord-bubble-color);
+    color: var(--lowcord-bubble-text) !important;
+}
+[id^="chat-messages-"] > [data-lowcord-media][data-lowcord-caption] > [class*="contents_"] > [class*="messageContent_"] a { color: inherit !important; text-decoration: underline; }
+[id^="chat-messages-"] > [data-lowcord-media][data-lowcord-align="right"][data-lowcord-caption] > [class*="contents_"] > [class*="messageContent_"] { margin-left: auto !important; }
+/* Discord sizes attachments against a full-width grid (minmax(100%, 1fr)).
+   Any width or shrink-wrap change inside it collapses media, so outgoing items
+   are only translated; --lowcord-media-shift is measured from the content. */
+[id^="chat-messages-"] > [data-lowcord-media] .lowcord-media-item { transform: translateX(var(--lowcord-media-shift, 0px)); }
+[id^="chat-messages-"] > [data-lowcord-media="outgoing"][data-lowcord-align="right"] [class*="reactions_"] { justify-content: flex-end; }
+
+/* Footer time under the last message of a group. */
+.lowcord-bubble-time {
+    position: absolute;
+    top: calc(100% + 3px);
+    left: 6px;
+    font-size: 11px;
+    line-height: 13px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted, #949ba4);
+    pointer-events: none;
+}
+[data-lowcord-align="right"] > .lowcord-bubble-time { left: auto; right: 6px; }
+[data-lowcord-media] > .lowcord-bubble-time { left: calc(var(--lowcord-edge) + 6px); }
+[data-lowcord-media][data-lowcord-align="right"] > .lowcord-bubble-time { left: auto; right: calc(var(--lowcord-edge) + 6px); }
+
+/* One face beside the last message of each group, level with its bottom. */
+.lowcord-bubble-avatar {
+    position: absolute;
+    bottom: 0;
+    left: -36px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    object-fit: cover;
+    outline: 1px solid color-mix(in srgb, var(--text-normal, #fff) 12%, transparent);
+}
+[data-lowcord-align="right"] > .lowcord-bubble-avatar { left: auto; right: -36px; }
+[data-lowcord-media] > .lowcord-bubble-avatar { left: var(--lowcord-gutter); bottom: 2px; }
+[data-lowcord-media][data-lowcord-align="right"] > .lowcord-bubble-avatar { left: auto; right: var(--lowcord-gutter); }
+
+/* The original reply element is a separate card above the message bubble.
+   Absolute positioning decouples its width from even a one-word response;
+   the timeline row reserves the card's height without moving React nodes. */
+[id^="chat-messages-"] > [data-lowcord-bubble] > [class*="repliedMessage_"] {
+    position: absolute !important;
+    bottom: calc(100% + 6px) !important;
+    top: auto !important;
+    left: 0 !important;
+    right: auto !important;
+    box-sizing: border-box;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    --lowcord-reply-text-column: 1;
+    grid-template-rows: 16px 16px;
+    gap: 3px 8px;
+    width: max-content !important;
+    min-width: min(160px, var(--lowcord-reply-max-width, 360px)) !important;
+    max-width: var(--lowcord-reply-max-width, 360px) !important;
+    height: 50px !important;
+    margin: 0 !important;
+    padding: 7px 0 7px 32px !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    border-radius: 0;
+    background: none !important;
+    color: var(--text-normal, #f2f3f5) !important;
+    font-size: 12px !important;
+    line-height: 16px !important;
+    text-align: left;
+}
+[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="right"] > [class*="repliedMessage_"] {
+    left: auto !important; right: 0 !important; padding: 7px 32px 7px 0 !important; text-align: right; justify-items: end;
+}
+/* A dotted elbow runs from the quoted text down to the top of the reply bubble. */
+[data-lowcord-bubble] > [class*="repliedMessage_"]::before {
+    content: "" !important; display: block !important;
+    position: absolute; left: 14px; top: 14px; bottom: -6px; width: 12px;
+    border-left: 2px dotted var(--text-muted, #949ba4); border-top: 2px dotted var(--text-muted, #949ba4);
+    border-top-left-radius: 10px; pointer-events: none;
+}
+[data-lowcord-bubble][data-lowcord-align="right"] > [class*="repliedMessage_"]::before {
+    left: auto; right: 14px; border-left: 0; border-top-left-radius: 0;
+    border-right: 2px dotted var(--text-muted, #949ba4); border-top-right-radius: 10px;
+}
+/* Emoji-only messages show as they are, large and without a bubble. */
+[id^="chat-messages-"] > [data-lowcord-emoji="true"] > [class*="contents_"] > [class*="messageContent_"] {
+    margin: 0 !important; padding: 0 !important; text-indent: 0 !important; background: none;
+}
+[id^="chat-messages-"] > [data-lowcord-emoji="true"][data-lowcord-align="right"] > [class*="contents_"] { text-align: right; }
+[data-lowcord-bubble] [class*="repliedMessageClickableSpine_"] { display: none !important; }
+[data-lowcord-bubble] > [class*="repliedMessage_"] > [class*="username_"],
+[data-lowcord-bubble] > [class*="repliedMessage_"] > :has([class*="username_"]) {
+    grid-column: var(--lowcord-reply-text-column); grid-row: 1; min-width: 0; max-width: 100%;
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+[data-lowcord-bubble] > [class*="repliedMessage_"] [class*="username_"] {
+    position: static !important;
+    font-size: 12px !important;
+    line-height: 16px !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    color: var(--text-normal, #f2f3f5) !important;
+}
+[data-lowcord-bubble] [class*="repliedTextPreview_"] {
+    grid-column: var(--lowcord-reply-text-column); grid-row: 2;
+    display: -webkit-box !important;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+    min-width: 0 !important;
+    max-width: none !important;
+    margin: 0 !important;
+    overflow: hidden;
+    font-size: 12px !important;
+    line-height: 16px !important;
+    white-space: normal !important;
+    color: var(--text-muted, #949ba4) !important;
+}
+[data-lowcord-bubble] [class*="repliedTextContent_"] {
+    display: inline !important;
+    white-space: normal !important;
+    font-size: inherit !important;
+    line-height: inherit !important;
+    color: inherit !important;
+}
+[data-lowcord-bubble] > [class*="repliedMessage_"] > [class*="replyAvatar_"],
+[data-lowcord-bubble] > [class*="repliedMessage_"] > :has([class*="replyAvatar_"]) {
+    display: none !important;
+    grid-column: var(--lowcord-reply-avatar-column, 1); grid-row: 1 / 3; align-self: center;
+}
+[data-lowcord-bubble] [class*="replyAvatar_"] { display: none !important; width: 20px !important; height: 20px !important; margin: 0 !important; }
+[data-lowcord-bubble][data-lowcord-style="avatars"] > [class*="repliedMessage_"] {
+    grid-template-columns: 20px minmax(0, 1fr);
+    --lowcord-reply-text-column: 2;
+}
+/* Mirror the avatar with the quote text, keeping their shared 8px gap.
+   A left-hand avatar column beside right-aligned text leaves a large hole. */
+[data-lowcord-bubble][data-lowcord-style="avatars"][data-lowcord-align="right"] > [class*="repliedMessage_"] {
+    grid-template-columns: minmax(0, 1fr) 20px;
+    --lowcord-reply-text-column: 1;
+    --lowcord-reply-avatar-column: 2;
+}
+[data-lowcord-bubble][data-lowcord-style="avatars"] > [class*="repliedMessage_"] > :has([class*="replyAvatar_"]) { display: flex !important; }
+[data-lowcord-bubble][data-lowcord-style="avatars"] [class*="replyAvatar_"] { display: block !important; }
+
+/* The outer action container can have zero width in Discord. Give it an
+   intrinsic width and reset the inner bar's right anchoring and translation,
+   so short incoming bubbles cannot push the controls into the avatar gutter. */
+[id^="chat-messages-"] > [data-lowcord-bubble] > [class*="buttonContainer_"],
+[id^="chat-messages-"] > [data-lowcord-bubble] > [class*="buttons_"] {
+    position: absolute !important;
+    top: var(--lowcord-actions-top, 4px) !important;
+    bottom: auto !important;
+    left: var(--lowcord-actions-inset, 4px) !important;
+    right: auto !important;
+    width: max-content !important;
+    min-width: 0 !important;
+    max-width: var(--lowcord-actions-max-width, calc(100vw - 48px)) !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    transform: none !important;
+    z-index: 2;
+}
+[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="right"] > [class*="buttonContainer_"],
+[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="right"] > [class*="buttons_"] { left: auto !important; right: var(--lowcord-actions-inset, 4px) !important; }
+[data-lowcord-bubble] > [class*="buttonContainer_"] [class*="buttons_"] {
+    position: relative !important;
+    inset: auto !important;
+    width: max-content !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    transform: none !important;
+}
+[data-lowcord-bubble] [class*="buttonsInner_"] {
+    box-sizing: border-box;
+    position: relative !important;
+    inset: auto !important;
+    margin: 0 !important;
+    transform: none !important;
+    max-width: 100% !important;
+    flex-wrap: wrap !important;
+}
+/* Discord shows the toolbar only while the message itself is hovered. This strip
+   spans the 6px gap to an outside toolbar, so the pointer never leaves the message. */
+[data-lowcord-bubble][data-lowcord-actions="outside"]::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 100%;
+    width: 8px;
+    height: max(100%, var(--lowcord-actions-bridge-height, 0px));
+}
+[data-lowcord-bubble][data-lowcord-align="right"][data-lowcord-actions="outside"]::after { left: auto; right: 100%; }
+@media (max-width: 700px) {
+    [id^="chat-messages-"] > [data-lowcord-cluster] { --lowcord-gutter: 10px; }
+    [id^="chat-messages-"] > [data-lowcord-bubble] { max-width: min(84%, 520px, calc(100% - 2 * var(--lowcord-edge))) !important; }
+}
+/* Unbubbled message text must set its own color, or it inherits black and
+   disappears in dark mode. */
+.theme-dark [class*="messageContent_"]:not([data-lowcord-bubble] *),
+.theme-dark [class*="markup_"]:not([data-lowcord-bubble] *),
+.theme-darker [class*="messageContent_"]:not([data-lowcord-bubble] *),
+.theme-darker [class*="markup_"]:not([data-lowcord-bubble] *),
+.theme-midnight [class*="messageContent_"]:not([data-lowcord-bubble] *),
+.theme-midnight [class*="markup_"]:not([data-lowcord-bubble] *) {
+    color: var(--text-strong, #f2f3f5);
+}
+
+/* Settings panel. */
+.lowcord-chat-appearance { color: var(--text-normal, #f2f3f5); padding: 16px 0; }
+.lowcord-chat-intro { color: var(--text-muted, #949ba4); margin: 0 0 28px; line-height: 1.5; }
+.lowcord-channel-settings { margin-top: 28px; border-top: 1px solid var(--background-modifier-accent, #4e5058); padding-top: 24px; }
+.lowcord-channel-settings h3, .lowcord-preview-heading { font-size: 16px; font-weight: 600; margin: 0 0 16px; }
+.lowcord-channel-settings .lowcord-chat-toggle + .lowcord-chat-toggle { margin-top: 22px; }
+.lowcord-preview-heading { margin: 32px 0 12px; }
+.lowcord-chat-toggle { display: flex; align-items: center; justify-content: space-between; gap: 24px; cursor: pointer; }
+.lowcord-chat-toggle strong { font-size: 16px; }
+.lowcord-chat-description { display: block; margin-top: 8px; color: var(--text-muted, #949ba4); line-height: 1.5; font-size: 14px; }
+.lowcord-chat-toggle input {
+    appearance: none; flex: 0 0 40px; width: 40px; height: 24px;
+    border: 2px solid transparent; border-radius: 12px; margin: 0;
+    background: var(--background-modifier-accent, #4e5058); cursor: pointer;
+    transition: background 160ms ease;
+}
+.lowcord-chat-toggle input::before {
+    content: ""; display: block; width: 20px; height: 20px;
+    border-radius: 50%; background: white;
+    transition: transform 160ms ease;
+}
+.lowcord-chat-toggle input:checked { background: var(--brand-500, #5865f2); }
+.lowcord-chat-toggle input:checked::before { transform: translateX(16px); }
+.lowcord-chat-toggle input:focus-visible { outline: 3px solid var(--brand-500, #5865f2); outline-offset: 4px; }
+.lowcord-appearance-controls { border: 0; padding: 0; margin: 28px 0 0; min-width: 0; }
+.lowcord-appearance-controls legend { font-weight: 600; font-size: 16px; margin-bottom: 12px; }
+.lowcord-appearance-controls:disabled { opacity: .5; }
+.lowcord-appearance-controls:disabled label, .lowcord-appearance-controls:disabled input { cursor: default; }
+.lowcord-style-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 24px; }
+.lowcord-style-option {
+    display: flex; align-items: flex-start; gap: 8px; padding: 14px 12px;
+    border: 1px solid var(--background-modifier-accent, #4e5058); border-radius: 10px; cursor: pointer;
+    transition: background 160ms ease, border-color 160ms ease;
+}
+.lowcord-style-option:hover { background: var(--background-modifier-hover, rgba(148, 155, 164, .08)); }
+.lowcord-style-option[data-selected="true"] { border-color: var(--brand-500, #5865f2); background: color-mix(in srgb, var(--brand-500, #5865f2) 9%, transparent); }
+.lowcord-style-option input { margin: 2px 0 0; accent-color: var(--brand-500, #5865f2); }
+.lowcord-style-option .lowcord-chat-description { font-size: 12px; margin-top: 5px; }
+.lowcord-position-control { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.lowcord-position-control select { color: var(--text-normal, #f2f3f5); background: var(--background-secondary, #2b2d31); border: 1px solid var(--background-modifier-accent, #4e5058); border-radius: 6px; padding: 8px 12px; font: inherit; }
+.lowcord-color-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-bottom: 24px; }
+.lowcord-color-control { flex: 1 1 180px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+.lowcord-color-value { display: flex; align-items: center; gap: 10px; }
+.lowcord-color-value code { font-size: 12px; color: var(--text-muted, #949ba4); }
+.lowcord-color-value input { width: 44px; height: 32px; padding: 2px; border: 1px solid var(--background-modifier-accent, #4e5058); border-radius: 6px; background: transparent; cursor: pointer; }
+.lowcord-color-settings button { color: var(--text-normal, #f2f3f5); background: var(--background-secondary, #2b2d31); border: 1px solid var(--background-modifier-accent, #4e5058); border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+.lowcord-color-settings button:hover { background: var(--background-modifier-hover, rgba(148, 155, 164, .12)); }
+.lowcord-style-option:focus-within,
+.lowcord-position-control select:focus-visible,
+.lowcord-color-settings input:focus-visible,
+.lowcord-color-settings button:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 3px; }
+
+/* Preview: the same geometry as the timeline, at the same gutters. */
+.lowcord-chat-preview {
+    --lowcord-radius: 18px; --lowcord-stack: 4px; --lowcord-face: 0px;
+    display: flex; flex-direction: column; gap: 14px;
+    padding: 20px 16px; border: 1px solid var(--background-modifier-accent, #4e5058);
+    border-radius: 12px; background: var(--background-primary, #313338);
+    margin-bottom: 24px;
+}
+.lowcord-chat-preview[data-bubbles="true"][data-style="avatars"] { --lowcord-face: 36px; }
+.lowcord-preview-group { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding-inline: var(--lowcord-face); }
+.lowcord-chat-preview[data-bubbles="true"] .lowcord-preview-group:has(.lowcord-bubble-time) { padding-bottom: 16px; }
+.lowcord-chat-preview[data-outgoing-position="right"] .lowcord-preview-group.outgoing { align-items: flex-end; }
+.lowcord-chat-example { position: relative; box-sizing: border-box; max-width: 80%; }
+.lowcord-chat-example span { font-size: 12px; color: var(--text-muted, #949ba4); }
+.lowcord-chat-example p { margin: 0; line-height: 1.375; }
+.lowcord-chat-preview[data-bubbles="true"] .lowcord-chat-example { padding: 7px 12px; border-radius: var(--lowcord-radius); }
+.lowcord-chat-preview[data-bubbles="true"] .incoming .lowcord-chat-example { background: var(--lowcord-incoming-color); color: var(--lowcord-incoming-text); }
+.lowcord-chat-preview[data-bubbles="true"] .outgoing .lowcord-chat-example { background: var(--lowcord-outgoing-color); color: var(--lowcord-outgoing-text); }
+.lowcord-chat-preview[data-bubbles="true"] .incoming .lowcord-chat-example[data-cluster="start"],
+.lowcord-chat-preview[data-bubbles="true"][data-outgoing-position="left"] .outgoing .lowcord-chat-example[data-cluster="start"] { border-bottom-left-radius: var(--lowcord-stack); }
+.lowcord-chat-preview[data-bubbles="true"] .incoming .lowcord-chat-example[data-cluster="end"],
+.lowcord-chat-preview[data-bubbles="true"][data-outgoing-position="left"] .outgoing .lowcord-chat-example[data-cluster="end"] { border-top-left-radius: var(--lowcord-stack); }
+.lowcord-chat-preview[data-bubbles="true"][data-outgoing-position="right"] .outgoing .lowcord-chat-example[data-cluster="start"] { border-bottom-right-radius: var(--lowcord-stack); }
+.lowcord-chat-preview[data-bubbles="true"][data-outgoing-position="right"] .outgoing .lowcord-chat-example[data-cluster="end"] { border-top-right-radius: var(--lowcord-stack); }
+.lowcord-preview-group > .lowcord-bubble-time { top: auto; bottom: 0; left: calc(var(--lowcord-face) + 6px); }
+.lowcord-chat-preview[data-outgoing-position="right"] .outgoing > .lowcord-bubble-time { left: auto; right: calc(var(--lowcord-face) + 6px); }
+.lowcord-preview-quote { position: relative; box-sizing: border-box; max-width: min(360px, 100%); margin-bottom: 6px; padding: 0 32px 0 0; font-size: 12px; line-height: 16px; text-align: right; color: var(--text-normal, #f2f3f5); }
+.lowcord-preview-quote::before {
+    content: ""; position: absolute; right: 14px; top: 8px; bottom: -6px; width: 12px;
+    border-right: 2px dotted var(--text-muted, #949ba4); border-top: 2px dotted var(--text-muted, #949ba4);
+    border-top-right-radius: 10px; pointer-events: none;
+}
+.lowcord-chat-preview[data-outgoing-position="left"] .lowcord-preview-quote { padding: 0 0 0 32px; text-align: left; }
+.lowcord-chat-preview[data-outgoing-position="left"] .lowcord-preview-quote::before {
+    right: auto; left: 14px; border-right: 0; border-top-right-radius: 0;
+    border-left: 2px dotted var(--text-muted, #949ba4); border-top-left-radius: 10px;
+}
+.lowcord-preview-quote strong, .lowcord-preview-quote span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.lowcord-preview-quote span { margin-top: 3px; color: var(--text-muted, #949ba4); }
+.lowcord-preview-avatar { position: absolute; bottom: 0; left: -36px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--brand-500, #5865f2); color: white !important; font-size: 12px; font-weight: 600; }
+.lowcord-chat-preview[data-outgoing-position="right"] .outgoing .lowcord-preview-avatar { left: auto; right: -36px; }
+
+@media (max-width: 600px) { .lowcord-style-options { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) {
+    .lowcord-chat-toggle input, .lowcord-chat-toggle input::before, .lowcord-style-option { transition: none; }
+}

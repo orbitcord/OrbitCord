@@ -1,0 +1,606 @@
+// Lowcord's built-in extensions. Four of them work on Discord's own HTTP
+// requests, so no Discord code is patched; voice messages use Discord's
+// uploader and REST client from its module cache. Quick reply uses the native
+// pending-reply action without modifying Discord's modules or message sending.
+(() => {
+    const storageKey = "lowcord.extensions";
+    const catalog = [
+        { id: "anonymiseFileNames", title: "Anonymise file names", description: "Upload files with a random 7-letter name. The extension and spoilers are kept." },
+        { id: "voiceMessages", title: "Voice messages", description: "Record and send voice messages from the waveform button in the message bar." },
+        { id: "quickReply", title: "Quick reply", description: "In an empty message box, Shift + ↑ / ↓ selects a message to reply to. Escape cancels. Replaces Discord’s Shift + ↑ edit shortcut while enabled." },
+        { id: "cleanUrls", title: "Clean links", description: "Remove tracking parameters such as utm_, fbclid and si from links you send or edit." },
+        { id: "silentTyping", title: "Silent typing", description: "Don’t tell others when you are typing." },
+        { id: "noTracking", title: "No tracking", description: "Block Discord’s analytics, metrics and crash reports, and its attempts to open the desktop app." },
+    ];
+    const storage = window.Lowcord.storage;
+    const changeEvent = "lowcord-extensions-change";
+    function read() {
+        let saved = {};
+        try { saved = JSON.parse(storage.getItem(storageKey)) ?? {}; } catch {}
+        return Object.fromEntries(catalog.map(({ id }) => [id, typeof saved[id] === "boolean" ? saved[id] : true]));
+    }
+    let state = read();
+    const enabled = id => state[id] === true;
+    function set(id, value) {
+        const next = { ...state, [id]: Boolean(value) };
+        try { storage.setItem(storageKey, JSON.stringify(next)); }
+        catch { throw new Error("Couldn’t save this setting. Please try again."); }
+        state = next;
+        window.dispatchEvent(new Event(changeEvent));
+    }
+    window.addEventListener("storage", event => {
+        if (event.key === storageKey || event.key === null) { state = read(); window.dispatchEvent(new Event(changeEvent)); }
+    });
+
+    // ----- Keyboard reply ----------------------------------------------------
+    let replySelection, replyRow, createReply;
+    function clearReplyHighlight() {
+        replyRow?.removeAttribute("data-lowcord-quick-reply");
+        replyRow = replySelection = undefined;
+    }
+    function reconcileReply() {
+        if (!replySelection) return;
+        const channelId = window.Lowcord.store("SelectedChannelStore")?.getChannelId();
+        const pending = window.Lowcord.store("PendingReplyStore")?.getPendingReply(channelId);
+        if (!enabled("quickReply") || channelId !== replySelection.channelId
+            || pending?.message?.id !== replySelection.messageId || !replyRow?.isConnected) clearReplyHighlight();
+    }
+    function cancelQuickReply() {
+        const channelId = replySelection?.channelId;
+        clearReplyHighlight();
+        if (channelId) window.Lowcord.Dispatcher?.dispatch({ type: "DELETE_PENDING_REPLY", channelId });
+    }
+    function replyKey(event) {
+        if (!enabled("quickReply") || event.defaultPrevented || event.isComposing || event.keyCode === 229
+            || event.altKey || event.ctrlKey || event.metaKey) return;
+        const editor = event.target instanceof Element ? event.target.closest('[contenteditable="true"][role="textbox"], textarea') : null;
+        if (!editor?.closest('[class*="channelTextArea_"]') || editor.closest('[role="dialog"]')
+            || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+        // Let Discord's completion menus keep their own keyboard navigation.
+        if (editor.getAttribute("aria-expanded") === "true" || editor.getAttribute("aria-activedescendant")) return;
+        reconcileReply();
+        if (event.key === "Escape" && !event.shiftKey && replySelection) {
+            event.preventDefault(); event.stopImmediatePropagation();
+            cancelQuickReply();
+            return;
+        }
+        if (!event.shiftKey || !["ArrowUp", "ArrowDown"].includes(event.key)
+            || (editor.value ?? editor.textContent).replace(/[\u200b\ufeff]/g, "").trim()) return;
+        const channelId = window.Lowcord.store("SelectedChannelStore")?.getChannelId();
+        const channel = window.Lowcord.store("ChannelStore")?.getChannel(channelId);
+        const messages = window.Lowcord.store("MessageStore");
+        const pendingStore = window.Lowcord.store("PendingReplyStore");
+        createReply ??= window.Lowcord.find(window.Lowcord.filters.byCode("CREATE_PENDING_REPLY", "shouldMention", "showMentionToggle"));
+        if (!channelId || !channel || !messages || !pendingStore || !createReply || !window.Lowcord.Dispatcher) return;
+        // Scan only on a shortcut press; Discord owns history loading and
+        // virtualization. Media messages are eligible, system rows are not.
+        const candidates = [];
+        for (const row of document.querySelectorAll('[id^="chat-messages-"]')) {
+            const match = /^chat-messages-(\d+)-(\d+)$/.exec(row.id);
+            if (match?.[1] !== channelId || !row.getClientRects().length) continue;
+            const message = messages.getMessage(channelId, match[2]);
+            if (message?.author && [0, 19].includes(message.type ?? 0) && !(message.flags & 64)
+                && (message.state == null || message.state === "SENT")) candidates.push({ row, message });
+        }
+        if (!candidates.length) return;
+        const pending = pendingStore.getPendingReply(channelId);
+        const current = candidates.findIndex(({ message }) => message.id === pending?.message?.id);
+        let next;
+        if (event.key === "ArrowUp") next = current < 0 ? candidates.length - 1 : Math.max(0, current - 1);
+        else {
+            if (current < 0) return;
+            next = current + 1;
+        }
+        event.preventDefault(); event.stopImmediatePropagation();
+        if (next === candidates.length) {
+            clearReplyHighlight();
+            window.Lowcord.Dispatcher.dispatch({ type: "DELETE_PENDING_REPLY", channelId });
+            return;
+        }
+        const { row, message } = candidates[next];
+        createReply({ channel, message,
+            shouldMention: message.author.id !== window.Lowcord.store("UserStore")?.getCurrentUser()?.id,
+            showMentionToggle: true });
+        clearReplyHighlight();
+        replySelection = { channelId, messageId: message.id };
+        replyRow = row;
+        row.setAttribute("data-lowcord-quick-reply", "true");
+        row.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+        editor.focus({ preventScroll: true });
+    }
+    window.addEventListener("keydown", replyKey, true);
+    window.addEventListener(changeEvent, reconcileReply);
+    window.Lowcord.onDomChange(reconcileReply);
+    for (const name of ["PendingReplyStore", "SelectedChannelStore", "MessageStore"]) {
+        window.Lowcord.waitForStore(name, store => {
+            store.addChangeListener?.(reconcileReply);
+            reconcileReply();
+        });
+    }
+
+    // ----- Request rules -----------------------------------------------------
+    const api = /^\/api(?:\/v\d+)?(\/.*)$/;
+    function route(url) {
+        let parsed;
+        try { parsed = new URL(url, location.href); } catch { return null; }
+        const discord = parsed.origin === location.origin || parsed.hostname === "discord.com" || parsed.hostname.endsWith(".discord.com");
+        return { url: parsed, path: discord ? api.exec(parsed.pathname)?.[1] ?? null : null };
+    }
+    const rpcPorts = port => Number(port) >= 6463 && Number(port) <= 6472;
+    // "ok" answers like the server would, so Discord drops the batch instead of retrying.
+    function decide(method, url) {
+        const target = route(url);
+        if (!target) return null;
+        const { path } = target;
+        if (enabled("silentTyping") && method === "POST" && /^\/channels\/\d+\/typing$/.test(path ?? "")) return "ok";
+        if (enabled("noTracking")) {
+            if (/^\/(science|track|metrics(\/v2)?)$/.test(path ?? "")) return "ok";
+            // Discord tunnels Sentry crash reports through its own origin.
+            if (target.url.pathname.startsWith("/error-reporting-proxy/") || /(^|\.)sentry\.io$/.test(target.url.hostname)) return "ok";
+            // The desktop app's local RPC server, which Discord probes before deep linking.
+            if (target.url.hostname === "127.0.0.1" && rpcPorts(target.url.port)) return "fail";
+        }
+        return null;
+    }
+
+    const random = length => {
+        const letters = "abcdefghijklmnopqrstuvwxyz";
+        const bytes = crypto.getRandomValues(new Uint8Array(length));
+        return Array.from(bytes, byte => letters[byte % letters.length]).join("");
+    };
+    function anonymous(name) {
+        const spoiler = /^SPOILER_/.test(name) ? "SPOILER_" : "";
+        const base = name.slice(spoiler.length);
+        const ext = /\.tar\.\w+$/i.exec(base)?.[0] ?? (base.lastIndexOf(".") > 0 ? base.slice(base.lastIndexOf(".")) : "");
+        return spoiler + random(7) + ext;
+    }
+    // Discord registers each upload, then sends the message naming the same
+    // files. Each original name maps to the random names given to it, in order.
+    const renamed = new Map();
+    function renameUpload(name) {
+        const next = anonymous(name);
+        renamed.set(name, [...(renamed.get(name) ?? []), next]);
+        return next;
+    }
+    function renamedFor(name) {
+        const queue = renamed.get(name);
+        if (!queue?.length) return null;
+        const next = queue.shift();
+        if (!queue.length) renamed.delete(name);
+        return next;
+    }
+
+    // Common tracking parameters, and ones that only mean tracking on one site.
+    const trackingParams = /^(utm_\w+|fbclid|gclid|gclsrc|dclid|gbraid|wbraid|msclkid|yclid|twclid|ttclid|li_fat_id|igshid|igsh|mc_cid|mc_eid|_hsenc|_hsmi|__hssc|__hstc|__hsfp|hsctatracking|mkt_tok|vero_id|oly_anon_id|oly_enc_id|rb_clickid|s_cid|wickedid|_ga|_gl|ncid|ref_src|ref_url|spm|scm|_branch_match_id|_branch_referrer)$/i;
+    const siteParams = [
+        [/(^|\.)(youtube\.com|youtu\.be)$/, /^(si|pp|feature)$/],
+        [/(^|\.)spotify\.com$/, /^(si|context|nd)$/],
+        [/(^|\.)(x\.com|twitter\.com)$/, /^(s|t)$/],
+        [/(^|\.)instagram\.com$/, /^(img_index)$/],
+        [/(^|\.)tiktok\.com$/, /^(_r|_t|is_from_webapp|sender_device|is_copy_url|share_app_id|share_link_id|share_item_id|tt_from|u_code|user_id|timestamp|social_share_type|source)$/],
+        [/(^|\.)reddit\.com$/, /^(share_id|rdt|ref|ref_source|correlation_id)$/],
+        [/(^|\.)amazon\.[a-z.]+$/, /^(ref|ref_|psc|pd_rd_\w+|pf_rd_\w+|content-id|crid|sprefix|dib|dib_tag|qid|sr|keywords|th|linkCode|tag|linkId|camp|creative)$/],
+        [/(^|\.)linkedin\.com$/, /^(trk|trkInfo|lipi|trackingId|originalSubdomain)$/],
+        [/(^|\.)facebook\.com$/, /^(mibextid|rdid|share_url|sfnsn)$/],
+        [/(^|\.)(threads\.net|threads\.com)$/, /^(xmt|slof)$/],
+    ];
+    function cleanUrl(text) {
+        let url;
+        try { url = new URL(text); } catch { return text; }
+        const site = siteParams.filter(([host]) => host.test(url.hostname)).map(([, params]) => params);
+        const remove = [...url.searchParams.keys()].filter(key => trackingParams.test(key) || site.some(params => params.test(key)));
+        if (!remove.length) return text;
+        for (const key of remove) url.searchParams.delete(key);
+        return url.toString().replace(/\?$/, "");
+    }
+    // Discord's link syntax ends at whitespace or an angle bracket; trailing
+    // punctuation belongs to the sentence, not the link.
+    const cleanContent = content => content.replace(/https?:\/\/[^\s<>]+/g, match => {
+        const tail = /[.,;:!?)\]'"]+$/.exec(match)?.[0] ?? "";
+        return cleanUrl(match.slice(0, match.length - tail.length)) + tail;
+    });
+
+    // Returns a replacement body, or undefined to send the original.
+    function rewrite(method, url, body) {
+        const path = route(url)?.path;
+        if (!path || (!enabled("anonymiseFileNames") && !enabled("cleanUrls"))) return undefined;
+        const upload = method === "POST" && /^\/channels\/\d+\/attachments$/.test(path);
+        const message = (method === "POST" || method === "PATCH") && /^\/channels\/\d+\/messages(\/\d+)?$/.test(path);
+        if (!upload && !message) return undefined;
+        if (body instanceof FormData) return rewriteForm(body);
+        if (typeof body !== "string") return undefined;
+        let data;
+        try { data = JSON.parse(body); } catch { return undefined; }
+        let changed = false;
+        if (upload && enabled("anonymiseFileNames")) {
+            for (const file of data.files ?? []) {
+                if (typeof file.filename === "string") { file.filename = renameUpload(file.filename); changed = true; }
+            }
+        }
+        if (message) {
+            if (enabled("cleanUrls") && typeof data.content === "string") {
+                const content = cleanContent(data.content);
+                if (content !== data.content) { data.content = content; changed = true; }
+            }
+            if (enabled("anonymiseFileNames")) {
+                for (const attachment of data.attachments ?? []) {
+                    const name = typeof attachment.filename === "string" && renamedFor(attachment.filename);
+                    if (name) { attachment.filename = name; changed = true; }
+                }
+            }
+        }
+        return changed ? JSON.stringify(data) : undefined;
+    }
+    // The older multipart path carries files and a payload_json part.
+    function rewriteForm(form) {
+        const next = new FormData();
+        let changed = false;
+        for (const [key, value] of form.entries()) {
+            if (value instanceof File && enabled("anonymiseFileNames")) {
+                next.append(key, value, anonymous(value.name));
+                changed = true;
+            } else if (key === "payload_json" && typeof value === "string" && enabled("cleanUrls")) {
+                try {
+                    const payload = JSON.parse(value);
+                    if (typeof payload.content === "string") payload.content = cleanContent(payload.content);
+                    next.append(key, JSON.stringify(payload));
+                    changed = true;
+                } catch { next.append(key, value); }
+            } else next.append(key, value);
+        }
+        return changed ? next : undefined;
+    }
+
+    // ----- Request hooks -----------------------------------------------------
+    const xhr = XMLHttpRequest.prototype;
+    const open = xhr.open, send = xhr.send;
+    xhr.open = function (method, url) {
+        this.__lowcord = { method: String(method).toUpperCase(), url: String(url) };
+        return open.apply(this, arguments);
+    };
+    xhr.send = function (body) {
+        const meta = this.__lowcord;
+        if (meta) {
+            const verdict = decide(meta.method, meta.url);
+            if (verdict) { answer(this, verdict); return; }
+            const replacement = rewrite(meta.method, meta.url, body);
+            if (replacement !== undefined) body = replacement;
+        }
+        return send.call(this, body);
+    };
+    function answer(request, verdict) {
+        const ok = verdict === "ok";
+        const values = { readyState: 4, status: ok ? 204 : 0, statusText: ok ? "No Content" : "",
+            responseText: "", response: request.responseType === "json" ? null : "", responseURL: request.__lowcord.url };
+        for (const [key, value] of Object.entries(values)) Object.defineProperty(request, key, { configurable: true, get: () => value });
+        request.getAllResponseHeaders = () => "";
+        request.getResponseHeader = () => null;
+        setTimeout(() => {
+            for (const type of ["readystatechange", ok ? "load" : "error", "loadend"]) request.dispatchEvent(new ProgressEvent(type));
+        });
+    }
+    const nativeFetch = window.fetch;
+    window.fetch = function (input, init) {
+        const url = input instanceof Request ? input.url : String(input);
+        const method = String(init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+        const verdict = decide(method, url);
+        if (verdict === "ok") return Promise.resolve(new Response(null, { status: 204 }));
+        if (verdict === "fail") return Promise.reject(new TypeError("Failed to fetch"));
+        if (init?.body !== undefined) {
+            const replacement = rewrite(method, url, init.body);
+            if (replacement !== undefined) init = { ...init, body: replacement };
+        }
+        return nativeFetch.call(this, input, init);
+    };
+    const beacon = navigator.sendBeacon?.bind(navigator);
+    if (beacon) navigator.sendBeacon = (url, data) => decide("POST", String(url)) ? true : beacon(url, data);
+    const NativeWebSocket = window.WebSocket;
+    window.WebSocket = new Proxy(NativeWebSocket, {
+        construct(target, args) {
+            const url = route(String(args[0]))?.url;
+            if (enabled("noTracking") && url?.hostname === "127.0.0.1" && rpcPorts(url.port)) {
+                // Discord treats a constructor error as "desktop app not running".
+                throw new DOMException("Blocked by OrbitCord", "SecurityError");
+            }
+            return Reflect.construct(target, args);
+        }
+    });
+
+    // ----- Voice messages ----------------------------------------------------
+    const ui = (tag, props = {}, ...children) => {
+        const node = document.createElement(tag);
+        for (const [key, value] of Object.entries(props)) {
+            if (key.startsWith("on")) node.addEventListener(key.slice(2).toLowerCase(), value);
+            else if (key === "className" || key === "textContent" || key === "disabled" || key === "hidden") node[key] = value;
+            else node.setAttribute(key, value);
+        }
+        node.append(...children.filter(child => child != null));
+        return node;
+    };
+    const svg = path => {
+        const node = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        node.setAttribute("viewBox", "0 0 24 24"); node.setAttribute("width", "20"); node.setAttribute("height", "20");
+        node.setAttribute("aria-hidden", "true");
+        node.innerHTML = `<path fill="currentColor" d="${path}"/>`;
+        return node;
+    };
+    const micPath = "M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Zm7 9a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V20H8a1 1 0 1 0 0 2h8a1 1 0 1 0 0-2h-3v-2.08A7 7 0 0 0 19 11Z";
+    const waveformPath = "M3 9a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-3 0v-3A1.5 1.5 0 0 1 3 9Zm4.5-4A1.5 1.5 0 0 1 9 6.5v11a1.5 1.5 0 0 1-3 0v-11A1.5 1.5 0 0 1 7.5 5ZM12 2a1.5 1.5 0 0 1 1.5 1.5v17a1.5 1.5 0 0 1-3 0v-17A1.5 1.5 0 0 1 12 2Zm4.5 4A1.5 1.5 0 0 1 18 7.5v9a1.5 1.5 0 0 1-3 0v-9A1.5 1.5 0 0 1 16.5 6ZM21 9a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-3 0v-3A1.5 1.5 0 0 1 21 9Z";
+
+    function toast(message, failure = false) {
+        const node = ui("div", { className: `lowcord-toast${failure ? " lowcord-toast-failure" : ""}`, role: "status" }, message);
+        document.body.append(node);
+        setTimeout(() => node.remove(), 4000);
+    }
+
+    async function measure(blob) {
+        const context = new AudioContext();
+        try {
+            const audio = await context.decodeAudioData(await blob.arrayBuffer());
+            const samples = audio.getChannelData(0);
+            // Root mean square of up to 256 bins, eased so quiet recordings still show.
+            const bins = new Uint8Array(Math.max(Math.min(32, samples.length), Math.min(256, Math.floor(audio.duration * 10))));
+            const size = Math.floor(samples.length / bins.length) || 1;
+            for (let bin = 0; bin < bins.length; bin++) {
+                let squares = 0;
+                for (let i = 0; i < size; i++) squares += (samples[bin * size + i] ?? 0) ** 2;
+                bins[bin] = ~~(Math.sqrt(squares / size) * 0xff);
+            }
+            const max = Math.max(1, ...bins);
+            const ratio = 1 + (0xff / max - 1) * Math.min(1, 100 * (max / 0xff) ** 3);
+            for (let i = 0; i < bins.length; i++) bins[i] = Math.min(0xff, ~~(bins[i] * ratio));
+            return { waveform: btoa(String.fromCharCode(...bins)), duration: audio.duration };
+        } finally { context.close(); }
+    }
+
+    function sendVoice(blob, meta) {
+        const { CloudUpload, RestAPI, Dispatcher } = window.Lowcord;
+        const channelId = window.Lowcord.store("SelectedChannelStore")?.getChannelId();
+        if (!CloudUpload || !RestAPI || !channelId) { toast("Couldn’t send the voice message. Please try again.", true); return; }
+        const reply = window.Lowcord.store("PendingReplyStore")?.getPendingReply(channelId);
+        if (reply) Dispatcher?.dispatch({ type: "DELETE_PENDING_REPLY", channelId });
+        const upload = new CloudUpload({ file: new File([blob], "voice-message.ogg", { type: "audio/ogg; codecs=opus" }),
+            isThumbnail: false, platform: 1 }, channelId);
+        upload.on("complete", () => {
+            RestAPI.post({
+                url: `/channels/${channelId}/messages`,
+                body: {
+                    flags: 1 << 13, channel_id: channelId, content: "", type: 0, sticker_ids: [],
+                    nonce: String((BigInt(Date.now()) - 1420070400000n) << 22n),
+                    attachments: [{ id: "0", filename: upload.filename, uploaded_filename: upload.uploadedFilename,
+                        waveform: meta.waveform, duration_secs: meta.duration }],
+                    message_reference: reply ? { guild_id: reply.channel?.guild_id ?? undefined, channel_id: reply.message.channel_id,
+                        message_id: reply.message.id } : undefined,
+                },
+            }).catch(() => toast("Couldn’t send the voice message. Please try again.", true));
+        });
+        upload.on("error", () => toast("Couldn’t upload the voice message. Please try again.", true));
+        upload.upload();
+    }
+
+    // Analyse the same stream being recorded, without routing it to speakers.
+    // History stays bounded; canvas redraws at most 30 times a second.
+    function liveWaveform(stream, canvas, hint) {
+        let context, source, analyser, frame, stopped = false;
+        const stop = () => {
+            if (stopped) return;
+            stopped = true;
+            cancelAnimationFrame(frame);
+            source?.disconnect();
+            analyser?.disconnect();
+            if (context && context.state !== "closed") context.close().catch(() => {});
+        };
+        const unavailable = () => {
+            stop();
+            hint.textContent = "Live waveform unavailable. Recording continues.";
+        };
+        try {
+            context = new AudioContext();
+            source = context.createMediaStreamSource(stream);
+            analyser = context.createAnalyser();
+            analyser.fftSize = 1024;
+            source.connect(analyser);
+            const paint = canvas.getContext("2d");
+            if (!paint) throw new Error("Canvas unavailable");
+            const samples = new Float32Array(analyser.fftSize);
+            const history = new Float32Array(80);
+            const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+            const color = getComputedStyle(canvas).color;
+            let lastDraw = 0, lastSample = 0, lastSound = -Infinity, signal = "", level = 0;
+            const draw = now => {
+                if (stopped) return;
+                frame = requestAnimationFrame(draw);
+                if (now - lastDraw < (reducedMotion.matches ? 100 : 33)) return;
+                lastDraw = now;
+                if (context.state !== "running") return;
+                analyser.getFloatTimeDomainData(samples);
+                let squares = 0;
+                for (const sample of samples) squares += sample * sample;
+                const rms = Math.sqrt(squares / samples.length);
+                level = Math.min(1, Math.sqrt(rms) * 2.5);
+                if (rms > 0.008) lastSound = now;
+                const nextSignal = now - lastSound < 800 ? "sound" : "quiet";
+                if (nextSignal !== signal) {
+                    signal = nextSignal;
+                    hint.dataset.signal = signal;
+                    hint.textContent = signal === "sound" ? "Microphone is picking up sound" : "Listening for sound…";
+                }
+                if (now - lastSample >= 80) {
+                    history.copyWithin(0, 1);
+                    history[history.length - 1] = level;
+                    lastSample = now;
+                }
+                // A fixed logical canvas avoids reading layout on each frame.
+                const width = 420, height = 64;
+                const ratio = Math.min(devicePixelRatio || 1, 2);
+                const pixelWidth = Math.round(width * ratio), pixelHeight = Math.round(height * ratio);
+                if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+                    canvas.width = pixelWidth;
+                    canvas.height = pixelHeight;
+                }
+                paint.setTransform(ratio, 0, 0, ratio, 0, 0);
+                paint.clearRect(0, 0, width, height);
+                paint.strokeStyle = color;
+                paint.lineWidth = 3;
+                paint.lineCap = "round";
+                if (reducedMotion.matches) {
+                    // Keep real level feedback, without horizontal motion.
+                    paint.globalAlpha = 0.2;
+                    paint.beginPath(); paint.moveTo(8, height / 2); paint.lineTo(width - 8, height / 2); paint.stroke();
+                    paint.globalAlpha = 1;
+                    paint.beginPath(); paint.moveTo(8, height / 2); paint.lineTo(8 + (width - 16) * level, height / 2); paint.stroke();
+                    return;
+                }
+                const step = width / (history.length - 1);
+                const offset = Math.min(1, (now - lastSample) / 80) * step;
+                for (let i = 0; i < history.length; i++) {
+                    const x = i * step - offset;
+                    const amplitude = Math.max(1, history[i] * (height - 12) / 2);
+                    paint.globalAlpha = 0.25 + 0.75 * i / (history.length - 1);
+                    paint.beginPath(); paint.moveTo(x, height / 2 - amplitude); paint.lineTo(x, height / 2 + amplitude); paint.stroke();
+                }
+            };
+            context.resume().catch(unavailable);
+            frame = requestAnimationFrame(draw);
+        } catch { unavailable(); }
+        return stop;
+    }
+
+    function openRecorder() {
+        if (document.querySelector(".lowcord-voice-backdrop")) return;
+        let recorder, stream, chunks = [], blob, meta, started = 0, ticker, stopWaveform, closed = false;
+        const time = ui("span", { className: "lowcord-voice-time" }, "0:00");
+        const record = ui("button", { type: "button", className: "lowcord-button lowcord-voice-record", onClick: toggle }, svg(micPath), "Record");
+        const preview = ui("audio", { controls: "", hidden: true });
+        const status = ui("p", { className: "lowcord-voice-status", role: "status" }, "Press Record and speak. Press Stop when you’re done.");
+        const canvas = ui("canvas", { className: "lowcord-voice-waveform", width: "420", height: "64", "aria-hidden": "true" });
+        const hint = ui("p", { className: "lowcord-voice-signal", role: "status" }, "Listening for sound…");
+        const visualization = ui("div", { className: "lowcord-voice-visualization", hidden: true }, canvas, hint);
+        const sendButton = ui("button", { type: "button", className: "lowcord-button lowcord-button-primary", disabled: true, onClick: submit }, "Send");
+        const cancel = ui("button", { type: "button", className: "lowcord-button", onClick: close }, "Cancel");
+        const dialog = ui("div", { className: "lowcord-voice", role: "dialog", "aria-modal": "true", "aria-label": "Record a voice message" },
+            ui("h2", {}, "Voice message"), status, visualization, ui("div", { className: "lowcord-voice-controls" }, record, time), preview,
+            ui("div", { className: "lowcord-dialog-actions" }, cancel, sendButton));
+        const backdrop = ui("div", { className: "lowcord-voice-backdrop", onMousedown: event => { if (event.target === backdrop) close(); } }, dialog);
+        const onKey = event => { if (event.key === "Escape") { event.stopPropagation(); close(); } };
+        window.addEventListener("keydown", onKey, true);
+        document.body.append(backdrop);
+        record.focus();
+
+        async function toggle() {
+            if (recorder?.state === "recording") {
+                record.disabled = true;
+                stopWaveform?.();
+                recorder.stop();
+                return;
+            }
+            record.disabled = true;
+            try {
+                const deviceId = window.Lowcord.store("MediaEngineStore")?.getInputDeviceId?.();
+                stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: deviceId && deviceId !== "default" ? deviceId : undefined,
+                    echoCancellation: true, noiseSuppression: true } });
+                if (closed) { stream.getTracks().forEach(track => track.stop()); return; }
+            } catch {
+                status.textContent = "OrbitCord couldn’t use the microphone. Allow microphone access for OrbitCord, then try again.";
+                record.disabled = false;
+                return;
+            }
+            try {
+                const type = ["audio/ogg;codecs=opus", "audio/webm;codecs=opus"].find(candidate => MediaRecorder.isTypeSupported(candidate));
+                recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+                chunks = [];
+                recorder.addEventListener("dataavailable", event => chunks.push(event.data));
+                recorder.addEventListener("stop", finish);
+                recorder.start();
+            } catch {
+                stream.getTracks().forEach(track => track.stop());
+                status.textContent = "That recording couldn’t start. Please try again.";
+                record.disabled = false;
+                return;
+            }
+            if (preview.src) URL.revokeObjectURL(preview.src);
+            preview.removeAttribute("src");
+            preview.hidden = true;
+            blob = meta = undefined;
+            time.textContent = "0:00";
+            started = Date.now();
+            ticker = setInterval(() => {
+                const seconds = Math.floor((Date.now() - started) / 1000);
+                time.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+            }, 250);
+            record.lastChild.textContent = "Stop";
+            record.classList.add("lowcord-recording");
+            record.disabled = false;
+            status.textContent = "Recording…";
+            sendButton.disabled = true;
+            hint.textContent = "Listening for sound…";
+            delete hint.dataset.signal;
+            visualization.hidden = false;
+            stopWaveform = liveWaveform(stream, canvas, hint);
+        }
+        async function finish() {
+            clearInterval(ticker);
+            stopWaveform?.();
+            visualization.hidden = true;
+            stream?.getTracks().forEach(track => track.stop());
+            if (closed) return;
+            record.disabled = true;
+            record.lastChild.textContent = "Record again";
+            record.classList.remove("lowcord-recording");
+            status.textContent = "Preparing recording…";
+            blob = new Blob(chunks, { type: "audio/ogg; codecs=opus" });
+            preview.src = URL.createObjectURL(blob);
+            preview.hidden = false;
+            try {
+                meta = await measure(blob);
+                if (closed) return;
+                status.textContent = "Listen back, then send it.";
+                sendButton.disabled = false;
+            } catch {
+                if (closed) return;
+                status.textContent = "That recording couldn’t be read. Please record again.";
+            }
+            record.disabled = false;
+        }
+        function submit() {
+            if (!blob || !meta) return;
+            sendVoice(blob, meta);
+            toast("Sending voice message…");
+            close();
+        }
+        function close() {
+            closed = true;
+            if (recorder?.state === "recording") { recorder.removeEventListener("stop", finish); recorder.stop(); }
+            clearInterval(ticker);
+            stopWaveform?.();
+            stream?.getTracks().forEach(track => track.stop());
+            if (preview.src) URL.revokeObjectURL(preview.src);
+            window.removeEventListener("keydown", onKey, true);
+            backdrop.remove();
+        }
+    }
+
+    // A waveform button at the start of the message bar's buttons. Discord
+    // mutates the page constantly, so a full scan runs only when a known bar
+    // went away or half a second has passed.
+    let bars = [], scanned = 0;
+    function placeVoiceButtons(event) {
+        const show = enabled("voiceMessages");
+        const settled = bars.length && bars.every(bar => bar.isConnected && bar.querySelector(":scope > .lowcord-voice-button"));
+        if (show && !event && settled && performance.now() - scanned < 500) return;
+        scanned = performance.now();
+        bars = [...document.querySelectorAll('[class*="channelTextArea_"] [class*="buttons_"]')];
+        for (const bar of bars) {
+            const existing = bar.querySelector(":scope > .lowcord-voice-button");
+            if (!show) { existing?.remove(); continue; }
+            if (existing) continue;
+            bar.prepend(ui("button", { type: "button", className: "lowcord-voice-button", "aria-label": "Record a voice message",
+                title: "Record a voice message", onClick: openRecorder }, svg(waveformPath)));
+        }
+    }
+    window.Lowcord.onDomChange(placeVoiceButtons);
+    window.addEventListener(changeEvent, placeVoiceButtons);
+
+    window.Lowcord.extensions = { catalog, enabled, set, changeEvent, get state() { return { ...state }; },
+        cleanContent, anonymous, openRecorder };
+})();

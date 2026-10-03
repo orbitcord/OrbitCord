@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Lowcord extensions regression fixture</title>
+    <style>
+        :root { --background-primary:#1a1b1e; --background-secondary:#2b2d31; --text-normal:#f2f3f5; --text-muted:#949ba4; --brand-500:#5865f2; }
+        body { margin:0; font:16px system-ui; color:var(--text-normal); background:var(--background-primary); }
+        .buttons_test { display:flex; }
+        .item_test { cursor:pointer; padding:6px; }
+    </style>
+    <!-- Production order: shim keeps storage, then the module hook and extensions. -->
+    <script>window.__lowcordStorage = localStorage;</script>
+    <script src="/injection/discord.js"></script>
+    <script src="/injection/extensions.js"></script>
+    <script src="/extensions-fixture.js" defer></script>
+</head>
+<body>
+    <main>
+        <div class="channelTextArea_test"><div class="buttons_test"><button aria-label="Send a gift">🎁</button></div></div>
+        <aside class="sidebar_test"><nav><ul role="list">
+            <!-- Like Discord: the account section has no heading. -->
+            <li class="section_test"><ul class="sectionList_test"><li class="itemContainer_test"><div class="item_test active_test" role="link"><div class="itemContent_test"><svg></svg><div class="text_test">Account</div></div></div></li></ul></li>
+            <li class="section_test" aria-labelledby="s1"><div class="sectionLabel_test"><h3 class="label_test" id="s1">Billing</h3></div>
+                <ul class="sectionList_test"><li class="itemContainer_test"><div class="item_test" role="link"><div class="itemContent_test"><svg></svg><div class="text_test">Nitro</div></div></div></li></ul></li>
+        </ul></nav></aside>
+    </main>
+</body>
+</html>

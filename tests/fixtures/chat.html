@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Lowcord chat appearance regression fixture</title>
+    <style>
+        :root { --background-primary:#1a1b1e; --background-secondary:#2b2d31; --text-normal:#f2f3f5; --text-muted:#949ba4; --brand-500:#5865f2; }
+        body { margin:0; font:16px system-ui; color:var(--text-normal); background:var(--background-primary); }
+        body.light { --background-primary:#fff; --background-secondary:#f2f3f5; --text-normal:#313338; --text-muted:#5c5e66; }
+        header { padding:12px 24px; border-bottom:1px solid #5555; }
+        #layout { display:grid; grid-template-columns:minmax(0, 1fr) minmax(300px, 380px); gap:20px; padding:16px; }
+        #settings { padding:0 12px; }
+        ol { list-style:none; margin:0; padding:0; }
+        .message_test { position:relative; padding:8px 16px 8px 60px; background:transparent; border:0; }
+        .header_test { margin:0 0 4px; font-size:14px; }
+        .timestamp_test { color:var(--text-muted); font-size:11px; }
+        .avatar_test { position:absolute; left:16px; top:8px; width:32px; height:32px; border-radius:50%; }
+        .messageContent_test { overflow-wrap:anywhere; }
+        .messageContent_test pre { white-space:pre; }
+        .emoji_test { display:inline; width:20px; height:20px; }
+        .repliedMessage_test { position:relative; display:flex; gap:8px; margin-left:56px; }
+        .replyAvatar_test { width:20px; height:20px; }
+        .repliedTextPreview_test { white-space:nowrap; }
+        .container_test { display:grid; grid-auto-flow:row; grid-row-gap:.25rem; grid-template-columns:repeat(auto-fill,minmax(100%,1fr)); min-width:0; min-height:0; position:relative; }
+        .mosaic_test { display:flex; gap:4px; max-height:280px; width:100%; max-width:550px; border-radius:8px; overflow:hidden; }
+        .mosaic_test > div { flex:1; min-width:0; }
+        .mosaic_test img { display:block; width:100%; height:100%; aspect-ratio:3/2; object-fit:cover; }
+        .imageWrapper_test { width:280px; max-width:100%; }
+        .imageWrapper_test img { display:block; width:100%; border-radius:8px; }
+        .embedFull_test, .attachment_test { box-sizing:border-box; max-width:100%; padding:12px; border:1px solid #5555; border-radius:8px; }
+        .upload_test { display:flex; align-items:center; gap:12px; width:340px; max-width:100%; }
+        .upload_test progress { display:block; width:100%; }
+        .uploadDetails_test { flex:1; min-width:0; }
+        .messageSnapshot_test { padding:8px 0 8px 12px; border-left:3px solid #5555; }
+        .messageSnapshot_test img { width:120px; border-radius:6px; }
+        .buttonContainer_test { position:absolute; right:0; top:0; width:0; height:0; padding:0 32px; }
+        .buttons_test { position:absolute; right:0; top:-16px; transform:translateX(-4px); padding-left:16px; }
+        .buttonsInner_test { display:flex; gap:4px; background:var(--background-secondary); border-radius:6px; padding:4px; margin-left:20px; transform:translateX(8px); }
+        .buttonsInner_test button { flex-shrink:0; width:32px; height:32px; }
+        /* Discord's toolbar visibility: hidden and click-through unless the message itself is hovered. */
+        .buttons_test { opacity:0; pointer-events:none; }
+        .message_test:hover .buttons_test { opacity:1; }
+        .message_test:hover .buttonsInner_test { pointer-events:auto; }
+        #composer { margin:16px; padding:12px; border:1px solid #5555; border-radius:8px; }
+        #drafts { display:flex; gap:8px; }
+        #composer textarea { box-sizing:border-box; width:100%; min-height:60px; }
+        @media(max-width:800px) { #layout { display:block; padding:0; } #settings { margin:20px 16px; } }
+    </style>
+    <script src="/fixture.js" defer></script>
+    <script src="/appearance.js" defer></script>
+</head>
+<body>
+    <header>Lowcord · local chat regression fixture</header>
+    <div id="layout"><main><ol id="timeline"></ol><section id="composer" aria-label="Message composer">
+        <div id="drafts"></div><textarea aria-label="Message text" placeholder="Message Alex"></textarea>
+        <button id="send" type="button">Send test message</button><output id="sent">0 sent</output>
+    </section></main><aside id="settings" aria-label="Chat appearance settings"></aside></div>
+</body>
+</html>
