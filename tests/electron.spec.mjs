@@ -13,6 +13,109 @@ async function launch(dataDir) {
     return app;
 }
 
+test('Windows icon resources contain real images at every taskbar size and survive restart', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-icons-'));
+    let app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('domcontentloaded');
+        const resources = await app.evaluate(({ nativeImage }, { dir, root }) => {
+            const { windowsIconPath } = process.mainModule.require(`${root}/electron/windows-icon.cjs`);
+            const { readFileSync } = process.mainModule.require('node:fs');
+            return ['default', 'disco', 'metal', 'mint', 'space', 'sunny'].map(id => {
+                const source = `${root}/src-tauri/icons/app/${id}.png`;
+                const path = windowsIconPath(source, dir, nativeImage);
+                const ico = readFileSync(path);
+                if (ico.readUInt16LE(0) !== 0 || ico.readUInt16LE(2) !== 1) throw new Error('Invalid ICO header');
+                const original = nativeImage.createFromPath(source);
+                const sizes = [];
+                for (let index = 0; index < ico.readUInt16LE(4); index++) {
+                    const entry = 6 + index * 16;
+                    const size = ico[entry] || 256;
+                    const offset = ico.readUInt32LE(entry + 12);
+                    const length = ico.readUInt32LE(entry + 8);
+                    const frame = ico.subarray(offset, offset + length);
+                    const maskStride = Math.ceil(size / 32) * 4;
+                    if (frame.readUInt32LE(0) !== 40 || frame.readInt32LE(4) !== size || frame.readInt32LE(8) !== size * 2
+                        || frame.readUInt16LE(14) !== 32 || length !== 40 + size * size * 4 + maskStride * size) {
+                        throw new Error(`Invalid Windows DIB frame: ${id} at ${size}px`);
+                    }
+                    const expected = original.resize({ width: size, height: size, quality: 'best' }).toBitmap();
+                    for (let y = 0; y < size; y++) {
+                        for (let x = 0; x < size; x++) {
+                            const pixel = (y * size + x) * 4;
+                            const dibPixel = 40 + ((size - y - 1) * size + x) * 4;
+                            const alpha = frame[dibPixel + 3];
+                            if (alpha !== expected[pixel + 3]) throw new Error(`Incorrect icon alpha: ${id}`);
+                            for (let channel = 0; channel < 3; channel++) {
+                                if (Math.abs(Math.round(frame[dibPixel + channel] * alpha / 255) - expected[pixel + channel]) > 1) {
+                                    throw new Error(`Incorrect icon color: ${id} at ${size}px`);
+                                }
+                            }
+                            const masked = !!(frame[40 + size * size * 4 + (size - y - 1) * maskStride + (x >> 3)] & (0x80 >> (x & 7)));
+                            if (masked !== (alpha === 0)) throw new Error(`Incorrect icon transparency mask: ${id}`);
+                        }
+                    }
+                    sizes.push(size);
+                }
+                // Cached files must be usable without decoding the source again.
+                const cached = windowsIconPath(source, dir, { createFromBuffer() { throw new Error('Cache miss'); } });
+                return { id, path, cached, sizes };
+            });
+        }, { dir, root: resolve('.') });
+        expect(new Set(resources.map(resource => resource.path)).size).toBe(6);
+        for (const resource of resources) {
+            expect(resource.cached).toBe(resource.path);
+            expect(resource.sizes).toEqual([16, 20, 24, 32, 40, 48, 64, 128, 256]);
+        }
+        await page.evaluate(() => window.__LOWCORD_NATIVE__.appIcon('mint'));
+        expect(JSON.parse(await readFile(join(dir, 'app-icon.json'), 'utf8'))).toEqual({ icon: 'mint' });
+        if (process.platform === 'win32') {
+            for (const resource of resources) {
+                expect(await app.evaluate(async ({ app, nativeImage }, path) =>
+                    (await app.getFileIcon(path)).isEmpty() || nativeImage.createFromPath(path).isEmpty(), resource.path)).toBe(false);
+            }
+            await app.evaluate(({ BrowserWindow }) => {
+                const window = BrowserWindow.getAllWindows()[0];
+                window.show();
+                global.iconTaskbarRefreshes = [];
+                const skip = window.setSkipTaskbar.bind(window);
+                window.setSkipTaskbar = value => { global.iconTaskbarRefreshes.push(value); skip(value); };
+            });
+            for (const id of ['space', 'disco', 'default', 'sunny', 'metal', 'mint', 'space', 'mint']) {
+                await page.evaluate(id => window.__LOWCORD_NATIVE__.appIcon(id), id);
+                expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.appIcon())).toBe(id);
+            }
+            expect(await app.evaluate(() => global.iconTaskbarRefreshes)).toEqual(Array.from({ length: 8 }, () => [true, false]).flat());
+            const pin = await app.evaluate(async ({ shell }, { dir, root, icon }) => {
+                const { mkdirSync } = process.mainModule.require('node:fs');
+                const { join } = process.mainModule.require('node:path');
+                const { updateShortcutIcons } = process.mainModule.require(`${root}/electron/windows-icon.cjs`);
+                const directory = join(dir, 'test-pins');
+                mkdirSync(directory);
+                const path = join(directory, 'OrbitCord.lnk');
+                if (!shell.writeShortcutLink(path, 'create', { target: process.execPath,
+                    args: '--test-argument', description: 'Test pin', icon: process.execPath, iconIndex: 0 })) {
+                    throw new Error('Could not create test pin');
+                }
+                await updateShortcutIcons(directory, process.execPath, 'dev.lowcord.app', icon, shell);
+                return shell.readShortcutLink(path);
+            }, { dir, root: resolve('.'), icon: resources[3].path });
+            expect(pin.icon).toBe(resources[3].path);
+            expect(pin.iconIndex).toBe(0);
+            expect(pin.args).toBe('--test-argument');
+            expect(pin.description).toBe('Test pin');
+            expect(pin.appUserModelId).toBe('dev.lowcord.app');
+        }
+        await app.close();
+        app = await launch(dir);
+        const restarted = await app.firstWindow();
+        await restarted.waitForLoadState('domcontentloaded');
+        expect(await restarted.evaluate(() => window.__LOWCORD_NATIVE__.appIcon())).toBe('mint');
+        await expect(restarted.evaluate(() => window.__LOWCORD_NATIVE__.appIcon('../invalid'))).rejects.toThrow('Unknown icon');
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'lowcord-electron-'));
     const app = await launch(dir);

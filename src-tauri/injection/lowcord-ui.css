@@ -1,5 +1,13 @@
 /* Lowcord's own dialogs, toasts and the message bar waveform. Colors come
    from Discord's theme variables so light and dark themes both work. */
+/* Discord's web client advertises its desktop app in the server rail.
+   Hide the whole item, including its spacing and hover target. */
+[class*="guilds_"] [class*="downloadApp_"],
+[class*="guilds_"] [class*="listItem_"]:has([aria-label="Download Apps"]),
+[class*="guilds_"] [aria-label="Download Apps"] {
+    display: none !important;
+}
+
 .lowcord-settings-backdrop, .lowcord-voice-backdrop {
     position: fixed; inset: 0; z-index: 10000;
     display: grid; place-items: center;

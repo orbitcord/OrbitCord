@@ -106,6 +106,7 @@ const scheduleState = () => {
 };
 
 const appIcons = ['default', 'disco', 'metal', 'mint', 'space', 'sunny'];
+let windowsIconUpdate = Promise.resolve();
 const iconPath = (id, dock) => join(__dirname, '..', 'src-tauri', 'icons', 'app', `${id}${dock ? '-dock' : ''}.png`);
 function readAppIcon() {
     try {
@@ -114,10 +115,20 @@ function readAppIcon() {
     } catch {}
     return 'default';
 }
-// Changes the live dock/taskbar/window icon. The installed file icon (Finder,
-// Explorer shortcut) belongs to the OS and cannot be changed at runtime.
+// Changes the live dock/taskbar/window icon. The installed executable's icon
+// stays unchanged; Windows pins need their own icon resource updated too.
 function applyAppIcon(id) {
     if (process.platform === 'darwin') app.dock.setIcon(nativeImage.createFromPath(iconPath(id, true)));
+    else if (process.platform === 'win32') {
+        // Finish each shell refresh before applying the next selection. A fast
+        // series of clicks must leave every surface on the last selected icon.
+        windowsIconUpdate = windowsIconUpdate.catch(() => {}).then(() => require('./windows-icon.cjs').applyWindowsIcon(mainWindow, iconPath(id), {
+            userData, nativeImage, shell: require('electron').shell, appData: app.getPath('appData'),
+            desktop: app.getPath('desktop'), programData: process.env.ProgramData, publicDirectory: process.env.PUBLIC,
+            executable: process.execPath, packaged: app.isPackaged && !testing, tray,
+        }));
+        return windowsIconUpdate;
+    }
     else mainWindow?.setIcon(nativeImage.createFromPath(iconPath(id)));
 }
 
@@ -135,7 +146,7 @@ async function start() {
     ses.setUserAgent(ses.getUserAgent().replace(/\s(?:Electron|Lowcord|Datcord|OrbitCord)\/[\w.-]+/gi, ''));
     mainWindow = new BrowserWindow({
         ...(onScreen ? { x: saved.x, y: saved.y, width: saved.width, height: saved.height } : { width: 1280, height: 800 }),
-        minWidth: 520, minHeight: 400, title: 'OrbitCord', backgroundColor: '#313338', show: !testing,
+        minWidth: 520, minHeight: 400, title: 'OrbitCord', backgroundColor: '#313338', show: !testing && process.platform !== 'win32',
         icon: join(__dirname, '..', 'src-tauri', 'icons', '128x128.png'), autoHideMenuBar: true,
         webPreferences: {
             preload: join(__dirname, '..', '.lowcord', 'preload.cjs'), sandbox: true,
@@ -146,8 +157,11 @@ async function start() {
     const socialResolver = createSocialResolver();
     const socialPosts = createSocialPosts();
     ses.protocol.handle(mediaScheme, request => socialPosts.serve(request));
-    applyAppIcon(readAppIcon());
+    await applyAppIcon(readAppIcon());
     if (saved?.maximized && onScreen) mainWindow.maximize();
+    // Let Explorer see the selected icon and updated launch shortcuts before
+    // it creates the taskbar button. Showing first can cache the default icon.
+    if (!testing && process.platform === 'win32') mainWindow.show();
     const permitted = new Set(['media', 'notifications', 'fullscreen', 'clipboard-sanitized-write', 'display-capture', 'speaker-selection']);
     ses.setPermissionRequestHandler((contents, permission, callback, details) => callback(
         contents === mainWindow.webContents && trusted(details.requestingUrl) && permitted.has(permission)));
@@ -237,13 +251,13 @@ async function start() {
     mainWindow.webContents.on('console-message', details => {
         if (details.level === 'error') console.error('[page]', details.message.slice(0, 600));
     });
-    ipcMain.handle('lowcord:app-icon', (event, id) => {
+    ipcMain.handle('lowcord:app-icon', async (event, id) => {
         assertSender(event);
         if (id === undefined) return readAppIcon();
         if (id === 'previews') return Object.fromEntries(appIcons.map(name =>
             [name, nativeImage.createFromPath(iconPath(name)).resize({ width: 160, height: 160, quality: 'best' }).toDataURL()]));
         if (!appIcons.includes(id)) throw new Error('Unknown icon');
-        applyAppIcon(id);
+        await applyAppIcon(id);
         try { writeFileSync(join(userData, 'app-icon.json'), JSON.stringify({ icon: id })); } catch (error) { console.error('[lowcord]', error.message); }
         return id;
     });
@@ -305,8 +319,10 @@ async function start() {
         { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' },
     ]));
     if (!testing) {
-        const image = nativeImage.createFromPath(join(__dirname, '..', 'src-tauri', 'icons',
-            process.platform === 'darwin' ? 'trayTemplate.png' : '32x32.png')).resize({ width: 18, height: 18 });
+        const image = process.platform === 'win32'
+            ? nativeImage.createFromPath(require('./windows-icon.cjs').windowsIconPath(iconPath(readAppIcon()), userData, nativeImage))
+            : nativeImage.createFromPath(join(__dirname, '..', 'src-tauri', 'icons',
+                process.platform === 'darwin' ? 'trayTemplate.png' : '32x32.png')).resize({ width: 18, height: 18 });
         image.setTemplateImage(process.platform === 'darwin');
         tray = new Tray(image);
         tray.setToolTip('OrbitCord');

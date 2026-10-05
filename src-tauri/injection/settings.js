@@ -17,31 +17,44 @@ function setupLowcordSettings() {
         const { React } = window.Lowcord;
         const h = React.createElement;
         const native = window.__LOWCORD_NATIVE__;
+        const windows = /Windows/.test(navigator.userAgent);
         const [current, setCurrent] = React.useState("default");
         const [previews, setPreviews] = React.useState({});
         const [error, setError] = React.useState("");
+        const selection = React.useRef(0);
         React.useEffect(() => {
             let live = true;
-            native?.appIcon?.().then(id => live && setCurrent(id)).catch(() => {});
+            native?.appIcon?.().then(id => live && (!windows || selection.current === 0) && setCurrent(id)).catch(() => {});
             native?.appIcon?.("previews").then(map => live && setPreviews(map)).catch(() => {});
             return () => { live = false; };
         }, []);
         const choose = id => {
+            const request = ++selection.current;
             const before = current;
             setCurrent(id);
-            native.appIcon(id).then(() => setError(""), failure => { setCurrent(before); setError(failure.message); });
+            native.appIcon(id).then(() => {
+                if (!windows || request === selection.current) setError("");
+            }, failure => {
+                if (windows && request !== selection.current) return;
+                setCurrent(before); setError(failure.message);
+                if (windows) native.appIcon().then(saved => request === selection.current && setCurrent(saved)).catch(() => {});
+            });
         };
         const check = h("svg", { className: "lowcord-icon-check", viewBox: "0 0 16 16", width: 16, height: 16, "aria-hidden": "true" },
             h("circle", { cx: 8, cy: 8, r: 8, fill: "currentColor" }),
             h("path", { d: "m4.8 8.3 2.1 2.1 4.3-4.5", fill: "none", stroke: "#fff", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" }));
         return h("section", { className: "lowcord-chat-appearance lowcord-icon-page" },
-            h("p", { className: "lowcord-icon-lead" }, "Pick an icon for OrbitCord. Your Dock or taskbar updates right away."),
+            h("p", { className: "lowcord-icon-lead" }, windows
+                ? "Pick an icon for OrbitCord. Updates the window, taskbar, tray and shortcuts."
+                : "Pick an icon for OrbitCord. Your Dock or taskbar updates right away."),
             h("div", { className: "lowcord-icon-grid", role: "radiogroup", "aria-label": "App icon" }, ...appIcons.map(([id, label]) =>
                 h("button", { key: id, type: "button", role: "radio", "aria-checked": current === id, className: "lowcord-icon-option", onClick: () => choose(id) },
                     current === id ? check : null,
                     previews[id] ? h("img", { src: previews[id], alt: "", width: 72, height: 72, draggable: false }) : h("span", { className: "lowcord-icon-placeholder" }),
                     h("span", { className: "lowcord-icon-name" }, label)))),
-            h("p", { className: "lowcord-icon-note" }, "Finder and Explorer still show the default icon on the app file."),
+            h("p", { className: "lowcord-icon-note" }, windows
+                ? "Desktop, Start menu and pinned shortcuts use your selected icon. The .exe file keeps the default icon."
+                : "Finder and Explorer still show the default icon on the app file."),
             error ? h("p", { role: "alert" }, error) : null);
     }
 
