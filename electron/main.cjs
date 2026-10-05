@@ -1,8 +1,12 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, session, screen, dialog, desktopCapturer } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, session, screen, dialog, desktopCapturer, protocol } = require('electron');
 const { join } = require('node:path');
+const { readFileSync, writeFileSync } = require('node:fs');
 const { NativeBackend } = require('./native.cjs');
 const { migrateProfile } = require('./profile.cjs');
 const { autoUpdater } = require('electron-updater');
+const { setupEmbedPlugins } = require('./embed-plugins.cjs');
+const { createSocialResolver } = require('./social-resolver.cjs');
+const { createSocialPosts, scheme: mediaScheme } = require('./social-posts.cjs');
 
 app.setName('OrbitCord');
 app.setAppUserModelId('dev.lowcord.app'); // Stable identity preserves existing installs and notifications.
@@ -15,6 +19,10 @@ if (!userData) throw new Error('Missing test data directory');
 app.setPath('userData', userData);
 app.setPath('sessionData', join(userData, 'Chromium'));
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// Social card media is proxied through tokens minted in social-posts.cjs, so
+// Discord's CSP stays untouched and remote hosts never see Discord's origin.
+protocol.registerSchemesAsPrivileged([{ scheme: mediaScheme,
+    privileges: { standard: true, secure: true, bypassCSP: true, stream: true, supportFetchAPI: true } }]);
 if (dev) app.commandLine.appendSwitch('remote-debugging-port', '9222');
 let mainWindow, tray, backend, stateTimer, quitting = false, finished = false;
 let downloadedUpdate = null, updateDismissed = false, updateRestarting = false, updateError = null;
@@ -97,6 +105,22 @@ const scheduleState = () => {
     stateTimer = setTimeout(() => saveState().catch(error => console.error('[lowcord]', error.message)), 300);
 };
 
+const appIcons = ['default', 'disco', 'metal', 'mint', 'space', 'sunny'];
+const iconPath = (id, dock) => join(__dirname, '..', 'src-tauri', 'icons', 'app', `${id}${dock ? '-dock' : ''}.png`);
+function readAppIcon() {
+    try {
+        const { icon } = JSON.parse(readFileSync(join(userData, 'app-icon.json'), 'utf8'));
+        if (appIcons.includes(icon)) return icon;
+    } catch {}
+    return 'default';
+}
+// Changes the live dock/taskbar/window icon. The installed file icon (Finder,
+// Explorer shortcut) belongs to the OS and cannot be changed at runtime.
+function applyAppIcon(id) {
+    if (process.platform === 'darwin') app.dock.setIcon(nativeImage.createFromPath(iconPath(id, true)));
+    else mainWindow?.setIcon(nativeImage.createFromPath(iconPath(id)));
+}
+
 async function start() {
     if (!testing) await migrateProfile(app.getPath('sessionData'));
     backend = new NativeBackend(app.isPackaged ? join(process.resourcesPath, 'native', `lowcord-native${process.platform === 'win32' ? '.exe' : ''}`)
@@ -118,7 +142,11 @@ async function start() {
             contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: true,
         },
     });
-    if (process.platform === 'darwin') app.dock.setIcon(join(__dirname, '..', 'src-tauri', 'icons', 'icon.png'));
+    const embedPlugins = setupEmbedPlugins(mainWindow.webContents);
+    const socialResolver = createSocialResolver();
+    const socialPosts = createSocialPosts();
+    ses.protocol.handle(mediaScheme, request => socialPosts.serve(request));
+    applyAppIcon(readAppIcon());
     if (saved?.maximized && onScreen) mainWindow.maximize();
     const permitted = new Set(['media', 'notifications', 'fullscreen', 'clipboard-sanitized-write', 'display-capture', 'speaker-selection']);
     ses.setPermissionRequestHandler((contents, permission, callback, details) => callback(
@@ -145,8 +173,41 @@ async function start() {
         if (!trusted(url)) { event.preventDefault(); void openExternal(url); }
     });
     mainWindow.webContents.on('will-attach-webview', event => event.preventDefault());
+    // A security key holding several Discord passkeys asks which one to use.
+    ses.on('select-webauthn-account', (_event, details, callback) => {
+        let answered = false;
+        const answer = id => { if (!answered) { answered = true; callback(id); } };
+        if (!trusted(`https://${details.relyingPartyId}`) || !details.accounts.length) { answer(); return; }
+        Menu.buildFromTemplate([
+            ...details.accounts.map(account => ({ label: account.displayName || account.name || 'Passkey',
+                click: () => answer(account.credentialId) })),
+            { type: 'separator' }, { label: 'Cancel', click: () => answer() },
+        ]).popup({ window: mainWindow, callback: () => setTimeout(answer) });
+    });
     mainWindow.webContents.on('context-menu', async (_event, params) => {
         const contents = mainWindow.webContents;
+        // Discord handles its own menus; Electron has no default one for text,
+        // so text fields and selections get a native edit menu.
+        if ((params.isEditable || params.selectionText) && params.frame === contents.mainFrame && trusted(params.pageURL)) {
+            const { editFlags, isEditable, misspelledWord, dictionarySuggestions } = params;
+            const edit = (label, action, enabled) => ({ label, enabled,
+                click: () => { if (!contents.isDestroyed()) contents[action](); } });
+            Menu.buildFromTemplate([
+                ...(isEditable && misspelledWord ? [
+                    ...dictionarySuggestions.slice(0, 5).map(word => ({ label: word,
+                        click: () => { if (!contents.isDestroyed()) contents.replaceMisspelling(word); } })),
+                    ...(dictionarySuggestions.length ? [] : [{ label: 'No suggestions', enabled: false }]),
+                    { label: 'Add to dictionary', click: () => ses.addWordToSpellCheckerDictionary(misspelledWord) },
+                    { type: 'separator' },
+                ] : []),
+                ...(isEditable ? [edit('Cut', 'cut', editFlags.canCut)] : []),
+                edit('Copy', 'copy', editFlags.canCopy),
+                ...(isEditable ? [edit('Paste', 'paste', editFlags.canPaste),
+                    edit('Paste and Match Style', 'pasteAndMatchStyle', editFlags.canPaste)] : []),
+                { type: 'separator' }, edit('Select All', 'selectAll', editFlags.canSelectAll),
+            ]).popup({ window: mainWindow });
+            return;
+        }
         if (params.mediaType !== 'image' || !params.hasImageContents || !params.srcURL
             || params.frame !== contents.mainFrame || !trusted(params.pageURL)
             || !Number.isInteger(params.x) || !Number.isInteger(params.y)) return;
@@ -176,9 +237,36 @@ async function start() {
     mainWindow.webContents.on('console-message', details => {
         if (details.level === 'error') console.error('[page]', details.message.slice(0, 600));
     });
+    ipcMain.handle('lowcord:app-icon', (event, id) => {
+        assertSender(event);
+        if (id === undefined) return readAppIcon();
+        if (id === 'previews') return Object.fromEntries(appIcons.map(name =>
+            [name, nativeImage.createFromPath(iconPath(name)).resize({ width: 160, height: 160, quality: 'best' }).toDataURL()]));
+        if (!appIcons.includes(id)) throw new Error('Unknown icon');
+        applyAppIcon(id);
+        try { writeFileSync(join(userData, 'app-icon.json'), JSON.stringify({ icon: id })); } catch (error) { console.error('[lowcord]', error.message); }
+        return id;
+    });
     ipcMain.handle('lowcord:notify', (event, title, body) => { assertSender(event); return backend.call('notify', { title, body }); });
     ipcMain.handle('lowcord:log', (event, message) => { assertSender(event); return backend.call('log', { message }); });
     ipcMain.handle('lowcord:open-external', (event, url) => { assertSender(event); return backend.call('open_external', { url }); });
+    ipcMain.handle('lowcord:embed-preferences', (event, settings) => { assertSender(event); embedPlugins.set(settings); });
+    ipcMain.handle('lowcord:resolve-social-link', (event, url, provider) => {
+        assertSender(event);
+        if (typeof url !== 'string' || url.length > 2048 || typeof provider !== 'string') throw new Error('Invalid link');
+        return socialResolver.resolve(url, provider);
+    });
+    ipcMain.handle('lowcord:social-post', (event, url) => {
+        assertSender(event);
+        if (typeof url !== 'string' || url.length > 2048) throw new Error('Invalid link');
+        return socialPosts.get(url);
+    });
+    ipcMain.handle('lowcord:social-video', async (event, url, limit) => {
+        assertSender(event);
+        if (typeof url !== 'string' || url.length > 2048) throw new Error('Invalid link');
+        try { return await socialPosts.socialVideo(url, limit); }
+        catch (error) { return { error: error.code ?? 'failed' }; }
+    });
     ipcMain.handle('lowcord:update-state', event => { assertSender(event); return updateNoticeState(); });
     ipcMain.handle('lowcord:update-dismiss', event => {
         assertSender(event);

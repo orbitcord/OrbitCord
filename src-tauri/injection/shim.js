@@ -74,7 +74,31 @@
   if (document.documentElement) waitForTitle();
   else document.addEventListener("DOMContentLoaded", waitForTitle, { once: true });
 
-  window.__LOWCORD_OPEN_EXTERNAL__ = (url) => invoke("open_external", { url });
+  // Outside Windows, Electron has no passkey prompt: iCloud Keychain and
+  // phone (QR) passkeys need Chrome's UI or an Apple browser entitlement, so
+  // those requests stay pending forever and block the next login attempt.
+  // Disable the invisible autofill request and enforce the request timeout,
+  // so Discord shows its passkey error and its QR / password login still work.
+  // Plugged-in security keys keep working within that window.
+  if (window.PublicKeyCredential && navigator.credentials && !/Windows/.test(navigator.userAgent)) {
+    PublicKeyCredential.isConditionalMediationAvailable = () => Promise.resolve(false);
+    const credentials = navigator.credentials;
+    for (const method of ["get", "create"]) {
+      const original = credentials[method].bind(credentials);
+      credentials[method] = (options) => {
+        if (!options?.publicKey || options.mediation === "conditional") return original(options);
+        const limit = Math.min(Math.max(Number(options.publicKey.timeout) || 60000, 10000), 120000);
+        const timeout = AbortSignal.timeout(limit);
+        const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+        return original({ ...options, signal }).catch((error) => {
+          if (!timeout.aborted || options.signal?.aborted) throw error;
+          throw new DOMException("No passkey was available. Use a security key, the QR code, or your password.", "NotAllowedError");
+        });
+      };
+    }
+  }
+
+  window.__LOWCORD_OPEN_EXTERNAL__ =(url) => invoke("open_external", { url });
   window.__LOWCORD_REPORT__ = () => {
     const report = () => {
       const { Lowcord } = window;

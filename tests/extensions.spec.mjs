@@ -21,7 +21,8 @@ const setExtension = (page, id, value) => page.evaluate(([id, value]) => Lowcord
 
 test("every extension is on by default and persists when switched", async ({ page }) => {
     expect(await page.evaluate(() => Lowcord.extensions.state)).toEqual({
-        anonymiseFileNames: true, voiceMessages: true, quickReply: true, cleanUrls: true, silentTyping: true, noTracking: true });
+        anonymiseFileNames: true, voiceMessages: true, quickReply: true, cleanUrls: true, silentTyping: true, noTracking: true,
+        youtubeAdblock: true, musicEmbeds: true, socialEmbeds: true, socialCards: true, redditVideoUpload: true, instagramVideoUpload: true, twitterVideoUpload: true });
     await setExtension(page, "silentTyping", false);
     await page.reload();
     await expect.poll(() => page.evaluate(() => window.fixtureReady)).toBe(true);
@@ -51,6 +52,7 @@ test("no tracking blocks analytics, metrics, crash reports and the desktop RPC p
 });
 
 test("clean links strips tracking from sent and edited messages, keeping real parameters", async ({ page }) => {
+    await setExtension(page, "socialEmbeds", false);
     const content = "look https://www.youtube.com/watch?v=abc123&si=TRACK&t=42 and (https://shop.example/item?id=7&utm_source=x&fbclid=y). "
         + "https://x.com/user/status/1?s=20&t=abc <https://example.com/?gclid=1> https://example.com/plain?q=1";
     await xhr(page, "POST", `/api/v9/channels/${channel}/messages`, JSON.stringify({ content, nonce: "1" }));
@@ -85,6 +87,35 @@ test("anonymised uploads get 7 random letters, keep extension and spoiler, and m
     await setExtension(page, "anonymiseFileNames", false);
     await xhr(page, "POST", `/api/v9/channels/${channel}/attachments`, JSON.stringify({ files: [files[0]] }));
     expect(JSON.parse((await received(page))[3].body).files[0].filename).toBe(files[0].filename);
+});
+
+test("files are anonymised as they reach the composer, before Discord uploads them", async ({ page }) => {
+    const seen = await page.evaluate(() => {
+        const seen = [];
+        const area = document.querySelector(".channelTextArea_test");
+        const input = Object.assign(document.createElement("input"), { type: "file", multiple: true });
+        area.append(input);
+        // Stand-ins for Discord's own handlers, which run after Lowcord's.
+        input.addEventListener("change", () => seen.push(["picker", ...[...input.files].map(file => file.name)]));
+        area.addEventListener("paste", event => seen.push(["paste", ...[...event.clipboardData.files].map(file => file.name)]));
+        area.addEventListener("drop", event => seen.push(["drop", ...[...event.dataTransfer.files].map(file => file.name)]));
+        const files = () => { const data = new DataTransfer(); data.items.add(new File(["a"], "My Photo.PNG", { type: "image/png" })); return data; };
+        input.files = files().files;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        area.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: files() }));
+        area.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: files() }));
+        // Plain text pastes and drags pass through unchanged.
+        const text = new DataTransfer(); text.setData("text/plain", "hello");
+        area.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: text }));
+        return seen;
+    });
+    expect(seen.map(([kind]) => kind)).toEqual(["picker", "paste", "drop", "paste"]);
+    for (const [, name] of seen.slice(0, 3)) expect(name).toMatch(/^[a-z]{7}\.PNG$/);
+    expect(seen[3]).toEqual(["paste"]);
+    // The upload request keeps the name Discord already showed, spoilered or not.
+    const files = [{ id: "1", filename: seen[0][1] }, { id: "2", filename: `SPOILER_${seen[1][1]}` }];
+    await xhr(page, "POST", `/api/v9/channels/${channel}/attachments`, JSON.stringify({ files }));
+    expect(JSON.parse((await received(page))[0].body).files).toEqual(files);
 });
 
 test("voice message button sits in the message bar and opens the recorder", async ({ page }) => {
@@ -238,7 +269,7 @@ test("OrbitCord section in Discord's settings opens both pages, and toggles save
     const dialog = page.getByRole("dialog", { name: "OrbitCord Settings" });
     await expect(dialog.getByRole("heading", { name: "Extensions" })).toBeVisible();
     const toggles = dialog.getByRole("switch");
-    await expect(toggles).toHaveCount(6);
+    await expect(toggles).toHaveCount(13);
     for (const toggle of await toggles.all()) await expect(toggle).toBeChecked();
     await dialog.getByRole("switch", { name: /Silent typing/ }).uncheck();
     expect(await page.evaluate(() => JSON.parse(Lowcord.storage.getItem("lowcord.extensions")).silentTyping)).toBe(false);

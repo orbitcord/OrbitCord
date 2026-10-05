@@ -67,7 +67,10 @@ function setupLowcordChatAppearance() {
     let frame;
     try { enabled = storage.getItem(storageKey) !== "false"; } catch {}
 
+    // An upload in progress is a list item of its own, not a chat-messages row.
+    const uploaderSelector = '[data-list-item-id^="chat-messages___Uploader"]';
     function clearBubbles() {
+        document.querySelectorAll("[data-lowcord-uploader]").forEach(node => node.removeAttribute("data-lowcord-uploader"));
         resizeObserver.disconnect();
         resizedTimelines.clear();
         mediaObserver.disconnect();
@@ -131,7 +134,7 @@ function setupLowcordChatAppearance() {
         const richContent = '[class*="attachment_"], [class*="attachmentContent_"], [class*="upload_"], '
             + '[class*="uploadProgress_"], [class*="imageWrapper_"], [class*="visualMediaItemContainer_"], '
             + '[class*="mosaicItem_"], [class*="embed_"], [class*="embedFull_"], [class*="sticker_"], '
-            + '[class*="messageSnapshot_"], [class*="forwardedMessage_"], video, audio';
+            + '[class*="messageSnapshot_"], [class*="forwardedMessage_"], .lowcord-music-embeds, .lowcord-social-embeds, video, audio';
         return Array.from(surface.children)
             .filter(body => !body.matches('[class*="repliedMessage_"], [class*="buttonContainer_"], [class*="buttons_"], '
                 + '.lowcord-bubble-avatar, .lowcord-bubble-time'))
@@ -198,9 +201,10 @@ function setupLowcordChatAppearance() {
 
     // Discord's attachment grid. The fixture nests it inside contents_.
     const accessoriesSelector = ':scope > [id^="message-accessories-"], '
+        + ':scope > .lowcord-music-embeds, :scope > .lowcord-social-embeds, '
         + ':scope > [class*="container_"]:not([class*="buttonContainer_"]), '
         + ':scope > [class*="contents_"] > [class*="container_"]:not([class*="buttonContainer_"])';
-    const mediaSelector = 'img, video, canvas, [class*="mosaicItem_"], [class*="imageWrapper_"], [class*="embedFull_"], '
+    const mediaSelector = 'img, video, canvas, iframe[data-lowcord-music-player], .lowcord-social-card, [class*="mosaicItem_"], [class*="imageWrapper_"], [class*="embedFull_"], '
         + '[class*="attachment_"], [class*="upload_"], [class*="messageSnapshot_"], [class*="sticker_"]';
 
     // Discord sizes attachments against a full-width grid, so outgoing media is
@@ -227,7 +231,9 @@ function setupLowcordChatAppearance() {
                 // Discord's media column is wider than the picture it holds, so
                 // measure the media elements themselves, then the item's own box.
                 let contentRight = -Infinity;
-                for (const nodes of [item.querySelectorAll(mediaSelector), [item]]) {
+                // A social card's carousel holds off-screen slides; measure the card.
+                const inner = item.matches(".lowcord-social-card") ? [] : item.querySelectorAll(mediaSelector);
+                for (const nodes of [inner, [item]]) {
                     for (const node of nodes) {
                         const rect = node.getBoundingClientRect();
                         if (rect.width && rect.height && rect.width < boxBounds.width - 1) contentRight = Math.max(contentRight, rect.right);
@@ -296,7 +302,7 @@ function setupLowcordChatAppearance() {
         setProperty(surface, "--lowcord-actions-max-width", `${Math.floor(available)}px`);
         if (media) {
             const caption = surface.querySelector(':scope > [class*="contents_"] > [class*="messageContent_"]');
-            if (!entry.emoji && caption?.textContent.trim()) setAttribute(surface, "data-lowcord-caption", "true");
+            if (!entry.emoji && caption?.textContent.trim() && !caption.hasAttribute("data-lowcord-social-link-only")) setAttribute(surface, "data-lowcord-caption", "true");
             else surface.removeAttribute("data-lowcord-caption");
         } else placeActions(surface, row, alignment);
     }
@@ -335,6 +341,7 @@ function setupLowcordChatAppearance() {
         const channelEnabled = channel?.type === 1 ? options.dms : channel?.type === 3
             ? options.groupDms : [0, 5, 10, 11, 12].includes(channel?.type) && options.servers;
         if (!channelEnabled || !userID) { clearBubbles(); return; }
+        document.querySelectorAll(uploaderSelector).forEach(node => setAttribute(node, "data-lowcord-uploader", options.outgoingPosition));
         const timelines = new Set();
         const entries = [];
         document.querySelectorAll('[id^="chat-messages-"]').forEach(row => {
@@ -344,17 +351,23 @@ function setupLowcordChatAppearance() {
             const surface = row.querySelector('[data-list-item-id^="chat-messages"]')
                 ?? row.querySelector('[class*="message_"]');
             if (!surface) return;
-            if (!message || ![0, 19].includes(message.type ?? 0)) {
+            // 20 and 23 are app command responses; Discord shows "X used /cmd"
+            // above them in the same quote slot as a reply.
+            if (!message || ![0, 19, 20, 23].includes(message.type ?? 0)) {
                 clearSurface(surface);
                 entries.push(null);
                 return;
             }
-            const side = message.author?.id === userID ? "outgoing" : "incoming";
+            // A bot's response to the current user's command belongs on their side.
+            const invoker = message.interactionMetadata?.user?.id ?? message.interaction_metadata?.user?.id
+                ?? message.interaction?.user?.id;
+            const isCommand = message.type === 20 || message.type === 23;
+            const side = message.author?.id === userID || (isCommand && invoker === userID) ? "outgoing" : "incoming";
             timelines.add(row.parentElement);
             const emoji = isEmojiOnly(message) && !message.messageReference && !message.message_reference;
             entries.push({ row, surface, message, side, alignment: side === "outgoing" ? options.outgoingPosition : "left", emoji,
                 media: emoji || hasRichContent(message, surface), date: new Date(message.timestamp), author: message.author?.id,
-                timeline: row.parentElement, isReply: message.type === 19 || Boolean(message.messageReference || message.message_reference) });
+                timeline: row.parentElement, isReply: message.type === 19 || isCommand || Boolean(message.messageReference || message.message_reference) });
         });
         entries.forEach((entry, index) => {
             if (!entry) return;
@@ -405,7 +418,7 @@ function setupLowcordChatAppearance() {
             observer ??= new MutationObserver(records => {
                 // The app shell, member list, composer and settings animate
                 // independently. Only timeline changes need a message scan.
-                const rowSelector = '[id^="chat-messages-"]';
+                const rowSelector = `[id^="chat-messages-"], ${uploaderSelector}`;
                 if (records.some(record => record.target instanceof Element && (
                     record.target.closest(rowSelector) ||
                     [...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element &&

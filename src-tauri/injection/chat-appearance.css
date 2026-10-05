@@ -104,6 +104,12 @@
     padding-inline: var(--lowcord-edge) !important;
 }
 [id^="chat-messages-"] > [data-lowcord-media] > [class*="contents_"] { margin: 0 !important; padding: 0 !important; position: static !important; }
+/* Discord's upload progress card sits on the outgoing side, like the message it becomes. */
+[data-lowcord-uploader] { padding: 2px 16px !important; padding-inline: 16px !important; min-height: 0 !important; }
+[data-lowcord-uploader] > [class*="contents_"] { margin: 0 !important; padding: 0 !important; position: static !important; }
+[data-lowcord-uploader] > [class*="contents_"] > :is([class*="avatar_"], [class*="avatarDecoration_"], [class*="decoration_"], [class*="header_"]),
+[data-lowcord-uploader] [class*="avatarDecoration_"] { display: none !important; }
+[data-lowcord-uploader="right"] > [class*="contents_"] > [class*="messageContent_"] { display: flex !important; justify-content: flex-end; }
 /* A caption reads as a bubble above its media. */
 [id^="chat-messages-"] > [data-lowcord-media][data-lowcord-caption] > [class*="contents_"] > [class*="messageContent_"] {
     box-sizing: border-box;

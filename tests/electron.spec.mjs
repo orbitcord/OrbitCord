@@ -28,9 +28,12 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(browser.userAgent).not.toMatch(/(?:Electron|Lowcord|Datcord|OrbitCord)\//i);
         expect(browser.getUserMedia).toBe('function');
         expect(browser.peerConnection).toBe('function');
-        expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true, extensions: 6, fetchHooked: true });
+        expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true, extensions: 12, fetchHooked: true });
         expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
-            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal'] });
+            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'setEmbedPreferences', 'resolveSocialLink', 'socialPost', 'socialVideo'] });
+        // Card media loads like <img>/<video> (no CORS) from the privileged scheme;
+        // an unhandled scheme would reject instead of answering.
+        expect(await page.evaluate(() => fetch('lowcord-media://media/0123456789abcdef01234567', { mode: 'no-cors' }).then(r => r.type))).toBe('opaque');
         for (const id of ['video', 'audio', 'webm']) {
             await page.evaluate(async id => {
                 const media = document.getElementById(id);
@@ -76,6 +79,65 @@ test('Rust saves window state across Electron restarts and quits with its parent
         app = await launch(dir);
         await (await app.firstWindow()).waitForLoadState('domcontentloaded');
         expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds().width)).toBe(900);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('embed plugins reach only official child frames and update without reloading', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lowcord-embeds-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('load');
+        const youtubeFixture = (await readFile('tests/fixtures/youtube-volume.html', 'utf8')).replace('</body>',
+            '<div class="ad-showing"><button class="ytp-ad-skip-button" onclick="window.skipped=true">Skip</button></div></body>');
+        await page.route('https://www.youtube.com/embed/**', route => route.fulfill({ contentType: 'text/html',
+            body: youtubeFixture }));
+        await page.route('https://open.spotify.com/embed/**', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head></head><body><audio></audio></body></html>' }));
+        await page.route('https://embed.music.apple.com/**', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head></head><body><audio></audio></body></html>' }));
+        const urls = ['https://www.youtube.com/embed/test', 'https://open.spotify.com/embed/track/test', 'https://embed.music.apple.com/us/album/test/123'];
+        await page.evaluate(urls => {
+            for (const src of urls) {
+                const iframe = document.createElement('iframe'); iframe.src = src;
+                if (src.includes('youtube.com')) { iframe.width = '480'; iframe.height = '270'; }
+                document.body.append(iframe);
+            }
+        }, urls);
+        await expect.poll(() => page.frames().filter(frame => urls.includes(frame.url())).length).toBe(3);
+        const youtube = page.frame({ url: urls[0] });
+        const spotify = page.frame({ url: urls[1] });
+        const apple = page.frame({ url: urls[2] });
+        await expect.poll(() => youtube.evaluate(() => window.skipped)).toBe(true);
+        await expect.poll(() => youtube.evaluate(() => document.querySelector('video').volume)).toBe(0.5);
+        await expect(youtube.locator('#lowcord-youtube-controls')).toHaveCount(1);
+        await youtube.getByRole('button', { name: 'Mute', exact: true }).hover();
+        expect(await youtube.evaluate(() => document.elementFromPoint(336, 160).className)).toBe('ytdVolumeControlsNativeSlider');
+        const sliderBounds = await youtube.getByRole('slider', { name: 'Volume' }).boundingBox();
+        await page.mouse.move(sliderBounds.x + sliderBounds.width / 2, sliderBounds.y + sliderBounds.height * 0.65, { steps: 16 });
+        await expect(youtube.getByRole('slider', { name: 'Volume' })).toBeVisible();
+        await page.mouse.down();
+        await page.mouse.move(sliderBounds.x + sliderBounds.width / 2, sliderBounds.y + sliderBounds.height * 0.8, { steps: 8 });
+        await page.mouse.up();
+        expect(await youtube.evaluate(() => document.querySelector('video').volume)).toBeLessThan(0.3);
+        expect(await youtube.evaluate(() => JSON.parse('{"adSlots":[1],"id":"video"}'))).toEqual({ adSlots: [], id: 'video' });
+        for (const frame of [spotify, apple]) {
+            await expect.poll(() => frame.evaluate(() => document.querySelector('audio').volume)).toBe(0.5);
+            expect(await frame.evaluate(() => typeof window.__LOWCORD_NATIVE__)).toBe('undefined');
+        }
+        await page.evaluate(() => Lowcord.extensions.setOption('musicVolume', 23));
+        await expect.poll(() => youtube.evaluate(() => document.querySelector('video').volume)).toBe(0.23);
+        for (const frame of [spotify, apple]) await expect.poll(() => frame.evaluate(() => document.querySelector('audio').volume)).toBe(0.23);
+        await page.evaluate(() => { Lowcord.extensions.set('musicEmbeds', false); Lowcord.extensions.set('youtubeAdblock', false); });
+        await expect(youtube.locator('#lowcord-youtube-controls')).toHaveCount(1);
+        for (const frame of [spotify, apple]) await expect.poll(() => frame.evaluate(() => document.querySelector('audio').volume)).toBe(1);
+        expect(await youtube.evaluate(() => document.querySelector('video').volume)).toBe(0.23);
+        await expect.poll(() => youtube.evaluate(() => JSON.parse('{"adSlots":[1]}').adSlots)).toEqual([1]);
+        await page.evaluate(() => Lowcord.extensions.set('youtubeAdblock', true));
+        await expect.poll(() => youtube.evaluate(() => JSON.parse('{"adSlots":[1]}').adSlots)).toEqual([]);
+        const untrusted = page.frame({ url: 'http://127.0.0.1:4319/electron-child' });
+        expect(await untrusted.evaluate(() => typeof window.__lowcordMusicVolume)).toBe('undefined');
+        await expect(page.evaluate(() => window.__LOWCORD_NATIVE__.setEmbedPreferences({ youtubeAdblock: true, musicEmbeds: true, musicVolume: -1 })))
+            .rejects.toThrow('Invalid embed preferences');
+        expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.resolveSocialLink('https://evil.example/x', 'auto'))).toBe('https://evil.example/x');
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -152,7 +214,7 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
         await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
         expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
-            .toEqual(['notify', 'setBadge', 'log', 'openExternal']);
+            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'setEmbedPreferences', 'resolveSocialLink', 'socialPost', 'socialVideo']);
         expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
     } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
 });
@@ -222,6 +284,35 @@ test('opened image menu copies full image pixels and saves the original file', a
         expect(await app.evaluate(() => !!global.imageMenu)).toBe(false);
     } finally {
         if (clipboardSaved) await app.evaluate(({ clipboard }) => clipboard.write(global.savedClipboard));
+        await app.close();
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('text fields get a native edit menu that pastes, and passkey autofill stays off', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-edit-menu-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('domcontentloaded');
+        expect(await page.evaluate(() => PublicKeyCredential.isConditionalMediationAvailable()))
+            .toBe(process.platform === 'win32');
+        await app.evaluate(({ Menu, clipboard }) => {
+            Menu.prototype.popup = function () { global.editMenu = this; };
+            global.savedText = clipboard.readText();
+            clipboard.writeText('https://example.com/pasted');
+        });
+        const input = page.locator('#message-input');
+        await input.click({ button: 'right' });
+        await expect.poll(() => app.evaluate(() => global.editMenu?.items.filter(item => item.label).map(item => item.label)))
+            .toEqual(['Cut', 'Copy', 'Paste', 'Paste and Match Style', 'Select All']);
+        await app.evaluate(() => global.editMenu.items.find(item => item.label === 'Paste').click());
+        await expect(input).toHaveValue('https://example.com/pasted');
+        await app.evaluate(() => { global.editMenu = undefined; });
+        await page.locator('p').first().click({ button: 'right' });
+        expect(await app.evaluate(() => !!global.editMenu)).toBe(false);
+    } finally {
+        await app.evaluate(({ clipboard }) => clipboard.writeText(global.savedText ?? '')).catch(() => {});
         await app.close();
         await rm(dir, { recursive: true, force: true });
     }

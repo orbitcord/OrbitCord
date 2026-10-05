@@ -17,6 +17,8 @@ const routes = {
     "/uploads": ["text/html", await readFile("tests/fixtures/uploads.html")],
     "/uploads.js": ["text/javascript", uploadBundle.outputFiles[0].contents],
     "/extensions": ["text/html", await readFile("tests/fixtures/extensions.html")],
+    "/social-links.js": ["text/javascript", await readFile("electron/social-links.cjs")],
+    "/music-links.js": ["text/javascript", await readFile("electron/music-links.cjs")],
     "/extensions-fixture.js": ["text/javascript", extensionsBundle.outputFiles[0].contents],
     "/electron": ["text/html", await readFile("tests/fixtures/electron.html")],
     "/electron-child": ["text/html", "<!doctype html><title>Child frame</title><p>No native bridge here</p>"],
@@ -24,9 +26,11 @@ const routes = {
     "/media/sample.m4a": ["audio/mp4", await readFile("tests/fixtures/media/sample.m4a")],
     "/media/sample.webm": ["video/webm", await readFile("tests/fixtures/media/sample.webm")],
     "/media/sample.png": ["image/png", await readFile("tests/fixtures/media/sample.png")],
+    "/media/dash-video.mp4": ["video/mp4", await readFile("tests/fixtures/media/dash-video.mp4")],
+    "/media/dash-audio.mp4": ["video/mp4", await readFile("tests/fixtures/media/dash-audio.mp4")],
     "/favicon.ico": ["image/x-icon", ""]
 };
-for (const file of ["discord.js", "extensions.js", "settings.js", "lowcord-ui.css"]) {
+for (const file of ["discord.js", "extensions.js", "gif.js", "music-embeds.js", "social-embeds.js", "settings.js", "lowcord-ui.css"]) {
     routes[`/injection/${file}`] = [file.endsWith(".css") ? "text/css" : "text/javascript", await readFile(`src-tauri/injection/${file}`)];
 }
 // A stand-in Discord API that records exactly what reached the network.

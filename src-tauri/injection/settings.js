@@ -6,21 +6,65 @@ function setupLowcordSettings() {
     const pages = [
         { id: "appearance", title: "Chat Appearance", icon: "M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 4V6a2 2 0 0 1 2-2Z",
             component: () => window.__lowcordChatAppearance?.SettingsPanel },
+        { id: "icon", title: "Icon", icon: "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm4 6.5a1.5 1.5 0 1 0 0 .01M21 16l-5-5L5 21",
+            component: () => IconPanel },
         { id: "extensions", title: "Extensions", icon: "M10 3a2 2 0 0 1 4 0v1h3a1 1 0 0 1 1 1v3h1a2 2 0 0 1 0 4h-1v3a1 1 0 0 1-1 1h-3v1a2 2 0 0 1-4 0v-1H7a1 1 0 0 1-1-1v-3H5a2 2 0 0 1 0-4h1V5a1 1 0 0 1 1-1h3V3Z",
             component: () => ExtensionsPanel },
     ];
+
+    const appIcons = [["default", "Default"], ["disco", "Disco"], ["metal", "Metal"], ["mint", "Mint"], ["space", "Space"], ["sunny", "Sunny"]];
+    function IconPanel() {
+        const { React } = window.Lowcord;
+        const h = React.createElement;
+        const native = window.__LOWCORD_NATIVE__;
+        const [current, setCurrent] = React.useState("default");
+        const [previews, setPreviews] = React.useState({});
+        const [error, setError] = React.useState("");
+        React.useEffect(() => {
+            let live = true;
+            native?.appIcon?.().then(id => live && setCurrent(id)).catch(() => {});
+            native?.appIcon?.("previews").then(map => live && setPreviews(map)).catch(() => {});
+            return () => { live = false; };
+        }, []);
+        const choose = id => {
+            const before = current;
+            setCurrent(id);
+            native.appIcon(id).then(() => setError(""), failure => { setCurrent(before); setError(failure.message); });
+        };
+        const check = h("svg", { className: "lowcord-icon-check", viewBox: "0 0 16 16", width: 16, height: 16, "aria-hidden": "true" },
+            h("circle", { cx: 8, cy: 8, r: 8, fill: "currentColor" }),
+            h("path", { d: "m4.8 8.3 2.1 2.1 4.3-4.5", fill: "none", stroke: "#fff", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" }));
+        return h("section", { className: "lowcord-chat-appearance lowcord-icon-page" },
+            h("p", { className: "lowcord-icon-lead" }, "Pick an icon for OrbitCord. Your Dock or taskbar updates right away."),
+            h("div", { className: "lowcord-icon-grid", role: "radiogroup", "aria-label": "App icon" }, ...appIcons.map(([id, label]) =>
+                h("button", { key: id, type: "button", role: "radio", "aria-checked": current === id, className: "lowcord-icon-option", onClick: () => choose(id) },
+                    current === id ? check : null,
+                    previews[id] ? h("img", { src: previews[id], alt: "", width: 72, height: 72, draggable: false }) : h("span", { className: "lowcord-icon-placeholder" }),
+                    h("span", { className: "lowcord-icon-name" }, label)))),
+            h("p", { className: "lowcord-icon-note" }, "Finder and Explorer still show the default icon on the app file."),
+            error ? h("p", { role: "alert" }, error) : null);
+    }
 
     function ExtensionsPanel() {
         const { React } = window.Lowcord;
         const h = React.createElement;
         const extensions = window.Lowcord.extensions;
         const [state, setState] = React.useState(() => extensions.state);
+        const [options, setOptions] = React.useState(() => extensions.options);
         const [error, setError] = React.useState("");
         React.useEffect(() => {
-            const update = () => setState(extensions.state);
+            const update = () => { setState(extensions.state); setOptions(extensions.options); };
             window.addEventListener(extensions.changeEvent, update);
             return () => window.removeEventListener(extensions.changeEvent, update);
         }, []);
+        const option = (id, value) => {
+            try { extensions.setOption(id, value); setError(""); } catch (failure) { setError(failure.message); }
+        };
+        const providerControl = (site, label) => h("label", { className: "lowcord-position-control", key: site },
+            h("span", null, label),
+            h("select", { value: options[`${site}Provider`], onChange: event => option(`${site}Provider`, event.target.value) },
+                h("option", { value: "auto" }, "Auto · checked fallback"),
+                ...window.Lowcord.socialLinks.providers[site].map(host => h("option", { key: host, value: host }, host))));
         return h("section", { className: "lowcord-chat-appearance" },
             h("p", { className: "lowcord-chat-intro" }, "Built-in OrbitCord extensions. Changes apply immediately."),
             h("div", { className: "lowcord-extension-list" }, ...extensions.catalog.map(({ id, title, description }) =>
@@ -29,6 +73,19 @@ function setupLowcordSettings() {
                     h("input", { type: "checkbox", role: "switch", checked: state[id], onChange: event => {
                         try { extensions.set(id, event.target.checked); setError(""); } catch (failure) { setError(failure.message); }
                     } })))),
+            h("label", { className: "lowcord-volume-card" },
+                h("span", { className: "lowcord-volume-text" }, h("strong", null, "Embed volume"),
+                    h("span", { className: "lowcord-chat-description" }, "YouTube, Spotify and Apple Music. Defaults to 50%.")),
+                h("span", { className: "lowcord-volume-control" },
+                    h("input", { type: "range", min: 0, max: 100, step: 1, value: options.musicVolume,
+                        style: { "--lowcord-fill": `${options.musicVolume}%` },
+                        "aria-label": "Embed volume", onChange: event => option("musicVolume", Number(event.target.value)) }),
+                    h("output", null, `${options.musicVolume}%`))),
+            state.socialEmbeds ? h("div", { className: "lowcord-embed-options" },
+                h("strong", { className: "lowcord-embed-heading" }, "Social embed providers"),
+                ...Object.entries(window.Lowcord.socialLinks.sites).filter(([, site]) => site.providers.length > 1)
+                    .map(([id, site]) => providerControl(id, `${id === "twitter" ? "X / Twitter" : site.name} provider`)),
+                h("p", { className: "lowcord-chat-description" }, "Auto checks public post links with embed services before sending. Private or deleted posts may not embed. A chosen provider is used directly.")) : null,
             error ? h("p", { role: "alert" }, error) : null);
     }
 

@@ -2,7 +2,7 @@ module.exports = {
     appId: 'dev.lowcord.app', productName: 'OrbitCord', asar: true,
     directories: { output: 'dist' },
     artifactName: '${productName}-${version}-${os}-${arch}.${ext}',
-    files: ['electron/**', '.lowcord/preload.cjs', 'src-tauri/icons/32x32.png', 'src-tauri/icons/128x128.png', 'src-tauri/icons/icon.png', 'src-tauri/icons/trayTemplate.png', 'package.json', 'LICENSE'],
+    files: ['electron/**', '.lowcord/preload.cjs', 'src-tauri/icons/32x32.png', 'src-tauri/icons/128x128.png', 'src-tauri/icons/icon.png', 'src-tauri/icons/trayTemplate.png', 'src-tauri/icons/app/*.png', 'package.json', 'LICENSE'],
     extraResources: [{ from: '.lowcord/native-${os}-${arch}', to: 'native', filter: ['lowcord-native', 'lowcord-native.exe'] }],
     beforePack: async context => {
         const { Arch } = require('electron-builder');

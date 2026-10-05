@@ -635,3 +635,36 @@ test("unrelated shell mutations do not rescan the message timeline", async ({pag
     await page.evaluate(() => {document.querySelector('#chat-messages-100-2 .messageContent_test').classList.add('updated');});
     await expect.poll(()=>page.evaluate(()=>window.scans)).toBeGreaterThan(0);
 });
+
+test("app command responses sit on the invoking user's side", async ({ page }) => {
+    await load(page);
+    await page.evaluate(() => {
+        const used = '<div class="repliedMessage_test"><span class="username_test">You</span> used /embed</div>';
+        fixture.add(80, "bot", `<div class="contents_test">${used}<div class="messageContent_test">Mine</div></div>`, { type: 20, interactionMetadata: { user: { id: "self" } } });
+        fixture.add(81, "bot", `<div class="contents_test">${used}<div class="messageContent_test">Theirs</div></div>`, { type: 20, interactionMetadata: { user: { id: "other" } } });
+        fixture.emit();
+    });
+    await expect(surface(page, 80)).toHaveAttribute("data-lowcord-align", "right");
+    await expect(surface(page, 81)).toHaveAttribute("data-lowcord-align", "left");
+    await expect(bubble(page, 80)).toHaveAttribute("data-lowcord-continuation", "false");
+});
+
+test("an upload in progress sits on the outgoing side", async ({ page }) => {
+    await load(page);
+    // Discord renders the progress card as its own list item, outside any row.
+    await page.evaluate(() => {
+        const item = document.createElement("div");
+        item.dataset.listItemId = "chat-messages___Uploader1";
+        item.innerHTML = '<div class="contents_test"><div class="avatar_test"></div><div class="messageContent_test">'
+            + '<div class="fileWrapper_test" style="width:300px;height:60px">upload</div></div></div>';
+        document.getElementById("timeline").append(item);
+    });
+    const uploader = page.locator('[data-list-item-id="chat-messages___Uploader1"]');
+    await expect(uploader).toHaveAttribute("data-lowcord-uploader", "right");
+    const gap = async () => uploader.evaluate(node => node.getBoundingClientRect().right - node.querySelector(".fileWrapper_test").getBoundingClientRect().right);
+    expect(await gap()).toBeLessThanOrEqual(17);
+    await expect(uploader.locator(".avatar_test")).toBeHidden();
+    await settings(page, { outgoingPosition: "left" });
+    await expect(uploader).toHaveAttribute("data-lowcord-uploader", "left");
+    expect(await gap()).toBeGreaterThan(100);
+});

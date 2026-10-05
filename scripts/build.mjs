@@ -44,10 +44,12 @@ export async function prepare(release = false, { platform = process.platform, ar
         await rename(devStaged, join(devNative, executable));
     }
     const read = file => readFile(join(root, 'src-tauri', 'injection', file), 'utf8');
-    const [boot, shim, discord, extensions, appearance, settings, appearanceCSS, uiCSS] = await Promise.all(
-        ['boot.js', 'shim.js', 'discord.js', 'extensions.js', 'chat-appearance.js', 'settings.js', 'chat-appearance.css', 'lowcord-ui.css'].map(read));
+    const [boot, shim, discord, extensions, gif, musicEmbeds, socialEmbeds, appearance, settings, appearanceCSS, uiCSS] = await Promise.all(
+        ['boot.js', 'shim.js', 'discord.js', 'extensions.js', 'gif.js', 'music-embeds.js', 'social-embeds.js', 'chat-appearance.js', 'settings.js', 'chat-appearance.css', 'lowcord-ui.css'].map(read));
     // Static function body, serialized by Electron into the page's main world
     // synchronously at document start. No eval, script tag or CSP bypass.
+    const socialLinks = await readFile(join(root, 'electron', 'social-links.cjs'), 'utf8');
+    const musicLinks = await readFile(join(root, 'electron', 'music-links.cjs'), 'utf8');
     const contents = `const { contextBridge, ipcRenderer } = require('electron');
 if (process.isMainFrame) {
     require('./electron/update-notice.cjs').setupUpdateNotice(ipcRenderer);
@@ -56,11 +58,16 @@ if (process.isMainFrame) {
         setBadge: count => ipcRenderer.invoke('lowcord:badge', count),
         log: message => ipcRenderer.invoke('lowcord:log', message),
         openExternal: url => ipcRenderer.invoke('lowcord:open-external', url),
+        appIcon: id => ipcRenderer.invoke('lowcord:app-icon', id),
+        setEmbedPreferences: settings => ipcRenderer.invoke('lowcord:embed-preferences', settings),
+        resolveSocialLink: (url, provider) => ipcRenderer.invoke('lowcord:resolve-social-link', url, provider),
+        socialPost: url => ipcRenderer.invoke('lowcord:social-post', url),
+        socialVideo: (url, limit) => ipcRenderer.invoke('lowcord:social-video', url, limit),
     });
     contextBridge.executeInMainWorld({ func: function initializeLowcord(chatAppearanceCSS, lowcordUiCSS) {
         if (window.self !== window.top || window.__LOWCORD_INIT__) return;
         window.__LOWCORD_INIT__ = true;
-        ${boot}\n${shim}\n${discord}\n${extensions}\n${appearance}\n
+        ${boot}\n${shim}\n${discord}\n${socialLinks}\n${musicLinks}\n${extensions}\n${gif}\n${musicEmbeds}\n${socialEmbeds}\n${appearance}\n
         setupLowcordChatAppearance();
         ${settings}\nsetupLowcordSettings();
         window.__LOWCORD_REPORT__();

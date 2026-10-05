@@ -1,16 +1,23 @@
-// Lowcord's built-in extensions. Four of them work on Discord's own HTTP
-// requests, so no Discord code is patched; voice messages use Discord's
+// Lowcord's built-in extensions use Discord's own HTTP requests and official
+// embed frames, so no Discord code is patched; voice messages use Discord's
 // uploader and REST client from its module cache. Quick reply uses the native
 // pending-reply action without modifying Discord's modules or message sending.
 (() => {
     const storageKey = "lowcord.extensions";
     const catalog = [
-        { id: "anonymiseFileNames", title: "Anonymise file names", description: "Upload files with a random 7-letter name. The extension and spoilers are kept." },
-        { id: "voiceMessages", title: "Voice messages", description: "Record and send voice messages from the waveform button in the message bar." },
-        { id: "quickReply", title: "Quick reply", description: "In an empty message box, Shift + ↑ / ↓ selects a message to reply to. Escape cancels. Replaces Discord’s Shift + ↑ edit shortcut while enabled." },
-        { id: "cleanUrls", title: "Clean links", description: "Remove tracking parameters such as utm_, fbclid and si from links you send or edit." },
-        { id: "silentTyping", title: "Silent typing", description: "Don’t tell others when you are typing." },
-        { id: "noTracking", title: "No tracking", description: "Block Discord’s analytics, metrics and crash reports, and its attempts to open the desktop app." },
+        { id: "anonymiseFileNames", title: "Anonymise file names", description: "Uploads get a random 7-letter name. Extensions and spoilers stay." },
+        { id: "voiceMessages", title: "Voice messages", description: "Record voice messages from the waveform button." },
+        { id: "quickReply", title: "Quick reply", description: "Shift + ↑/↓ in an empty box picks a message to reply to. Esc cancels. Replaces Discord’s edit shortcut." },
+        { id: "cleanUrls", title: "Clean links", description: "Strips tracking parameters like utm_ and fbclid from links you send." },
+        { id: "silentTyping", title: "Silent typing", description: "Hides your typing indicator." },
+        { id: "noTracking", title: "No tracking", description: "Blocks Discord analytics, crash reports and desktop app prompts." },
+        { id: "youtubeAdblock", title: "YouTube ad block", description: "Blocks ads in YouTube embeds and Watch Together." },
+        { id: "musicEmbeds", title: "Fix music embeds", description: "Playable Spotify and Apple Music previews, even when Discord shows a plain link." },
+        { id: "socialEmbeds", title: "Auto social embeds", description: "Turns pasted X, Instagram, Bluesky, Reddit, TikTok and other post links into embeds. Picks a working provider." },
+        { id: "socialCards", title: "Social post cards", description: "Shows social posts as one card with every image and video." },
+        { id: "redditVideoUpload", title: "Reddit videos as files", description: "Sends a pasted Reddit video, with sound, as a file instead of the link." },
+        { id: "instagramVideoUpload", title: "Instagram Reels as files", description: "Sends a pasted Instagram Reel or video as a file instead of the link." },
+        { id: "twitterVideoUpload", title: "X videos as files", description: "Sends a pasted X video as a file instead of the link." },
     ];
     const storage = window.Lowcord.storage;
     const changeEvent = "lowcord-extensions-change";
@@ -20,6 +27,38 @@
         return Object.fromEntries(catalog.map(({ id }) => [id, typeof saved[id] === "boolean" ? saved[id] : true]));
     }
     let state = read();
+    const optionsKey = "lowcord.embed-options";
+    const links = window.Lowcord.socialLinks;
+    const musicLinks = window.Lowcord.musicLinks;
+    function readOptions() {
+        let saved = {};
+        try { saved = JSON.parse(storage.getItem(optionsKey)) ?? {}; } catch {}
+        return {
+            musicVolume: Number.isFinite(saved.musicVolume) ? Math.max(0, Math.min(100, saved.musicVolume)) : 50,
+            ...Object.fromEntries(Object.entries(links.providers).map(([site, hosts]) =>
+                [`${site}Provider`, hosts.includes(saved[`${site}Provider`]) ? saved[`${site}Provider`] : "auto"])),
+        };
+    }
+    let options = readOptions();
+    function setOption(id, value) {
+        if (id === "musicVolume") {
+            if (!Number.isFinite(value) || value < 0 || value > 100) throw new Error("Invalid volume");
+        } else {
+            const site = /^(\w+)Provider$/.exec(id)?.[1];
+            if (!site || !Object.hasOwn(links.providers, site) || (value !== "auto" && !links.providers[site].includes(value))) throw new Error("Invalid provider");
+        }
+        const next = { ...options, [id]: value };
+        try { storage.setItem(optionsKey, JSON.stringify(next)); }
+        catch { throw new Error("Couldn’t save this setting. Please try again."); }
+        options = next;
+        window.dispatchEvent(new Event(changeEvent));
+    }
+    function syncEmbedPreferences() {
+        window.__LOWCORD_NATIVE__?.setEmbedPreferences?.({ youtubeAdblock: state.youtubeAdblock,
+            musicEmbeds: state.musicEmbeds, musicVolume: options.musicVolume })?.catch(error => console.warn("[lowcord] Embed settings:", error.message));
+    }
+    window.addEventListener(changeEvent, syncEmbedPreferences);
+    syncEmbedPreferences();
     const enabled = id => state[id] === true;
     function set(id, value) {
         const next = { ...state, [id]: Boolean(value) };
@@ -30,7 +69,299 @@
     }
     window.addEventListener("storage", event => {
         if (event.key === storageKey || event.key === null) { state = read(); window.dispatchEvent(new Event(changeEvent)); }
+        if (event.key === optionsKey || event.key === null) { options = readOptions(); window.dispatchEvent(new Event(changeEvent)); }
     });
+
+    // ----- Social links -----------------------------------------------------
+    const generatedSocial = new Map();
+    function socialContent(content) {
+        if (!enabled("socialEmbeds")) return content;
+        return links.rewrite(content, (target, original) => {
+            if (!target.original) return null; // Keep a deliberately chosen fix URL.
+            const preference = options[`${target.site}Provider`];
+            const host = preference === "auto" ? links.providers[target.site][0] : preference;
+            const result = `https://${host}${target.path}`;
+            if (generatedSocial.size >= 128) generatedSocial.delete(generatedSocial.keys().next().value);
+            generatedSocial.set(result, original);
+            return host;
+        });
+    }
+    function musicContent(content) {
+        return enabled("musicEmbeds") ? musicLinks.normalize(content, links.mapUrls) : content;
+    }
+    async function checkedSocialContent(content) {
+        const resolve = window.__LOWCORD_NATIVE__?.resolveSocialLink;
+        if (!enabled("socialEmbeds") || !resolve) return content;
+        const targets = new Map();
+        links.rewrite(content, (target, value) => {
+            if ((target.original || generatedSocial.has(value)) && targets.size < 6)
+                targets.set(value, { target, original: generatedSocial.get(value) ?? value });
+            return null;
+        });
+        if (!targets.size) return content;
+        // Whole URLs: short links (redd.it, vm.tiktok.com) use another path.
+        const replacements = new Map();
+        await Promise.all([...targets].map(async ([value, { target, original }]) => {
+            let timer;
+            try {
+                const replacement = await Promise.race([resolve(original, options[`${target.site}Provider`]),
+                    new Promise(resolve => { timer = setTimeout(() => resolve(original), links.lookupTimeout(target.site) + 300); })]);
+                const valid = links.parse(replacement);
+                replacements.set(value, valid?.site === target.site && valid.path === target.path ? replacement : original);
+            } catch { replacements.set(value, original); }
+            finally { clearTimeout(timer); }
+        }));
+        return enabled("socialEmbeds") ? links.mapUrls(content, value => replacements.get(value)) : content;
+    }
+    // Paste events Lowcord dispatched itself; its own paste hooks skip them.
+    const replayed = new WeakSet();
+    // Discord's editor keeps its own copy of the text and ignores DOM edits
+    // made outside an input event it handles; a text DOM edit alone leaves the
+    // box showing text it can't send. A replayed paste goes through Discord's
+    // own paste handling, like the user's.
+    function insertText(editor, text) {
+        if (editor instanceof HTMLTextAreaElement) {
+            editor.setRangeText(text, editor.selectionStart, editor.selectionEnd, "end");
+            editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: text }));
+            return true;
+        }
+        const data = new DataTransfer();
+        data.setData("text/plain", text);
+        const paste = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data });
+        replayed.add(paste);
+        editor.dispatchEvent(paste);
+        return paste.defaultPrevented || document.execCommand("insertText", false, text);
+    }
+    window.addEventListener("paste", event => {
+        if (event.defaultPrevented || replayed.has(event) || event.clipboardData?.files.length) return;
+        const editor = event.target instanceof Element ? event.target.closest('[contenteditable="true"][role="textbox"], textarea') : null;
+        if (!editor?.closest('[class*="channelTextArea_"]') || editor.closest('[role="dialog"]')) return;
+        const text = event.clipboardData?.getData("text/plain");
+        if (!text || /`/.test(editor.value ?? editor.textContent)) return;
+        prepareVideo(editor, text.trim());
+        if (!enabled("socialEmbeds") && !enabled("musicEmbeds")) return;
+        const replacement = musicContent(socialContent(text));
+        if (replacement === text) return;
+        // If insertion is unavailable, let the original paste through; the
+        // send hook covers it.
+        if (insertText(editor, replacement)) event.preventDefault();
+        // Warm the bounded, shared cache while the user composes their message.
+        void checkedSocialContent(replacement);
+    }, true);
+
+    // ----- Reddit, Instagram and X videos as files ----------------------------
+    // Discord's per-user limit, raised by the current server's boost tier.
+    function uploadLimit() {
+        const mb = 1024 * 1024;
+        const premium = window.Lowcord.store("UserStore")?.getCurrentUser?.()?.premiumType;
+        const guildId = window.Lowcord.store("SelectedGuildStore")?.getGuildId?.();
+        const tier = guildId ? window.Lowcord.store("GuildStore")?.getGuild?.(guildId)?.premiumTier : 0;
+        return Math.max(premium === 2 ? 500 * mb : premium === 1 || premium === 3 ? 50 * mb : 10 * mb,
+            tier === 3 ? 100 * mb : tier === 2 ? 50 * mb : 0);
+    }
+    // The pasted link shows at once. A single-video post downloads in the
+    // background and joins the composer's attachments through Discord's own
+    // uploader, so it sends like any file; the send hook drops the link.
+    const videoToggles = { reddit: "redditVideoUpload", instagram: "instagramVideoUpload", twitter: "twitterVideoUpload" };
+    const videos = new Map();
+    function forgetVideo(key) {
+        clearTimeout(videos.get(key)?.timer);
+        videos.delete(key);
+    }
+    // Discord's composer takes pasted files as attachments of the open channel.
+    function attachFile(editor, file, channelId) {
+        if (window.Lowcord.store("SelectedChannelStore")?.getChannelId?.() !== channelId) return false;
+        const target = editor.isConnected ? editor : document.querySelector('[class*="channelTextArea_"] [contenteditable="true"][role="textbox"]');
+        if (!target || target.closest('[role="dialog"]')) return false;
+        const data = new DataTransfer();
+        data.items.add(file);
+        target.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+        return true;
+    }
+    function prepareVideo(editor, link) {
+        const target = links.parse(link);
+        const native = window.__LOWCORD_NATIVE__;
+        const channelId = window.Lowcord.store("SelectedChannelStore")?.getChannelId?.();
+        if (!target || !channelId || !enabled(videoToggles[target.site]) || !native?.socialVideo || videos.has(target.key)) return;
+        const service = links.sites[target.site].name;
+        const entry = { key: target.key, service, kind: "video", name: null, timer: setTimeout(() => forgetVideo(target.key), 15 * 60_000) };
+        entry.work = (async () => {
+            // Only a single-video post is downloaded; anything else stays a link.
+            // A GIF arrives as an MP4 and is sent as a GIF file.
+            let post = null;
+            try { post = await native.socialPost?.(link); } catch {}
+            if (post && !(post.media?.length === 1 && post.media[0].type === "video")) return;
+            if (post) {
+                entry.video = true;
+                if (post.media[0].gif) entry.kind = "GIF";
+                if (entry.announce) entry.announce();
+                else toast(`Getting the ${service} ${entry.kind}. It will be sent as a ${entry.kind} instead of the link.`);
+            }
+            let result;
+            try { result = await native.socialVideo(link, uploadLimit()); }
+            catch { result = { error: "failed" }; }
+            if (videos.get(target.key) !== entry || result?.error === "not-video") return;
+            if (result?.gif) entry.kind = "GIF";
+            if (result?.error === "too-large") { toast(`This ${service} ${entry.kind} is too large to upload, so the link will be sent.`, true); return; }
+            if (!(result?.data instanceof Uint8Array)) { toast(`Couldn’t download that ${service} ${entry.kind}, so the link will be sent.`, true); return; }
+            let file = new File([result.data], result.name, { type: "video/mp4" });
+            if (result.gif) {
+                let gif = null;
+                try { gif = await window.Lowcord.gif?.fromVideo(result.data, uploadLimit()); } catch {}
+                if (videos.get(target.key) !== entry) return;
+                if (!gif) { toast(`Couldn’t make that ${service} GIF small enough to upload, so the link will be sent.`, true); return; }
+                file = new File([gif], result.name.replace(/\.mp4$/, ".gif"), { type: "image/gif" });
+            }
+            file = anonymousFile(file);
+            if (attachFile(editor, file, channelId)) { entry.name = file.name; toast(`${service} ${entry.kind} attached. It will be sent instead of the link.`); }
+        })().finally(() => { entry.done = true; if (!entry.name) forgetVideo(target.key); });
+        // Bound memory: only a few downloads are tracked at once.
+        if (videos.size >= 3) forgetVideo(videos.keys().next().value);
+        videos.set(target.key, entry);
+    }
+    const composerVideos = text => links.collect(text, 10).map(target => videos.get(target.key)).filter(Boolean);
+    // A send before the download finishes waits for it, then sends with the file.
+    window.addEventListener("keydown", event => {
+        if (!videos.size || event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
+        const editor = event.target instanceof Element ? event.target.closest('[contenteditable="true"][role="textbox"], textarea') : null;
+        if (!editor?.closest('[class*="channelTextArea_"]') || editor.getAttribute("aria-expanded") === "true") return;
+        const queued = composerVideos(editor.value ?? editor.textContent);
+        const waiting = queued.filter(entry => !entry.done);
+        if (!waiting.length) {
+            // The link leaves the composer before the send, so Discord's
+            // upload row shows only the video, not the link beside it.
+            const ready = queued.filter(entry => entry.name && !entry.stripped);
+            if (!ready.length) return;
+            ready.forEach(entry => { entry.stripped = true; });
+            if (!removeLinks(editor, new Set(ready.map(entry => entry.key)))) return;
+            event.preventDefault(); event.stopImmediatePropagation();
+            setTimeout(() => {
+                if (!editor.isConnected) return;
+                editor.focus();
+                editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+            }, 50);
+            return;
+        }
+        event.preventDefault(); event.stopImmediatePropagation();
+        if (waiting.some(entry => entry.held)) return;
+        // Image posts are still being checked here; only a confirmed video
+        // download is announced.
+        let announced = false;
+        const announce = () => {
+            const video = waiting.find(entry => entry.video && !entry.done);
+            if (announced || !video) return;
+            announced = true;
+            toast(`Sending once the ${video.service} ${video.kind} is ready…`);
+        };
+        waiting.forEach(entry => { entry.held = true; entry.announce = announce; });
+        announce();
+        void Promise.all(waiting.map(entry => entry.work)).then(() => {
+            waiting.forEach(entry => { entry.held = false; entry.announce = null; });
+            if (!editor.isConnected) return;
+            // Let Discord add the attachment before the send reads it.
+            setTimeout(() => {
+                editor.focus();
+                editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+            }, 50);
+        });
+    }, true);
+    // Discord's composer is a Slate editor: DOM edits (even execCommand) are
+    // repainted from its model and never reach the message it sends.
+    function slateEditor(element) {
+        const key = Object.keys(element).find(name => name.startsWith("__reactFiber$"));
+        let fiber = key && element[key];
+        for (let depth = 0; fiber && depth < 30; depth++, fiber = fiber.return) {
+            const editor = fiber.memoizedProps?.editor;
+            if (typeof editor?.apply === "function" && Array.isArray(editor.children)) return editor;
+        }
+        return null;
+    }
+    // Finds each link in `text` whose post is one of `keys`.
+    function linkRanges(text, keys) {
+        const found = [];
+        let from = 0;
+        links.mapUrls(text, value => {
+            const start = text.indexOf(value, from);
+            if (start < 0) return null;
+            from = start + value.length;
+            if (keys.has(links.parse(value)?.key)) found.push({ start, text: value });
+            return null;
+        });
+        return found;
+    }
+    // Deletes the given links from the composer, through Discord's own editor.
+    function removeLinks(editor, keys) {
+        if (editor instanceof HTMLTextAreaElement) {
+            const text = links.mapUrls(editor.value, value => keys.has(links.parse(value)?.key) ? "" : null).trim();
+            if (text === editor.value) return false;
+            editor.value = text;
+            editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContent" }));
+            return true;
+        }
+        const slate = slateEditor(editor);
+        if (slate) {
+            const removals = [];
+            const visit = (nodes, path) => nodes.forEach((node, index) => {
+                if (typeof node.text === "string") {
+                    for (const range of linkRanges(node.text, keys)) removals.push({ path: [...path, index], ...range });
+                } else if (Array.isArray(node.children)) visit(node.children, [...path, index]);
+            });
+            visit(slate.children, []);
+            // Last first, so earlier offsets stay valid.
+            for (const { path, start, text } of removals.reverse()) slate.apply({ type: "remove_text", path, offset: start, text });
+            return removals.length > 0;
+        }
+        // A plain contenteditable takes the DOM edit directly.
+        const found = [];
+        const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode())
+            for (const range of linkRanges(node.data, keys)) found.push({ node, ...range });
+        for (const { node, start, text } of found.reverse()) node.deleteData(start, text.length);
+        return found.length > 0;
+    }
+    // Drops the link of each video sent as a file with this message.
+    function withoutVideoLinks(data) {
+        const names = new Set((data.attachments ?? []).map(attachment => attachment.filename));
+        if (!videos.size || typeof data.content !== "string" || !names.size) return false;
+        const sent = new Set();
+        for (const [key, entry] of videos) if (entry.name && names.has(entry.name)) sent.add(key);
+        if (!sent.size) return false;
+        data.content = links.mapUrls(data.content, value => sent.has(links.parse(value)?.key) ? "" : null).trim();
+        sent.forEach(forgetVideo);
+        return true;
+    }
+
+    function messageRequest(method, url) {
+        return (method === "POST" || method === "PATCH") && /^\/channels\/\d+\/messages(?:\/\d+)?$/.test(route(url)?.path ?? "");
+    }
+    function payloadOf(body) {
+        try {
+            const value = body instanceof FormData ? body.get("payload_json") : body;
+            return typeof value === "string" ? JSON.parse(value) : null;
+        } catch { return null; }
+    }
+    function withPayload(body, data) {
+        if (!(body instanceof FormData)) return JSON.stringify(data);
+        const form = new FormData();
+        for (const [key, value] of body) form.append(key, key === "payload_json" ? JSON.stringify(data) : value);
+        return form;
+    }
+    function hasSocialLinks(body) {
+        const content = payloadOf(body)?.content;
+        if (typeof content !== "string") return false;
+        let found = false;
+        links.rewrite(content, (target, value) => { if (target.original || generatedSocial.has(value)) found = true; return null; });
+        return found;
+    }
+    async function checkMessageBody(body) {
+        const data = payloadOf(body);
+        if (typeof data?.content !== "string") return body;
+        const next = await checkedSocialContent(data.content);
+        if (data.content === next) return body;
+        data.content = next;
+        return withPayload(body, data);
+    }
+
 
     // ----- Keyboard reply ----------------------------------------------------
     let replySelection, replyRow, createReply;
@@ -154,10 +485,51 @@
         const ext = /\.tar\.\w+$/i.exec(base)?.[0] ?? (base.lastIndexOf(".") > 0 ? base.slice(base.lastIndexOf(".")) : "");
         return spoiler + random(7) + ext;
     }
+    // Files are renamed as they reach the composer, so Discord's preview and
+    // upload progress already show the random name. Discord adds SPOILER_ itself.
+    const generated = new Set();
+    const isGenerated = name => generated.has(name.replace(/^SPOILER_/, ""));
+    function anonymousFile(file) {
+        if (!enabled("anonymiseFileNames") || isGenerated(file.name)) return file;
+        const name = anonymous(file.name);
+        if (generated.size >= 512) generated.delete(generated.values().next().value);
+        generated.add(name);
+        return new File([file], name, { type: file.type, lastModified: file.lastModified });
+    }
+    function anonymousFiles(files) {
+        const list = [...(files ?? [])];
+        if (!enabled("anonymiseFileNames") || !list.length || list.every(file => isGenerated(file.name))) return null;
+        const data = new DataTransfer();
+        for (const file of list) data.items.add(anonymousFile(file));
+        return data;
+    }
+    // Paste and drop data can't be edited, so the event is replayed with renamed files.
+    function replayWithFiles(event, make) {
+        if (replayed.has(event) || event.defaultPrevented) return;
+        const data = anonymousFiles(event instanceof ClipboardEvent ? event.clipboardData?.files : event.dataTransfer?.files);
+        if (!data) return;
+        event.preventDefault(); event.stopImmediatePropagation();
+        const replay = make(data);
+        replayed.add(replay);
+        event.target.dispatchEvent(replay);
+    }
+    window.addEventListener("change", event => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || input.type !== "file") return;
+        const data = anonymousFiles(input.files);
+        if (data) input.files = data.files;
+    }, true);
+    window.addEventListener("drop", event => replayWithFiles(event, data => new DragEvent("drop", {
+        bubbles: true, cancelable: true, composed: true, dataTransfer: data, clientX: event.clientX, clientY: event.clientY,
+        screenX: event.screenX, screenY: event.screenY, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey })), true);
+    window.addEventListener("paste", event => replayWithFiles(event, data => new ClipboardEvent("paste", {
+        bubbles: true, cancelable: true, composed: true, clipboardData: data })), true);
+
     // Discord registers each upload, then sends the message naming the same
     // files. Each original name maps to the random names given to it, in order.
     const renamed = new Map();
     function renameUpload(name) {
+        if (isGenerated(name)) return name;
         const next = anonymous(name);
         renamed.set(name, [...(renamed.get(name) ?? []), next]);
         return next;
@@ -176,7 +548,6 @@
         [/(^|\.)(youtube\.com|youtu\.be)$/, /^(si|pp|feature)$/],
         [/(^|\.)spotify\.com$/, /^(si|context|nd)$/],
         [/(^|\.)(x\.com|twitter\.com)$/, /^(s|t)$/],
-        [/(^|\.)instagram\.com$/, /^(img_index)$/],
         [/(^|\.)tiktok\.com$/, /^(_r|_t|is_from_webapp|sender_device|is_copy_url|share_app_id|share_link_id|share_item_id|tt_from|u_code|user_id|timestamp|social_share_type|source)$/],
         [/(^|\.)reddit\.com$/, /^(share_id|rdt|ref|ref_source|correlation_id)$/],
         [/(^|\.)amazon\.[a-z.]+$/, /^(ref|ref_|psc|pd_rd_\w+|pf_rd_\w+|content-id|crid|sprefix|dib|dib_tag|qid|sr|keywords|th|linkCode|tag|linkId|camp|creative)$/],
@@ -203,7 +574,7 @@
     // Returns a replacement body, or undefined to send the original.
     function rewrite(method, url, body) {
         const path = route(url)?.path;
-        if (!path || (!enabled("anonymiseFileNames") && !enabled("cleanUrls"))) return undefined;
+        if (!path || (!enabled("anonymiseFileNames") && !enabled("cleanUrls") && !enabled("socialEmbeds") && !enabled("musicEmbeds") && !videos.size)) return undefined;
         const upload = method === "POST" && /^\/channels\/\d+\/attachments$/.test(path);
         const message = (method === "POST" || method === "PATCH") && /^\/channels\/\d+\/messages(\/\d+)?$/.test(path);
         if (!upload && !message) return undefined;
@@ -218,8 +589,8 @@
             }
         }
         if (message) {
-            if (enabled("cleanUrls") && typeof data.content === "string") {
-                const content = cleanContent(data.content);
+            if (typeof data.content === "string") {
+                const content = musicContent(socialContent(enabled("cleanUrls") ? cleanContent(data.content) : data.content));
                 if (content !== data.content) { data.content = content; changed = true; }
             }
             if (enabled("anonymiseFileNames")) {
@@ -228,6 +599,7 @@
                     if (name) { attachment.filename = name; changed = true; }
                 }
             }
+            if (method === "POST" && withoutVideoLinks(data)) changed = true;
         }
         return changed ? JSON.stringify(data) : undefined;
     }
@@ -236,13 +608,14 @@
         const next = new FormData();
         let changed = false;
         for (const [key, value] of form.entries()) {
-            if (value instanceof File && enabled("anonymiseFileNames")) {
+            if (value instanceof File && enabled("anonymiseFileNames") && !isGenerated(value.name)) {
                 next.append(key, value, anonymous(value.name));
                 changed = true;
-            } else if (key === "payload_json" && typeof value === "string" && enabled("cleanUrls")) {
+            } else if (key === "payload_json" && typeof value === "string" && (enabled("cleanUrls") || enabled("socialEmbeds") || enabled("musicEmbeds") || videos.size)) {
                 try {
                     const payload = JSON.parse(value);
-                    if (typeof payload.content === "string") payload.content = cleanContent(payload.content);
+                    if (typeof payload.content === "string") payload.content = musicContent(socialContent(enabled("cleanUrls") ? cleanContent(payload.content) : payload.content));
+                    withoutVideoLinks(payload);
                     next.append(key, JSON.stringify(payload));
                     changed = true;
                 } catch { next.append(key, value); }
@@ -253,18 +626,43 @@
 
     // ----- Request hooks -----------------------------------------------------
     const xhr = XMLHttpRequest.prototype;
-    const open = xhr.open, send = xhr.send;
+    const open = xhr.open, send = xhr.send, abort = xhr.abort;
     xhr.open = function (method, url) {
-        this.__lowcord = { method: String(method).toUpperCase(), url: String(url) };
+        this.__lowcord = { method: String(method).toUpperCase(), url: String(url), async: arguments[2] !== false };
         return open.apply(this, arguments);
+    };
+    xhr.abort = function () {
+        const meta = this.__lowcord;
+        const deferred = meta?.pending && !meta.sent && this.readyState === 1;
+        if (meta) meta.cancelled = true;
+        const result = abort.apply(this, arguments);
+        // Native send has not begun during a provider lookup; still complete
+        // the caller's cancellation lifecycle rather than leaving it waiting.
+        if (deferred) {
+            this.dispatchEvent(new ProgressEvent("abort"));
+            this.dispatchEvent(new ProgressEvent("loadend"));
+        }
+        return result;
     };
     xhr.send = function (body) {
         const meta = this.__lowcord;
         if (meta) {
+            if (meta.pending) throw new DOMException("Request already sent", "InvalidStateError");
             const verdict = decide(meta.method, meta.url);
             if (verdict) { answer(this, verdict); return; }
             const replacement = rewrite(meta.method, meta.url, body);
             if (replacement !== undefined) body = replacement;
+            if (meta.async && enabled("socialEmbeds") && window.__LOWCORD_NATIVE__?.resolveSocialLink
+                && messageRequest(meta.method, meta.url) && hasSocialLinks(body)) {
+                if (this.readyState !== 1) return send.call(this, body);
+                meta.pending = true;
+                void checkMessageBody(body).catch(() => body).then(next => {
+                    if (meta.cancelled || this.__lowcord !== meta || this.readyState !== 1) return;
+                    try { meta.sent = true; send.call(this, next); }
+                    catch { this.dispatchEvent(new ProgressEvent("error")); this.dispatchEvent(new ProgressEvent("loadend")); }
+                });
+                return;
+            }
         }
         return send.call(this, body);
     };
@@ -280,15 +678,22 @@
         });
     }
     const nativeFetch = window.fetch;
-    window.fetch = function (input, init) {
+    window.fetch = async function (input, init) {
         const url = input instanceof Request ? input.url : String(input);
         const method = String(init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
         const verdict = decide(method, url);
         if (verdict === "ok") return Promise.resolve(new Response(null, { status: 204 }));
         if (verdict === "fail") return Promise.reject(new TypeError("Failed to fetch"));
-        if (init?.body !== undefined) {
-            const replacement = rewrite(method, url, init.body);
-            if (replacement !== undefined) init = { ...init, body: replacement };
+        let body = init?.body;
+        const requestBody = body === undefined && input instanceof Request && messageRequest(method, url);
+        if (requestBody) {
+            try { body = await input.clone().text(); } catch { return nativeFetch.call(this, input, init); }
+        }
+        if (body !== undefined) {
+            body = rewrite(method, url, body) ?? body;
+            if (messageRequest(method, url)) body = await checkMessageBody(body);
+            if (requestBody) input = new Request(input, { body });
+            else init = { ...init, body };
         }
         return nativeFetch.call(this, input, init);
     };
@@ -327,10 +732,14 @@
     const micPath = "M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Zm7 9a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V20H8a1 1 0 1 0 0 2h8a1 1 0 1 0 0-2h-3v-2.08A7 7 0 0 0 19 11Z";
     const waveformPath = "M3 9a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-3 0v-3A1.5 1.5 0 0 1 3 9Zm4.5-4A1.5 1.5 0 0 1 9 6.5v11a1.5 1.5 0 0 1-3 0v-11A1.5 1.5 0 0 1 7.5 5ZM12 2a1.5 1.5 0 0 1 1.5 1.5v17a1.5 1.5 0 0 1-3 0v-17A1.5 1.5 0 0 1 12 2Zm4.5 4A1.5 1.5 0 0 1 18 7.5v9a1.5 1.5 0 0 1-3 0v-9A1.5 1.5 0 0 1 16.5 6ZM21 9a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-3 0v-3A1.5 1.5 0 0 1 21 9Z";
 
-    function toast(message, failure = false) {
-        const node = ui("div", { className: `lowcord-toast${failure ? " lowcord-toast-failure" : ""}`, role: "status" }, message);
+    function toast(message, failure = false, action = null) {
+        const node = ui("div", { className: `lowcord-toast${failure ? " lowcord-toast-failure" : ""}`, role: "status" }, message,
+            action && ui("button", { type: "button", className: "lowcord-toast-action",
+                onClick: () => { node.remove(); action.onClick(); } }, action.label));
+        document.querySelectorAll(".lowcord-toast").forEach(old => old.remove());
         document.body.append(node);
-        setTimeout(() => node.remove(), 4000);
+        // Leave time to reach an action button.
+        setTimeout(() => node.remove(), action ? 8000 : 4000);
     }
 
     async function measure(blob) {
@@ -601,6 +1010,30 @@
     window.Lowcord.onDomChange(placeVoiceButtons);
     window.addEventListener(changeEvent, placeVoiceButtons);
 
-    window.Lowcord.extensions = { catalog, enabled, set, changeEvent, get state() { return { ...state }; },
-        cleanContent, anonymous, openRecorder };
+    // Allow playback only for official music embeds. Save the original allow
+    // attribute so disabling the plugin restores Discord's own frame policy.
+    const musicAllows = new WeakMap();
+    function fixMusicFrames() {
+        for (const frame of document.querySelectorAll('iframe[src]')) {
+            let url;
+            try { url = new URL(frame.src); } catch { continue; }
+            if (url.protocol !== 'https:' || !(url.hostname === 'embed.music.apple.com'
+                || (url.hostname === 'open.spotify.com' && /^\/(?:intl-[\w-]+\/)?embed\//.test(url.pathname)))) continue;
+            if (enabled("musicEmbeds")) {
+                if (!musicAllows.has(frame)) musicAllows.set(frame, frame.getAttribute('allow'));
+                const allow = frame.getAttribute('allow') ?? '';
+                const extra = ['autoplay', 'encrypted-media'].filter(feature => !allow.split(';').some(item => item.trim().split(/\s+/)[0] === feature));
+                if (extra.length) frame.setAttribute('allow', [allow, ...extra].filter(Boolean).join('; '));
+            } else if (musicAllows.has(frame)) {
+                const original = musicAllows.get(frame);
+                if (original === null) frame.removeAttribute('allow'); else frame.setAttribute('allow', original);
+                musicAllows.delete(frame);
+            }
+        }
+    }
+    window.Lowcord.onDomChange(fixMusicFrames);
+    window.addEventListener(changeEvent, fixMusicFrames);
+    window.Lowcord.extensions = { catalog, enabled, set, setOption, changeEvent,
+        get state() { return { ...state }; }, get options() { return { ...options }; },
+        cleanContent, socialContent, anonymous, openRecorder, toast };
 })();

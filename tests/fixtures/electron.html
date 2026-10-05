@@ -9,6 +9,7 @@
         <video id="webm" controls src="/media/sample.webm"></video>
         <iframe title="Untrusted frame" src="/electron-child"></iframe>
         <img id="inline-image" width="32" height="24" src="/media/sample.png" alt="Inline image">
+        <textarea id="message-input" aria-label="Message"></textarea>
         <button id="open-image" onclick="document.getElementById('image-viewer').hidden=false">Open image</button>
         <div id="image-viewer" role="dialog" aria-label="Image viewer" hidden>
             <img id="viewer-image" src="/media/sample.png" width="160" height="120" alt="Zoomed image">
