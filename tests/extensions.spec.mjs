@@ -284,6 +284,44 @@ test("closing while microphone permission is pending releases the late stream", 
     await expect(page.locator(".lowcord-voice-backdrop")).toHaveCount(0);
 });
 
+for (const mode of ["dmg", "automatic"]) test(`update settings checks, downloads, and installs (${mode})`, async ({ page }) => {
+    await page.goto('/extensions');
+    await page.waitForFunction(() => window.fixtureReady);
+    await page.evaluate(mode => {
+        let state = { status: 'idle', currentVersion: '0.1.5-1', installMode: mode };
+        let listener;
+        window.updateActions = [];
+        const publish = next => { state = { ...state, ...next }; listener?.(state); return state; };
+        window.__LOWCORD_NATIVE__ = {
+            updateStatus: async () => state,
+            onUpdateStatus: callback => { listener = callback; return () => { listener = null; }; },
+            checkForUpdates: async () => {
+                window.updateActions.push('check');
+                return publish({ status: mode === 'dmg' ? 'available' : 'downloading', version: '0.1.6', progress: 50 });
+            },
+            downloadUpdate: async () => {
+                window.updateActions.push('download');
+                publish({ status: 'downloading', progress: 50 });
+                return state;
+            },
+            installUpdate: async () => { window.updateActions.push('install'); return state; },
+        };
+        window.finishUpdateDownload = () => publish({ status: 'downloaded', progress: 100 });
+    }, mode);
+    await page.locator('.lowcord-sidebar-section').getByText('Check for updates', { exact: true }).click();
+    const body = page.locator('.lowcord-settings-body');
+    await body.getByRole('button', { name: 'Check for updates', exact: true }).click();
+    if (mode === 'dmg') {
+        await expect(body.getByRole('status')).toContainText('0.1.6 is available');
+        await body.getByRole('button', { name: 'Download update', exact: true }).click();
+    }
+    await expect(body.getByRole('progressbar')).toHaveAttribute('value', '50');
+    await expect(body.getByRole('button', { name: 'Check for updates', exact: true })).toBeDisabled();
+    await page.evaluate(() => window.finishUpdateDownload());
+    await body.getByRole('button', { name: mode === 'dmg' ? 'Open installer' : 'Restart and install', exact: true }).click();
+    expect(await page.evaluate(() => window.updateActions)).toEqual(mode === 'dmg' ? ['check', 'download', 'install'] : ['check', 'install']);
+});
+
 test("OrbitCord section in Discord's settings opens both pages, and toggles save", async ({ page }) => {
     const section = page.locator(".lowcord-sidebar-section");
     await expect(section).toHaveCount(1);

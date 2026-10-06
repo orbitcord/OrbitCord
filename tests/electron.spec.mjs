@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 
 async function launch(dataDir, { updater = false } = {}) {
-    const app = await electron.launch({ args: [resolve('electron/main.cjs')], env: { ...process.env,
+    const app = await electron.launch({ args: [resolve('.')], env: { ...process.env,
         LOWCORD_TEST: '1', LOWCORD_TEST_UPDATER: updater ? '1' : '0', LOWCORD_TEST_URL: 'http://127.0.0.1:4319/electron', LOWCORD_TEST_DATA: dataDir } });
     app.process().stderr.on('data', data => {
         const message = data.toString();
@@ -152,7 +152,7 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(browser.peerConnection).toBe('function');
         expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true, extensions: 14, fetchHooked: true });
         expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
-            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'appIcon', 'setEmbedPreferences', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia'] });
+            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia'] });
         // Card media loads like <img>/<video> (no CORS) from the privileged scheme;
         // an unhandled scheme would reject instead of answering.
         expect(await page.evaluate(() => fetch('lowcord-media://media/0123456789abcdef01234567', { mode: 'no-cors' }).then(r => r.type))).toBe('opaque');
@@ -441,9 +441,43 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
         await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
         expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
-            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'appIcon', 'setEmbedPreferences', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia']);
+            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia']);
         expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
     } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
+});
+
+test('settings checks updates through native IPC and shows network errors and retry results', async ({}, testInfo) => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-update-settings-'));
+    const currentVersion = JSON.parse(await readFile('package.json', 'utf8')).version;
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('load');
+        await app.evaluate(({ net }, version) => {
+            global.updateChecks = 0;
+            net.fetch = async () => {
+                global.updateChecks++;
+                await new Promise(resolve => setTimeout(resolve, 200));
+                return global.updateChecks === 1 ? new Response('', { status: 503 }) : Response.json({
+                    tag_name: `v${version}`, html_url: `https://github.com/orbitcord/OrbitCord/releases/tag/v${version}`, assets: [],
+                });
+            };
+        }, currentVersion);
+        await page.goto('http://127.0.0.1:4319/extensions');
+        await page.waitForFunction(() => window.fixtureReady);
+        await page.locator('.lowcord-sidebar-section').getByText('Check for updates', { exact: true }).click();
+        const panel = page.getByRole('dialog', { name: 'OrbitCord Settings' });
+        await expect(panel.getByRole('heading', { name: 'Check for updates' })).toBeVisible();
+        await expect(panel).toContainText(`Current version: ${currentVersion}`);
+        await panel.locator('section').getByRole('button', { name: 'Check for updates', exact: true }).click();
+        await expect(panel.getByRole('button', { name: 'Checking…' })).toBeDisabled();
+        await expect(panel.getByRole('alert')).toContainText('HTTP 503');
+        await panel.locator('section').getByRole('button', { name: 'Check for updates', exact: true }).click();
+        await expect(panel.getByRole('status')).toHaveText('You’re up to date.');
+        await expect(panel.getByRole('alert')).toHaveCount(0);
+        expect(await app.evaluate(() => global.updateChecks)).toBe(2);
+        await page.screenshot({ path: testInfo.outputPath('update-settings.png') });
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
 test('opened image menu copies full image pixels and saves the original file', async () => {

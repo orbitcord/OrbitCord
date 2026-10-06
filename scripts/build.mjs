@@ -65,6 +65,15 @@ if (process.isMainFrame) {
         setBadge: count => ipcRenderer.invoke('lowcord:badge', count),
         log: message => ipcRenderer.invoke('lowcord:log', message),
         openExternal: url => ipcRenderer.invoke('lowcord:open-external', url),
+        updateStatus: () => ipcRenderer.invoke('lowcord:updates-status'),
+        checkForUpdates: () => ipcRenderer.invoke('lowcord:updates-check'),
+        downloadUpdate: () => ipcRenderer.invoke('lowcord:updates-download'),
+        installUpdate: () => ipcRenderer.invoke('lowcord:updates-install'),
+        onUpdateStatus: callback => {
+            const listener = (_event, state) => callback(state);
+            ipcRenderer.on('lowcord:updates-status', listener);
+            return () => ipcRenderer.removeListener('lowcord:updates-status', listener);
+        },
         appIcon: id => ipcRenderer.invoke('lowcord:app-icon', id),
         setEmbedPreferences: settings => ipcRenderer.invoke('lowcord:embed-preferences', settings),
         resolveSocialLink: (url, provider) => ipcRenderer.invoke('lowcord:resolve-social-link', url, provider),

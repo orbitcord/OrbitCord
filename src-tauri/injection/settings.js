@@ -10,7 +10,70 @@ function setupLowcordSettings() {
             component: () => IconPanel },
         { id: "extensions", title: "Extensions", icon: "M10 3a2 2 0 0 1 4 0v1h3a1 1 0 0 1 1 1v3h1a2 2 0 0 1 0 4h-1v3a1 1 0 0 1-1 1h-3v1a2 2 0 0 1-4 0v-1H7a1 1 0 0 1-1-1v-3H5a2 2 0 0 1 0-4h1V5a1 1 0 0 1 1-1h3V3Z",
             component: () => ExtensionsPanel },
+        { id: "updates", title: "Check for updates", icon: "M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1",
+            component: () => UpdatesPanel },
     ];
+
+    function UpdatesPanel() {
+        const { React } = window.Lowcord;
+        const h = React.createElement;
+        const native = window.__LOWCORD_NATIVE__;
+        const [state, setState] = React.useState({ status: "idle" });
+        const request = React.useRef(0);
+        const eventRevision = React.useRef(0);
+        React.useEffect(() => {
+            let live = true;
+            const unsubscribe = native?.onUpdateStatus?.(next => {
+                eventRevision.current++; if (live) setState(next);
+            });
+            const before = eventRevision.current;
+            native?.updateStatus?.().then(next => {
+                if (live && before === eventRevision.current) setState(next);
+            }).catch(error => live && setState({ status: "error", error: error.message }));
+            return () => { live = false; request.current++; unsubscribe?.(); };
+        }, []);
+        const action = async name => {
+            const revision = ++request.current;
+            const before = eventRevision.current;
+            setState(previous => ({ ...previous, error: null,
+                status: name === "checkForUpdates" ? "checking" : name === "downloadUpdate" ? "downloading" : "installing" }));
+            try {
+                const next = await native[name]();
+                if (revision === request.current && before === eventRevision.current) setState(next);
+            } catch (error) {
+                if (revision === request.current) setState(previous => ({ ...previous, status: "error", error: error.message }));
+            }
+        };
+        const busy = ["checking", "downloading", "installing"].includes(state.status);
+        const messages = {
+            idle: "Check for the latest stable release of OrbitCord.",
+            checking: "Checking for updates…",
+            "up-to-date": "You’re up to date.",
+            available: `OrbitCord ${state.version} is available.`,
+            downloading: `Downloading OrbitCord ${state.version || "update"}…`,
+            downloaded: `OrbitCord ${state.version} is ready to install.`,
+            installing: state.installMode === "automatic" ? "Restarting to install the update…" : "Opening the installer…",
+            error: "The update could not be completed. Please try again.",
+        };
+        return h("section", { className: "lowcord-chat-appearance lowcord-updates-page" },
+            state.currentVersion ? h("p", { className: "lowcord-chat-intro" }, `Current version: ${state.currentVersion}`) : null,
+            h("p", { role: "status", "aria-live": "polite" }, messages[state.status] || messages.idle),
+            state.status === "downloading" && Number.isFinite(state.progress)
+                ? h("progress", { max: 100, value: state.progress, "aria-label": "Update download progress" }) : null,
+            state.error ? h("p", { role: "alert" }, state.error) : null,
+            h("div", { className: "lowcord-updates-actions" },
+                h("button", { type: "button", className: "lowcord-button", disabled: busy || !native?.checkForUpdates,
+                    onClick: () => action("checkForUpdates") }, state.status === "checking" ? "Checking…" : "Check for updates"),
+                ["available", "error"].includes(state.status) && state.version && state.installMode === "dmg"
+                    ? h("button", { type: "button", className: "lowcord-button lowcord-button-primary",
+                        onClick: () => action("downloadUpdate") }, "Download update") : null,
+                state.status === "downloaded" ? h("button", { type: "button", className: "lowcord-button lowcord-button-primary",
+                    onClick: () => action("installUpdate") }, state.installMode === "automatic" ? "Restart and install" : "Open installer") : null),
+            state.installMode === "dmg" ? h("p", { className: "lowcord-chat-description" },
+                "After downloading, open the installer, quit OrbitCord, and drag the new app to Applications to replace your current version.") : null,
+            state.installMode === "unavailable" ? h("p", { className: "lowcord-chat-description" },
+                "Install updates from the Mac or Windows version of OrbitCord.") : null);
+    }
 
     const appIcons = [["default", "Default"], ["candy", "Candy"], ["champagne", "Champagne"], ["graphite", "Graphite"], ["midnight", "Midnight"], ["sun", "Sun"]];
     function IconPanel() {

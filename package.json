@@ -1,6 +1,6 @@
 {
   "name": "orbitcord",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "license": "GPL-3.0-or-later",
   "description": "Lightweight Discord desktop client",
@@ -17,6 +17,7 @@
     "test": "playwright test",
     "test:electron": "node scripts/build.mjs && playwright test --config playwright.electron.config.mjs",
     "test:native": "cargo test --locked --manifest-path src-tauri/Cargo.toml",
+    "test:updates": "node --test tests/updates.test.cjs tests/release.test.cjs",
     "bench:performance": "node scripts/performance.mjs"
   },
   "devDependencies": {

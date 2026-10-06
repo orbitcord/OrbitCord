@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, session, screen, dialog, desktopCapturer, protocol } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, session, screen, dialog, desktopCapturer, protocol, net, shell } = require('electron');
 const { join } = require('node:path');
 const { readFileSync, writeFileSync } = require('node:fs');
 const { NativeBackend } = require('./native.cjs');
@@ -6,6 +6,7 @@ const { migrateProfile } = require('./profile.cjs');
 const { setupEmbedPlugins } = require('./embed-plugins.cjs');
 const { createSocialResolver } = require('./social-resolver.cjs');
 const { createSocialPosts, scheme: mediaScheme } = require('./social-posts.cjs');
+const { createUpdateController, latestRelease, macAsset, downloadMacInstaller } = require('./updates.cjs');
 
 app.setName('OrbitCord');
 app.setAppUserModelId('dev.lowcord.app'); // Stable identity preserves existing installs and notifications.
@@ -43,34 +44,31 @@ const show = () => {
     mainWindow.focus();
 };
 const openExternal = url => backend.call('open_external', { url }).catch(error => console.error('[lowcord]', error.message));
+let notifiedMacVersion;
 async function checkForMacUpdates() {
-    try {
-        const response = await fetch('https://api.github.com/repos/orbitcord/OrbitCord/releases/latest', {
-            headers: { accept: 'application/vnd.github+json', 'user-agent': 'OrbitCord' },
-            signal: AbortSignal.timeout(5000),
-        });
-        if (!response.ok) return;
-        const release = await response.json();
-        const available = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(release.tag_name || '');
-        const current = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(app.getVersion());
-        if (!available || !current || !release.html_url || new URL(release.html_url).origin !== 'https://github.com') return;
-        let isNewer = false;
-        for (let index = 1; index <= 3; index++) {
-            if (Number(available[index]) === Number(current[index])) continue;
-            isNewer = Number(available[index]) > Number(current[index]);
-            break;
-        }
-        if (!isNewer || !mainWindow || mainWindow.isDestroyed()) return;
-        const result = await dialog.showMessageBox(mainWindow, {
-            type: 'info', title: 'OrbitCord update available',
-            message: `OrbitCord ${release.tag_name} is ready to download.`,
-            detail: 'Open the release page to download and install the update.',
-            buttons: ['Open release page', 'Later'], defaultId: 0, cancelId: 1,
-        });
-        if (result.response === 0) void openExternal(release.html_url);
-    } catch (error) {
-        console.error('[lowcord] Update check failed:', error.message);
+    const state = await updates.check();
+    if (state.status !== 'available' || state.version === notifiedMacVersion || !mainWindow || mainWindow.isDestroyed()) return;
+    notifiedMacVersion = state.version;
+    const result = await dialog.showMessageBox(mainWindow, {
+        type: 'info', title: 'OrbitCord update available',
+        message: `OrbitCord ${state.version} is ready to download.`,
+        detail: 'Download the Mac installer, then open it to replace OrbitCord in Applications.',
+        buttons: ['Download update', 'Later'], defaultId: 0, cancelId: 1,
+    });
+    if (result.response !== 0) return;
+    const downloaded = await updates.download();
+    if (downloaded.status === 'error') {
+        dialog.showErrorBox('OrbitCord update failed', downloaded.error);
+        return;
     }
+    if (downloaded.status !== 'downloaded' || mainWindow.isDestroyed()) return;
+    const install = await dialog.showMessageBox(mainWindow, {
+        type: 'info', title: 'OrbitCord update ready',
+        message: `OrbitCord ${downloaded.version} has downloaded.`,
+        detail: 'Open the installer, quit OrbitCord, and drag the new app to Applications to replace the old version.',
+        buttons: ['Open installer', 'Later'], defaultId: 0, cancelId: 1,
+    });
+    if (install.response === 0) await updates.install();
 }
 function initializeUpdater() {
     if (autoUpdater) return;
@@ -84,11 +82,9 @@ function initializeUpdater() {
         publishUpdateNotice();
     });
 }
-function startWindowsUpdater() {
-    initializeUpdater();
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
-    const check = () => autoUpdater.checkForUpdates().catch(error =>
+function startUpdater() {
+    if (process.platform === 'win32') updates.initialize();
+    const check = () => void (process.platform === 'darwin' ? checkForMacUpdates() : updates.check()).catch(error =>
         console.error('[lowcord] Update check failed:', error.message));
     setTimeout(check, 10_000).unref();
     setInterval(check, 24 * 60 * 60 * 1000).unref();
@@ -107,6 +103,19 @@ const updateFailed = error => {
     updateError = 'Couldn’t restart. Try again, or quit OrbitCord to install.';
     publishUpdateNotice();
 };
+const updates = createUpdateController({
+    currentVersion: app.getVersion(), platform: process.platform, packaged: app.isPackaged,
+    getUpdater: () => { initializeUpdater(); return autoUpdater; },
+    getRelease: () => latestRelease(net.fetch),
+    downloadInstaller: (release, onProgress) => downloadMacInstaller({
+        fetch: net.fetch, directory: join(userData, 'updates'), asset: macAsset(release, process.arch), onProgress,
+    }),
+    openInstaller: path => shell.openPath(path),
+    publish: state => {
+        if (mainWindow && !mainWindow.isDestroyed() && trusted(mainWindow.webContents.getURL()))
+            mainWindow.webContents.send('lowcord:updates-status', state);
+    },
+});
 const saveState = () => {
     clearTimeout(stateTimer);
     if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve();
@@ -168,7 +177,7 @@ async function start() {
     const embedPlugins = setupEmbedPlugins(mainWindow.webContents);
     const socialResolver = createSocialResolver();
     socialPosts = createSocialPosts();
-    if (testing && process.env.LOWCORD_TEST_UPDATER === '1') initializeUpdater();
+    if (testing && process.env.LOWCORD_TEST_UPDATER === '1') updates.initialize();
     ses.protocol.handle(mediaScheme, request => socialPosts.serve(request));
     await applyAppIcon(readAppIcon());
     if (saved?.maximized && onScreen) mainWindow.maximize();
@@ -307,6 +316,25 @@ async function start() {
         try { return await socialPosts.socialMedia(url, limit); }
         catch (error) { return { error: error.code ?? 'failed' }; }
     });
+    ipcMain.handle('lowcord:updates-status', event => { assertSender(event); return updates.snapshot(); });
+    ipcMain.handle('lowcord:updates-check', event => { assertSender(event); return updates.check(); });
+    ipcMain.handle('lowcord:updates-download', event => { assertSender(event); return updates.download(); });
+    ipcMain.handle('lowcord:updates-install', async event => {
+        assertSender(event);
+        const state = updates.snapshot();
+        if (state.status !== 'downloaded') return state;
+        // The settings bridge is visible to Discord's main world. Require a
+        // native confirmation before a page script could restart or install.
+        const confirmation = await dialog.showMessageBox(mainWindow, {
+            type: 'question', title: 'Install OrbitCord update',
+            message: `Install OrbitCord ${state.version}?`,
+            detail: state.installMode === 'automatic' ? 'OrbitCord will close and restart to install the downloaded update.'
+                : 'Open the downloaded installer, quit OrbitCord, and drag the new app to Applications.',
+            buttons: [state.installMode === 'automatic' ? 'Restart and install' : 'Open installer', 'Cancel'],
+            defaultId: 0, cancelId: 1,
+        });
+        return confirmation.response === 0 ? updates.install() : updates.snapshot();
+    });
     ipcMain.handle('lowcord:update-state', event => { assertSender(event); return updateNoticeState(); });
     ipcMain.handle('lowcord:update-dismiss', event => {
         assertSender(event);
@@ -351,9 +379,10 @@ async function start() {
         ]));
         tray.on('click', show);
     }
+    // Schedule independently of Discord's load event so a slow page cannot
+    // delay the initial update check.
+    if (!testing && app.isPackaged && ['win32', 'darwin'].includes(process.platform)) startUpdater();
     await mainWindow.loadURL(testing ? testURL.href : 'https://discord.com/channels/@me');
-    if (!testing && app.isPackaged && process.platform === 'win32') startWindowsUpdater();
-    else if (!testing && process.platform === 'darwin') void checkForMacUpdates();
 }
 
 if (!testing && !app.requestSingleInstanceLock()) app.quit();

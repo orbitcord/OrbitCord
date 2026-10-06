@@ -140,6 +140,8 @@
 .lowcord-button:hover { filter: brightness(1.1); }
 .lowcord-button:disabled { opacity: .5; cursor: not-allowed; filter: none; }
 .lowcord-button-primary { background: var(--brand-500, #5865f2); }
+.lowcord-updates-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0; }
+.lowcord-updates-page progress { width: min(100%, 360px); accent-color: var(--brand-500, #5865f2); }
 .lowcord-voice-record.lowcord-recording { background: var(--status-danger, #da373c); }
 
 .lowcord-voice-button {
