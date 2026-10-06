@@ -12,7 +12,7 @@ function setupLowcordSettings() {
             component: () => ExtensionsPanel },
     ];
 
-    const appIcons = [["default", "Default"], ["disco", "Disco"], ["metal", "Metal"], ["mint", "Mint"], ["space", "Space"], ["sunny", "Sunny"]];
+    const appIcons = [["default", "Default"], ["candy", "Candy"], ["champagne", "Champagne"], ["graphite", "Graphite"], ["midnight", "Midnight"], ["sun", "Sun"]];
     function IconPanel() {
         const { React } = window.Lowcord;
         const h = React.createElement;

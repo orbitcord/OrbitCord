@@ -13,6 +13,25 @@ async function launch(dataDir, { updater = false } = {}) {
     return app;
 }
 
+async function showForFullscreen(app) {
+    await app.evaluate(({ BrowserWindow }) => {
+        const window = BrowserWindow.getAllWindows()[0];
+        global.fullscreenTransitions = [];
+        for (const event of ['enter-full-screen', 'leave-full-screen']) {
+            window.on(event, () => global.fullscreenTransitions.push(event));
+        }
+        window.show();
+    });
+}
+
+async function expectNativeFullscreen(app, fullscreen) {
+    // isFullScreen() can change before macOS's animation finishes. Exiting
+    // during that transition can leave the renderer waiting indefinitely.
+    await expect.poll(() => app.evaluate(({ BrowserWindow }, fullscreen) =>
+        BrowserWindow.getAllWindows()[0].isFullScreen() === fullscreen
+        && global.fullscreenTransitions.includes(fullscreen ? 'enter-full-screen' : 'leave-full-screen'), fullscreen)).toBe(true);
+}
+
 test('Windows icon resources contain real images at every taskbar size and survive restart', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'orbitcord-icons-'));
     let app = await launch(dir);
@@ -22,7 +41,7 @@ test('Windows icon resources contain real images at every taskbar size and survi
         const resources = await app.evaluate(({ nativeImage }, { dir, root }) => {
             const { windowsIconPath } = process.mainModule.require(`${root}/electron/windows-icon.cjs`);
             const { readFileSync } = process.mainModule.require('node:fs');
-            return ['default', 'disco', 'metal', 'mint', 'space', 'sunny'].map(id => {
+            return ['default', 'candy', 'champagne', 'graphite', 'midnight', 'sun'].map(id => {
                 const source = `${root}/src-tauri/icons/app/${id}.png`;
                 const path = windowsIconPath(source, dir, nativeImage);
                 const ico = readFileSync(path);
@@ -68,8 +87,8 @@ test('Windows icon resources contain real images at every taskbar size and survi
             expect(resource.cached).toBe(resource.path);
             expect(resource.sizes).toEqual([16, 20, 24, 32, 40, 48, 64, 128, 256]);
         }
-        await page.evaluate(() => window.__LOWCORD_NATIVE__.appIcon('mint'));
-        expect(JSON.parse(await readFile(join(dir, 'app-icon.json'), 'utf8'))).toEqual({ icon: 'mint' });
+        await page.evaluate(() => window.__LOWCORD_NATIVE__.appIcon('graphite'));
+        expect(JSON.parse(await readFile(join(dir, 'app-icon.json'), 'utf8'))).toEqual({ icon: 'graphite' });
         if (process.platform === 'win32') {
             for (const resource of resources) {
                 expect(await app.evaluate(async ({ app, nativeImage }, path) =>
@@ -82,7 +101,7 @@ test('Windows icon resources contain real images at every taskbar size and survi
                 const skip = window.setSkipTaskbar.bind(window);
                 window.setSkipTaskbar = value => { global.iconTaskbarRefreshes.push(value); skip(value); };
             });
-            for (const id of ['space', 'disco', 'default', 'sunny', 'metal', 'mint', 'space', 'mint']) {
+            for (const id of ['midnight', 'candy', 'default', 'sun', 'champagne', 'graphite', 'midnight', 'graphite']) {
                 await page.evaluate(id => window.__LOWCORD_NATIVE__.appIcon(id), id);
                 expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.appIcon())).toBe(id);
             }
@@ -111,7 +130,7 @@ test('Windows icon resources contain real images at every taskbar size and survi
         app = await launch(dir);
         const restarted = await app.firstWindow();
         await restarted.waitForLoadState('domcontentloaded');
-        expect(await restarted.evaluate(() => window.__LOWCORD_NATIVE__.appIcon())).toBe('mint');
+        expect(await restarted.evaluate(() => window.__LOWCORD_NATIVE__.appIcon())).toBe('graphite');
         await expect(restarted.evaluate(() => window.__LOWCORD_NATIVE__.appIcon('../invalid'))).rejects.toThrow('Unknown icon');
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
@@ -161,6 +180,79 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         await page.evaluate(() => window.__LOWCORD_NATIVE__.setBadge(2));
         expect(await app.evaluate(({ app }) => app.getBadgeCount())).toBe(2);
         expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences().sandbox)).toBe(true);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('attachment video keeps playing through fullscreen and returns inline', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lowcord-fullscreen-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('load');
+        await showForFullscreen(app);
+        await page.evaluate(() => {
+            const video = document.getElementById('video');
+            video.muted = true; video.loop = true;
+            const button = document.createElement('button'); button.textContent = 'Fullscreen video';
+            button.onclick = () => video.requestFullscreen().catch(error => { window.fullscreenError = error.message; });
+            document.body.prepend(button);
+        });
+        await page.evaluate(() => document.getElementById('video').play());
+        await page.getByRole('button', { name: 'Fullscreen video' }).click();
+        await expect.poll(() => page.evaluate(() => document.fullscreenElement?.id ?? window.fullscreenError)).toBe('video');
+        await expectNativeFullscreen(app, true);
+        await expect.poll(() => page.$eval('#video', video => video.webkitVideoDecodedByteCount)).toBeGreaterThan(0);
+        expect(await page.$eval('#video', video => ({ error: video.error, paused: video.paused }))).toEqual({ error: null, paused: false });
+        const frames = await page.$eval('#video', video => video.getVideoPlaybackQuality().totalVideoFrames);
+        await expect.poll(() => page.$eval('#video', video => video.getVideoPlaybackQuality().totalVideoFrames)).toBeGreaterThan(frames);
+        await page.evaluate(() => document.exitFullscreen());
+        await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+        await expectNativeFullscreen(app, false);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('embedded video can play and enter fullscreen from its own button', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lowcord-embed-fullscreen-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('load');
+        await showForFullscreen(app);
+        const video = (await readFile('tests/fixtures/media/sample.mp4')).toString('base64');
+        const url = 'https://www.youtube.com/embed/fullscreen-fixture';
+        await page.route(url, route => route.fulfill({ contentType: 'text/html', body: `<!doctype html>
+            <video id="player" controls muted loop width="160" height="90" src="data:video/mp4;base64,${video}"></video>
+            <button onclick="document.getElementById('player').requestFullscreen().catch(error => window.fullscreenError = error.name)">Fullscreen embed</button>` }));
+        await page.evaluate(url => {
+            const frame = document.createElement('iframe'); frame.src = url;
+            frame.allow = 'autoplay; fullscreen; camera; microphone'; document.body.prepend(frame);
+        }, url);
+        await expect.poll(() => page.frames().some(frame => frame.url() === url)).toBe(true);
+        const frame = page.frame({ url });
+        expect(await frame.evaluate(async () => (await navigator.permissions.query({ name: 'camera' })).state)).toBe('denied');
+        expect(await frame.evaluate(async () => (await navigator.permissions.query({ name: 'microphone' })).state)).toBe('denied');
+        await frame.locator('#player').evaluate(video => video.play());
+        await expect.poll(() => frame.locator('#player').evaluate(video => video.currentTime)).toBeGreaterThan(.15);
+        await frame.getByRole('button', { name: 'Fullscreen embed' }).click();
+        await expect.poll(() => frame.evaluate(() => document.fullscreenElement?.id ?? window.fullscreenError)).toBe('player');
+        await expectNativeFullscreen(app, true);
+        expect(await frame.locator('#player').evaluate(video => ({ error: video.error, paused: video.paused }))).toEqual({ error: null, paused: false });
+        const frames = await frame.locator('#player').evaluate(video => video.getVideoPlaybackQuality().totalVideoFrames);
+        await expect.poll(() => frame.locator('#player').evaluate(video => video.getVideoPlaybackQuality().totalVideoFrames)).toBeGreaterThan(frames);
+        await frame.evaluate(() => document.exitFullscreen());
+        await expect.poll(() => frame.evaluate(() => document.fullscreenElement === null)).toBe(true);
+        await expectNativeFullscreen(app, false);
+        // An app permission grant must not bypass Discord's iframe delegation.
+        await page.evaluate(url => {
+            const iframe = document.createElement('iframe'); iframe.name = 'no-fullscreen';
+            iframe.src = url; iframe.allow = 'autoplay'; document.body.prepend(iframe);
+        }, url);
+        await expect.poll(() => page.frame({ name: 'no-fullscreen' })?.url()).toBe(url);
+        const blocked = page.frame({ name: 'no-fullscreen' });
+        await blocked.getByRole('button', { name: 'Fullscreen embed' }).click();
+        await expect.poll(() => blocked.evaluate(() => window.fullscreenError)).toBe('TypeError');
+        expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
+        await expectNativeFullscreen(app, false);
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
 

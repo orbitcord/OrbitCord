@@ -12,7 +12,7 @@ test('updates installed and manual shortcuts, including Start menu subfolders, w
     const directory = await mkdtemp(join(tmpdir(), 'orbitcord-pins-'));
     const executable = 'C:\\Apps\\OrbitCord\\OrbitCord.exe';
     const appId = 'dev.lowcord.app';
-    const icon = 'C:\\Profile\\app-icons\\mint.ico';
+    const icon = 'C:\\Profile\\app-icons\\graphite.ico';
     const links = {
         'OrbitCord.lnk': { target: executable.toLowerCase(), appUserModelId: appId, icon: 'old.ico', iconIndex: 0,
             args: '--user-option', cwd: 'C:\\Apps\\OrbitCord', description: 'My pin' },
@@ -67,7 +67,7 @@ test('selected icon reaches Desktop, Start menu and taskbar shortcuts again on r
     const programData = join(root, 'programdata'), publicDirectory = join(root, 'public');
     const userData = join(root, 'userdata');
     const executable = 'C:\\Apps\\OrbitCord\\OrbitCord.exe';
-    const source = new URL('../src-tauri/icons/app/mint.png', import.meta.url);
+    const source = new URL('../src-tauri/icons/app/graphite.png', import.meta.url);
     const digest = createHash('sha256').update(readFileSync(source)).digest('hex').slice(0, 16);
     const icon = join(userData, 'app-icons', `dib-v1-${digest}.ico`);
     const shortcuts = [

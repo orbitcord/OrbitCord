@@ -117,7 +117,7 @@ const scheduleState = () => {
     stateTimer = setTimeout(() => saveState().catch(error => console.error('[lowcord]', error.message)), 300);
 };
 
-const appIcons = ['default', 'disco', 'metal', 'mint', 'space', 'sunny'];
+const appIcons = ['default', 'candy', 'champagne', 'graphite', 'midnight', 'sun'];
 let windowsIconUpdate = Promise.resolve();
 const iconPath = (id, dock) => join(__dirname, '..', 'src-tauri', 'icons', 'app', `${id}${dock ? '-dock' : ''}.png`);
 function readAppIcon() {
@@ -175,11 +175,18 @@ async function start() {
     // Let Explorer see the selected icon and updated launch shortcuts before
     // it creates the taskbar button. Showing first can cache the default icon.
     if (!testing && process.platform === 'win32') mainWindow.show();
-    const permitted = new Set(['media', 'notifications', 'fullscreen', 'clipboard-sanitized-write', 'display-capture', 'speaker-selection']);
-    ses.setPermissionRequestHandler((contents, permission, callback, details) => callback(
-        contents === mainWindow.webContents && trusted(details.requestingUrl) && permitted.has(permission)));
+    const permitted = new Set(['media', 'notifications', 'clipboard-sanitized-write', 'display-capture', 'speaker-selection']);
+    // Discord delegates fullscreen to cross-origin video players through its
+    // iframe policy. Chromium still requires that delegation and a user gesture;
+    // requiring the player's URL to be discord.com makes its button do nothing.
+    // Device/capture and other permissions remain restricted to Discord's origin.
+    const allowsPermission = (contents, permission, requestingUrl) =>
+        contents === mainWindow.webContents && trusted(contents.getURL())
+        && (permission === 'fullscreen' || (trusted(requestingUrl) && permitted.has(permission)));
+    ses.setPermissionRequestHandler((contents, permission, callback, details) =>
+        callback(allowsPermission(contents, permission, details.requestingUrl)));
     ses.setPermissionCheckHandler((contents, permission, origin) =>
-        contents === mainWindow.webContents && trusted(origin) && permitted.has(permission));
+        allowsPermission(contents, permission, origin));
     // Use the OS picker on macOS 15+, and a native source menu elsewhere.
     ses.setDisplayMediaRequestHandler(async (request, callback) => {
         if (request.frame !== mainWindow.webContents.mainFrame || !trusted(request.securityOrigin)) { callback({}); return; }
