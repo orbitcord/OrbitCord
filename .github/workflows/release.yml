@@ -88,7 +88,7 @@ jobs:
       - name: Verify update checks and release manifest validation
         run: pnpm test:updates
       - name: Verify media, fullscreen and update settings on the release platform
-        run: node node_modules/@playwright/test/cli.js test --config playwright.electron.config.mjs --grep "decodes|fullscreen|file-backed|update"
+        run: node node_modules/@playwright/test/cli.js test --config playwright.electron.config.mjs --grep "decodes|fullscreen|file-backed|downloaded update|settings checks updates"
       - if: matrix.platform == 'macos'
         run: pnpm build:mac
       - if: matrix.platform == 'windows'
