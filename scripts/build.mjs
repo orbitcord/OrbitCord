@@ -43,13 +43,20 @@ export async function prepare(release = false, { platform = process.platform, ar
         await copyFile(join(native, executable), devStaged);
         await rename(devStaged, join(devNative, executable));
     }
-    const read = file => readFile(join(root, 'src-tauri', 'injection', file), 'utf8');
+    await buildPreload();
+}
+
+// Also used by the performance harness to build an exact source snapshot,
+// without rebuilding Rust or modifying the user's installed profile.
+export async function buildPreload({ sourceRoot = root, output = join(sourceRoot, '.lowcord') } = {}) {
+    await mkdir(output, { recursive: true });
+    const read = file => readFile(join(sourceRoot, 'src-tauri', 'injection', file), 'utf8');
     const [boot, shim, discord, extensions, gif, musicEmbeds, socialEmbeds, appearance, settings, appearanceCSS, uiCSS] = await Promise.all(
         ['boot.js', 'shim.js', 'discord.js', 'extensions.js', 'gif.js', 'music-embeds.js', 'social-embeds.js', 'chat-appearance.js', 'settings.js', 'chat-appearance.css', 'lowcord-ui.css'].map(read));
     // Static function body, serialized by Electron into the page's main world
     // synchronously at document start. No eval, script tag or CSP bypass.
-    const socialLinks = await readFile(join(root, 'electron', 'social-links.cjs'), 'utf8');
-    const musicLinks = await readFile(join(root, 'electron', 'music-links.cjs'), 'utf8');
+    const socialLinks = await readFile(join(sourceRoot, 'electron', 'social-links.cjs'), 'utf8');
+    const musicLinks = await readFile(join(sourceRoot, 'electron', 'music-links.cjs'), 'utf8');
     const contents = `const { contextBridge, ipcRenderer } = require('electron');
 if (process.isMainFrame) {
     require('./electron/update-notice.cjs').setupUpdateNotice(ipcRenderer);
@@ -73,7 +80,7 @@ if (process.isMainFrame) {
         window.__LOWCORD_REPORT__();
     }, args: [${JSON.stringify(appearanceCSS)}, ${JSON.stringify(uiCSS)}] });
 }`;
-    await build({ stdin: { contents, resolveDir: root, sourcefile: 'lowcord-preload.js' }, bundle: true,
+    await build({ stdin: { contents, resolveDir: sourceRoot, sourcefile: 'lowcord-preload.js' }, bundle: true,
         platform: 'node', format: 'cjs', external: ['electron'], outfile: join(output, 'preload.cjs') });
 }
 

@@ -6,7 +6,7 @@ const messages = {};
 const listeners = new Map();
 const fixture = window.fixture = {
     messages, channel: { type: 1 }, selected: "100", user: { id: "self" }, clicks: 0, replies: 0, drafts: [], sent: 0,
-    emit() { for (const set of listeners.values()) for (const listener of set) listener(); },
+    emit(name) { for (const set of name ? [listeners.get(name)] : listeners.values()) for (const listener of set ?? []) listener(); },
     add(id, author, body, data = {}, reply = false) {
         messages[id] = { id: String(id), author: { id: author }, type: reply ? 19 : 0, timestamp: "2026-10-03T05:00:00Z", ...data };
         const row = document.createElement("li");

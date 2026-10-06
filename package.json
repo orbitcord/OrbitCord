@@ -16,7 +16,8 @@
     "installer:artwork": "node scripts/installer-artwork.mjs",
     "test": "playwright test",
     "test:electron": "node scripts/build.mjs && playwright test --config playwright.electron.config.mjs",
-    "test:native": "cargo test --locked --manifest-path src-tauri/Cargo.toml"
+    "test:native": "cargo test --locked --manifest-path src-tauri/Cargo.toml",
+    "bench:performance": "node scripts/performance.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

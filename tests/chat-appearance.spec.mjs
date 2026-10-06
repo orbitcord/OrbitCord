@@ -632,8 +632,44 @@ test("unrelated shell mutations do not rescan the message timeline", async ({pag
         for(let i=0;i<10;i++) {shell.className="animation-"+i; shell.textContent=String(i); await new Promise(requestAnimationFrame);}
     });
     expect(await page.evaluate(() => window.scans)).toBeLessThanOrEqual(1);
-    await page.evaluate(() => {document.querySelector('#chat-messages-100-2 .messageContent_test').classList.add('updated');});
-    await expect.poll(()=>page.evaluate(()=>window.scans)).toBeGreaterThan(0);
+    await page.evaluate(() => {
+        fixture.messages[2].content = '😀';
+        document.querySelector('#chat-messages-100-2 .messageContent_test').textContent = '😀';
+    });
+    await expect(page.locator('#chat-messages-100-2 .message_test')).toHaveAttribute('data-lowcord-emoji', 'true');
+    // The changed row updates without another whole-timeline query.
+    expect(await page.evaluate(() => window.scans)).toBeLessThanOrEqual(1);
+});
+
+test('single-row edits avoid layout reads for unrelated rows and removed group ends reconcile', async ({ page }) => {
+    await load(page);
+    const result = await page.evaluate(async () => {
+        const wait = async () => { for (let i = 0; i < 5; i++) await new Promise(requestAnimationFrame); };
+        document.querySelector('#timeline').replaceChildren();
+        for (let i = 0; i < 100; i++) fixture.add(1000 + i, i % 2 ? 'self' : 'other', '<div class="messageContent_test">Message text</div>');
+        await wait();
+        const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth');
+        let reads = 0;
+        Object.defineProperty(Element.prototype, 'clientWidth', { ...descriptor, get() {
+            if (this.id.startsWith('chat-messages-')) reads++;
+            return descriptor.get.call(this);
+        } });
+        try {
+            document.querySelector('#chat-messages-100-1050 .messageContent_test').textContent = 'Changed text';
+            await wait();
+            const edited = reads;
+            fixture.add(2000, 'self', '<div class="messageContent_test">First</div>');
+            fixture.add(2001, 'self', '<div class="messageContent_test">Second</div>');
+            await wait();
+            document.querySelector('#chat-messages-100-2001').remove();
+            await wait();
+            return { edited, cluster: document.querySelector('#chat-messages-100-2000 .message_test').dataset.lowcordCluster,
+                time: Boolean(document.querySelector('#chat-messages-100-2000 .lowcord-bubble-time')) };
+        } finally { Object.defineProperty(Element.prototype, 'clientWidth', descriptor); }
+    });
+    expect(result.edited).toBeLessThanOrEqual(3);
+    expect(result.time).toBe(true);
+    expect(result.cluster).toBe('end');
 });
 
 test("app command responses sit on the invoking user's side", async ({ page }) => {
@@ -647,6 +683,23 @@ test("app command responses sit on the invoking user's side", async ({ page }) =
     await expect(surface(page, 80)).toHaveAttribute("data-lowcord-align", "right");
     await expect(surface(page, 81)).toHaveAttribute("data-lowcord-align", "left");
     await expect(bubble(page, 80)).toHaveAttribute("data-lowcord-continuation", "false");
+});
+
+test('native avatar source changes reconcile and recycled non-message IDs release decorations', async ({ page }) => {
+    await load(page);
+    await settings(page, { style: 'avatars' });
+    const source = await page.evaluate(() => {
+        Lowcord.waitForStore('UserStore', store => { store.getUser = () => null; });
+        const row = document.querySelector('#chat-messages-100-4');
+        const native = row.querySelector('.avatar_test');
+        native.setAttribute('src', native.getAttribute('src') + '#updated');
+        // An avatar change must dirty only its own group, without a store event.
+        return native.getAttribute('src');
+    });
+    await expect(page.locator('#chat-messages-100-4 .lowcord-bubble-avatar')).toHaveAttribute('src', source);
+    await page.evaluate(() => { document.querySelector('#chat-messages-100-4').id = 'recycled-system-row'; });
+    await expect(page.locator('#recycled-system-row [data-lowcord-bubble]')).toHaveCount(0);
+    await expect(page.locator('#recycled-system-row .lowcord-bubble-avatar, #recycled-system-row .lowcord-bubble-time')).toHaveCount(0);
 });
 
 test("an upload in progress sits on the outgoing side", async ({ page }) => {

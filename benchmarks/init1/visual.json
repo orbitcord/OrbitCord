@@ -1,0 +1,236 @@
+{
+  "environment": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M4 Max",
+    "ramGiB": 64,
+    "node": "v22.23.2",
+    "recordedAt": "2026-10-05T23:36:42.138Z"
+  },
+  "scenario": "visual",
+  "iterations": 1,
+  "rows": [
+    50,
+    200,
+    500
+  ],
+  "variants": [
+    {
+      "name": "baseline",
+      "directory": "/tmp/lowcord-init1-baseline"
+    },
+    {
+      "name": "current",
+      "directory": "/Users/yashsirmour/Documents/Vibe project/lowcord/"
+    }
+  ],
+  "results": [
+    {
+      "scenario": "visual",
+      "style": "bubbles",
+      "theme": "dark",
+      "width": 520,
+      "checks": [
+        {
+          "variant": "baseline",
+          "domHash": "a5d3696b3ec19004810c309d5c697155d35466b9fde5ddf368816fa9e9a3c495",
+          "screenshotHash": "bfe93402f6b40d8ef9f42c5462e426403b708397f01c0a900550aece394e388b",
+          "screenshotPath": "benchmarks/init1/visual-bubbles-dark-520-baseline.png",
+          "firstPaint": true
+        },
+        {
+          "variant": "current",
+          "domHash": "a5d3696b3ec19004810c309d5c697155d35466b9fde5ddf368816fa9e9a3c495",
+          "screenshotHash": "bfe93402f6b40d8ef9f42c5462e426403b708397f01c0a900550aece394e388b",
+          "screenshotPath": "benchmarks/init1/visual-bubbles-dark-520-current.png",
+          "firstPaint": true
+        }
+      ],
+      "identical": true,
+      "firstPaintStyled": true
+    },
+    {
+      "scenario": "visual",
+      "style": "bubbles",
+      "theme": "dark",
+      "width": 1000,
+      "checks": [
+        {
+          "variant": "baseline",
+          "domHash": "3074bb571eafffa3cfa1d856197acc1822bf113cf3ef7fbfa1009550fb82c316",
+          "screenshotHash": "2df876df604dfb47f93c00107f715e3bb6c45b70ebcdad25cd1039f38888ea06",
+          "screenshotPath": "benchmarks/init1/visual-bubbles-dark-1000-baseline.png",
+          "firstPaint": true
+        },
+        {
+          "variant": "current",
+          "domHash": "3074bb571eafffa3cfa1d856197acc1822bf113cf3ef7fbfa1009550fb82c316",
+          "screenshotHash": "2df876df604dfb47f93c00107f715e3bb6c45b70ebcdad25cd1039f38888ea06",
+          "screenshotPath": "benchmarks/init1/visual-bubbles-dark-1000-current.png",
+          "firstPaint": true
+        }
+      ],
+      "identical": true,
+      "firstPaintStyled": true
+    },
+    {
+      "scenario": "visual",
+      "style": "bubbles",
+      "theme": "light",
+      "width": 520,
+      "checks": [
+        {
+          "variant": "baseline",
+          "domHash": "a5d3696b3ec19004810c309d5c697155d35466b9fde5ddf368816fa9e9a3c495",
+          "screenshotHash": "91ea9a781b7e469d40c22e325249862b369f29dd5bcd0c3b92c37eb33672fd15",
+          "screenshotPath": "benchmarks/init1/visual-bubbles-light-520-baseline.png",
+          "firstPaint": true
+        },
+        {
+          "variant": "current",
+          "domHash": "a5d3696b3ec19004810c309d5c697155d35466b9fde5ddf368816fa9e9a3c495",
+          "screenshotHash": "91ea9a781b7e469d40c22e325249862b369f29dd5bcd0c3b92c37eb33672fd15",
+          "screenshotPath": "benchmarks/init1/visual-bubbles-light-520-current.png",
+          "firstPaint": true
+        }
+      ],
+      "identical": true,
+      "firstPaintStyled": true
+    },
+    {
+      "scenario": "visual",
+      "style": "bubbles",
+      "theme": "light",
+      "width": 1000,
+      "checks": [
+        {
+          "variant": "baseline",
+          "domHash": "3074bb571eafffa3cfa1d856197acc1822bf113cf3ef7fbfa1009550fb82c316",
+          "screenshotHash": "cbecac92bd8dd7e34066601c59ccecc323808477168f3581868899447329f227",
+          "screenshotPath": "benchmarks/init1/visual-bubbles-light-1000-baseline.png",
+          "firstPaint": true
+        },
+        {
+          "variant": "current",
+          "domHash": "3074bb571eafffa3cfa1d856197acc1822bf113cf3ef7fbfa1009550fb82c316",
+          "screenshotHash": "cbecac92bd8dd7e34066601c59ccecc323808477168f3581868899447329f227",
+          "screenshotPath": "benchmarks/init1/visual-bubbles-light-1000-current.png",
+          "firstPaint": true
+        }
+      ],
+      "identical": true,
+      "firstPaintStyled": true
+    },
+    {
+      "scenario": "visual",
+      "style": "avatars",
+      "theme": "dark",
+      "width": 520,
+      "checks": [
+        {
+          "variant": "baseline",
+          "domHash": "a873f5eb9381a9146c2c0677f409637647c8d47f6c664e9bc0983b1344dd665d",
+          "screenshotHash": "69a327e06b8b9edb88976b183958cdcf16439a34e29e8bba51b1f3d79a6d34db",
+          "screenshotPath": "benchmarks/init1/visual-avatars-dark-520-baseline.png",
+          "firstPaint": true
+        },
+        {
+          "variant": "current",
+          "domHash": "a873f5eb9381a9146c2c0677f409637647c8d47f6c664e9bc0983b1344dd665d",
+          "screenshotHash": "69a327e06b8b9edb88976b183958cdcf16439a34e29e8bba51b1f3d79a6d34db",
+          "screenshotPath": "benchmarks/init1/visual-avatars-dark-520-current.png",
+          "firstPaint": true
+        }
+      ],
+      "identical": true,
+      "firstPaintStyled": true
+    },
+    {
+      "scenario": "visual",
+      "style": "avatars",
+      "theme": "dark",
+      "width": 1000,
+      "checks": [
+        {
+          "variant": "baseline",
+          "domHash": "2d5f75972cb255fa983f2c4525d1c81c5716ded2cf235ccc8702b577bdca099a",
+          "screenshotHash": "abff19384a115129ad30abf5313a5aea966ee835359f7be4f630f450e5a19e4e",
+          "screenshotPath": "benchmarks/init1/visual-avatars-dark-1000-baseline.png",
+          "firstPaint": true
+        },
+        {
+          "variant": "current",
+          "domHash": "2d5f75972cb255fa983f2c4525d1c81c5716ded2cf235ccc8702b577bdca099a",
+          "screenshotHash": "abff19384a115129ad30abf5313a5aea966ee835359f7be4f630f450e5a19e4e",
+          "screenshotPath": "benchmarks/init1/visual-avatars-dark-1000-current.png",
+          "firstPaint": true
+        }
+      ],
+      "identical": true,
+      "firstPaintStyled": true
+    },
+    {
+      "scenario": "visual",
+      "style": "avatars",
+      "theme": "light",
+      "width": 520,
+      "checks": [
+        {
+          "variant": "baseline",
+          "domHash": "a873f5eb9381a9146c2c0677f409637647c8d47f6c664e9bc0983b1344dd665d",
+          "screenshotHash": "2bb074a098980a544c7b8cf2858f159af14b08dffaf3dfb744c1570683dd502c",
+          "screenshotPath": "benchmarks/init1/visual-avatars-light-520-baseline.png",
+          "firstPaint": true
+        },
+        {
+          "variant": "current",
+          "domHash": "a873f5eb9381a9146c2c0677f409637647c8d47f6c664e9bc0983b1344dd665d",
+          "screenshotHash": "2bb074a098980a544c7b8cf2858f159af14b08dffaf3dfb744c1570683dd502c",
+          "screenshotPath": "benchmarks/init1/visual-avatars-light-520-current.png",
+          "firstPaint": true
+        }
+      ],
+      "identical": true,
+      "firstPaintStyled": true
+    },
+    {
+      "scenario": "visual",
+      "style": "avatars",
+      "theme": "light",
+      "width": 1000,
+      "checks": [
+        {
+          "variant": "baseline",
+          "domHash": "2d5f75972cb255fa983f2c4525d1c81c5716ded2cf235ccc8702b577bdca099a",
+          "screenshotHash": "1b65c577c8038670f4b02733382779425e036b2e5ec19a482539a5a5d2f0e20b",
+          "screenshotPath": "benchmarks/init1/visual-avatars-light-1000-baseline.png",
+          "firstPaint": true
+        },
+        {
+          "variant": "current",
+          "domHash": "2d5f75972cb255fa983f2c4525d1c81c5716ded2cf235ccc8702b577bdca099a",
+          "screenshotHash": "1b65c577c8038670f4b02733382779425e036b2e5ec19a482539a5a5d2f0e20b",
+          "screenshotPath": "benchmarks/init1/visual-avatars-light-1000-current.png",
+          "firstPaint": true
+        }
+      ],
+      "identical": true,
+      "firstPaintStyled": true
+    }
+  ],
+  "sources": {
+    "baseline": {
+      "src-tauri/injection/chat-appearance.js": "3b9bb16302ea80abf11bc85833e32a6e3f50f38ad1be23868e018a6045dba9dd",
+      "src-tauri/injection/discord.js": "f9b118e36419c6c76d90a83ecbb79e9e0c7b585405d0294e845797edcd5bc5f8",
+      "electron/social-posts.cjs": "589f7fef56158795050118c72921601321b5b68cc3d3943f99b619db8a901d83",
+      "electron/main.cjs": "faebf7e1497ac471cdc7c37a6560f3fe7ec25143e62acf3d6282698a95617a35"
+    },
+    "current": {
+      "src-tauri/injection/chat-appearance.js": "4402730e575dda651100dda0c40a7b876ddf43b16a991670c31e7c8da4963dc8",
+      "src-tauri/injection/discord.js": "c369aefe83966bb8ad5d8589a1cb485c18815dee73a06d8e7c7432e8ae3899b5",
+      "electron/social-posts.cjs": "d2f8e415db22ef6bf4c797e2af95196d25f6dccb73337a7706d6b5678a72a185",
+      "electron/main.cjs": "61b4a3e8875c78dd98cc6934b089d36606b8186f9073e011aa1b7fc587ad1fac"
+    }
+  },
+  "summary": []
+}

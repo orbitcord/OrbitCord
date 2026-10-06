@@ -209,7 +209,8 @@ function setupLowcordSettings() {
     // Mirror one of Discord's sidebar sections, reusing its class names so the
     // entry looks native. React never owns these nodes.
     let lastList;
-    function placeSidebarSection() {
+    function placeSidebarSection(records) {
+        if (!window.Lowcord.domChanged(records, 'aside[class*="sidebar_"]')) return;
         const list = document.querySelector('aside[class*="sidebar_"] nav ul[role="list"]');
         if (!list || (list === lastList && list.querySelector(":scope > .lowcord-sidebar-section"))) return;
         lastList = list;

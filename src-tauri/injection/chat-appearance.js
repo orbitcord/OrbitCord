@@ -56,14 +56,27 @@ function setupLowcordChatAppearance() {
     // Keep that row's last message until the DOM identity changes. Weak keys
     // let virtualized/unmounted rows and their message data be collected.
     const rowMessages = new WeakMap();
+    const renderedRows = new Map(), dirtyRows = new Set();
+    let orderedRows = [], fullRefresh = true, structureChanged = true, storeChanged = false;
+    let context, timeCache = new WeakMap(), timeContext;
+    let colorKey, textColors;
+    function invalidate() { fullRefresh = true; structureChanged = true; scheduleRefresh(); }
+    function messageChanged() { storeChanged = true; scheduleRefresh(); }
+    const storeListeners = new Map();
     let enabled = true;
     let observer;
     const resizedTimelines = new Set();
-    const resizeObserver = new ResizeObserver(() => scheduleRefresh());
+    const resizeObserver = new ResizeObserver(() => invalidate());
     // Media decodes and players mount after the row; their size decides the
     // right-aligned shift, so watch them rather than measuring once.
     const observedMedia = new Set();
-    const mediaObserver = new ResizeObserver(() => scheduleRefresh());
+    const mediaObserver = new ResizeObserver(records => {
+        for (const record of records) {
+            const row = record.target.closest('[id^="chat-messages-"]');
+            if (row) dirtyRows.add(row);
+        }
+        scheduleRefresh();
+    });
     let frame;
     try { enabled = storage.getItem(storageKey) !== "false"; } catch {}
 
@@ -75,6 +88,8 @@ function setupLowcordChatAppearance() {
         resizedTimelines.clear();
         mediaObserver.disconnect();
         observedMedia.clear();
+        renderedRows.clear(); orderedRows = []; dirtyRows.clear(); context = undefined;
+        fullRefresh = structureChanged = true;
         document.querySelectorAll(`[${marker}], [data-lowcord-media]`).forEach(clearSurface);
     }
 
@@ -192,10 +207,16 @@ function setupLowcordChatAppearance() {
             time.setAttribute("aria-hidden", "true"); // Discord's article label already includes the time.
         }
         if (surface.lastElementChild !== time) surface.append(time);
-        const text = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        let formatted = timeCache.get(surface);
+        if (!formatted || formatted.value !== date.getTime()) {
+            formatted = { value: date.getTime(), text: date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+                iso: date.toISOString(), title: date.toLocaleString() };
+            timeCache.set(surface, formatted);
+        }
+        const text = formatted.text;
         if (time.textContent !== text) time.textContent = text;
-        setAttribute(time, "datetime", date.toISOString());
-        setAttribute(time, "title", date.toLocaleString());
+        setAttribute(time, "datetime", formatted.iso);
+        setAttribute(time, "title", formatted.title);
         setAttribute(surface, "data-lowcord-timed", "true");
     }
 
@@ -294,17 +315,17 @@ function setupLowcordChatAppearance() {
         setAttribute(surface, "data-lowcord-cluster", clusterRole(entry.continuation, entry.last));
         const color = side === "outgoing" ? options.outgoingColor : options.incomingColor;
         setProperty(surface, "--lowcord-bubble-color", color);
-        setProperty(surface, "--lowcord-bubble-text", foreground(color));
+        setProperty(surface, "--lowcord-bubble-text", textColors[side]);
         setAvatar(surface, message, avatars && entry.last);
         setTime(surface, entry.date, options.timestamps && entry.last && !Number.isNaN(entry.date.getTime()));
-        const available = Math.max(0, row.clientWidth - 2 * (gutter + (avatars ? face : 0)));
+        const available = Math.max(0, entry.width - 2 * (gutter + (avatars ? face : 0)));
         setProperty(surface, "--lowcord-reply-max-width", `${Math.floor(Math.min(360, available))}px`);
         setProperty(surface, "--lowcord-actions-max-width", `${Math.floor(available)}px`);
         if (media) {
             const caption = surface.querySelector(':scope > [class*="contents_"] > [class*="messageContent_"]');
             if (!entry.emoji && caption?.textContent.trim() && !caption.hasAttribute("data-lowcord-social-link-only")) setAttribute(surface, "data-lowcord-caption", "true");
             else surface.removeAttribute("data-lowcord-caption");
-        } else placeActions(surface, row, alignment);
+        }
     }
 
     function rowMessage(row, channelID, messageID) {
@@ -332,6 +353,35 @@ function setupLowcordChatAppearance() {
         return null;
     }
 
+    // Store notifications carry no message ID. Compare cheap message inputs,
+    // then do DOM/formatting/geometry work only for changed rows and neighbors.
+    function inputs(message) {
+        if (!message) return null;
+        return [message.author?.id, message.author?.avatar, message.type, String(message.timestamp), message.content, message.flags,
+            message.interactionMetadata?.user?.id, message.interaction_metadata?.user?.id, message.interaction?.user?.id,
+            message.messageReference, message.messageReference?.type, message.message_reference, message.message_reference?.type, message.poll,
+            ...["attachments", "embeds", "stickerItems", "sticker_items", "stickers", "components",
+                "messageSnapshots", "message_snapshots"].flatMap(key => [message[key], message[key]?.length])];
+    }
+    function sameInputs(a, b) { return a === b || Boolean(a && b && a.length === b.length && a.every((value, i) => value === b[i])); }
+    function readRow(row, channelID, userID) {
+        const match = /^chat-messages-(\d+)-(.+)$/.exec(row.id);
+        const message = match?.[1] === channelID ? rowMessage(row, channelID, match[2]) : null;
+        const surface = row.querySelector('[data-list-item-id^="chat-messages"]') ?? row.querySelector('[class*="message_"]');
+        if (!surface) return { message, inputs: inputs(message), entry: null };
+        if (!message || ![0, 19, 20, 23].includes(message.type ?? 0)) {
+            clearSurface(surface);
+            return { message, inputs: inputs(message), entry: null };
+        }
+        const invoker = message.interactionMetadata?.user?.id ?? message.interaction_metadata?.user?.id ?? message.interaction?.user?.id;
+        const isCommand = message.type === 20 || message.type === 23;
+        const side = message.author?.id === userID || (isCommand && invoker === userID) ? "outgoing" : "incoming";
+        const emoji = isEmojiOnly(message) && !message.messageReference && !message.message_reference;
+        return { message, inputs: inputs(message), entry: { row, surface, message, side,
+            alignment: side === "outgoing" ? options.outgoingPosition : "left", emoji,
+            media: emoji || hasRichContent(message, surface), date: new Date(message.timestamp), author: message.author?.id,
+            timeline: row.parentElement, isReply: message.type === 19 || isCommand || Boolean(message.messageReference || message.message_reference) } };
+    }
     function refresh() {
         frame = undefined;
         if (!enabled) return;
@@ -341,60 +391,70 @@ function setupLowcordChatAppearance() {
         const channelEnabled = channel?.type === 1 ? options.dms : channel?.type === 3
             ? options.groupDms : [0, 5, 10, 11, 12].includes(channel?.type) && options.servers;
         if (!channelEnabled || !userID) { clearBubbles(); return; }
-        document.querySelectorAll(uploaderSelector).forEach(node => setAttribute(node, "data-lowcord-uploader", options.outgoingPosition));
-        const timelines = new Set();
-        const entries = [];
-        document.querySelectorAll('[id^="chat-messages-"]').forEach(row => {
+        const nextContext = `${channelID}:${channel.type}:${userID}`;
+        if (context !== nextContext) { context = nextContext; fullRefresh = structureChanged = true; }
+        const format = Intl.DateTimeFormat().resolvedOptions();
+        const nextTimeContext = `${format.locale}:${format.timeZone}`;
+        if (timeContext !== nextTimeContext) { timeContext = nextTimeContext; timeCache = new WeakMap(); fullRefresh = true; }
+        const nextColors = `${options.incomingColor}:${options.outgoingColor}`;
+        if (colorKey !== nextColors) { colorKey = nextColors; textColors = { incoming: foreground(options.incomingColor), outgoing: foreground(options.outgoingColor) }; }
+        if (fullRefresh || structureChanged) {
+            document.querySelectorAll(uploaderSelector).forEach(node => setAttribute(node, "data-lowcord-uploader", options.outgoingPosition));
+            const previous = orderedRows;
+            orderedRows = [...document.querySelectorAll('[id^="chat-messages-"]')];
+            const present = new Set(orderedRows);
+            for (const row of previous) if (!present.has(row)) {
+                const surface = renderedRows.get(row)?.entry?.surface;
+                if (row.isConnected && surface) clearSurface(surface);
+                renderedRows.delete(row); dirtyRows.delete(row);
+            }
+            // Reordering/removal can change both sides of a group boundary.
+            const previousIndex = new Map(previous.map((row, i) => [row, i]));
+            orderedRows.forEach((row, i) => {
+                const old = previousIndex.get(row);
+                if (fullRefresh || old === undefined || previous[old - 1] !== orderedRows[i - 1] || previous[old + 1] !== orderedRows[i + 1]) dirtyRows.add(row);
+            });
+        }
+        if (storeChanged && !fullRefresh) for (const row of orderedRows) {
             const match = /^chat-messages-(\d+)-(.+)$/.exec(row.id);
-            const message = match?.[1] === channelID
-                ? rowMessage(row, channelID, match[2]) : null;
-            const surface = row.querySelector('[data-list-item-id^="chat-messages"]')
-                ?? row.querySelector('[class*="message_"]');
-            if (!surface) return;
-            // 20 and 23 are app command responses; Discord shows "X used /cmd"
-            // above them in the same quote slot as a reply.
-            if (!message || ![0, 19, 20, 23].includes(message.type ?? 0)) {
-                clearSurface(surface);
-                entries.push(null);
-                return;
-            }
-            // A bot's response to the current user's command belongs on their side.
-            const invoker = message.interactionMetadata?.user?.id ?? message.interaction_metadata?.user?.id
-                ?? message.interaction?.user?.id;
-            const isCommand = message.type === 20 || message.type === 23;
-            const side = message.author?.id === userID || (isCommand && invoker === userID) ? "outgoing" : "incoming";
-            timelines.add(row.parentElement);
-            const emoji = isEmojiOnly(message) && !message.messageReference && !message.message_reference;
-            entries.push({ row, surface, message, side, alignment: side === "outgoing" ? options.outgoingPosition : "left", emoji,
-                media: emoji || hasRichContent(message, surface), date: new Date(message.timestamp), author: message.author?.id,
-                timeline: row.parentElement, isReply: message.type === 19 || isCommand || Boolean(message.messageReference || message.message_reference) });
+            const message = match?.[1] === channelID ? rowMessage(row, channelID, match[2]) : null;
+            if (!sameInputs(renderedRows.get(row)?.inputs, inputs(message))) dirtyRows.add(row);
+        }
+        const changed = new Set();
+        orderedRows.forEach((row, i) => {
+            if (!dirtyRows.has(row) && renderedRows.has(row)) return;
+            renderedRows.set(row, readRow(row, channelID, userID));
+            changed.add(row);
+            if (orderedRows[i - 1]) changed.add(orderedRows[i - 1]);
+            if (orderedRows[i + 1]) changed.add(orderedRows[i + 1]);
         });
-        entries.forEach((entry, index) => {
-            if (!entry) return;
-            entry.continuation = joins(entries[index - 1], entry);
-            entry.last = !joins(entry, entries[index + 1]);
+        const entries = orderedRows.map(row => renderedRows.get(row)?.entry ?? null);
+        const work = [];
+        entries.forEach((entry, i) => {
+            if (!entry || !changed.has(entry.row)) return;
+            entry.continuation = joins(entries[i - 1], entry);
+            entry.last = !joins(entry, entries[i + 1]);
+            work.push(entry);
         });
-        for (const entry of entries) if (entry) apply(entry, channel);
-        // Measure media only after every row has its final padding.
+        // Read widths before writing padding, colors, avatars and timestamps.
+        for (const entry of work) entry.width = entry.row.clientWidth;
+        for (const entry of work) apply(entry, channel);
+        for (const entry of work) if (!entry.media) placeActions(entry.surface, entry.row, entry.alignment);
         const seenMedia = new Set();
-        for (const entry of entries) {
-            if (entry?.media) alignAccessories(entry.surface, entry.side === "outgoing" && entry.alignment === "right", seenMedia);
-        }
+        for (const entry of work) if (entry.media) alignAccessories(entry.surface, entry.side === "outgoing" && entry.alignment === "right", seenMedia);
         for (const media of observedMedia) {
-            if (!seenMedia.has(media)) { mediaObserver.unobserve(media); observedMedia.delete(media); }
-        }
-        for (const timeline of resizedTimelines) {
-            if (!timelines.has(timeline)) {
-                resizeObserver.unobserve(timeline);
-                resizedTimelines.delete(timeline);
+            if (!media.isConnected || (changed.has(media.closest('[id^="chat-messages-"]')) && !seenMedia.has(media))) {
+                mediaObserver.unobserve(media); observedMedia.delete(media);
             }
         }
-        for (const timeline of timelines) {
-            if (timeline && !resizedTimelines.has(timeline)) {
-                resizeObserver.observe(timeline);
-                resizedTimelines.add(timeline);
-            }
+        const timelines = new Set(entries.filter(Boolean).map(entry => entry.timeline));
+        for (const timeline of resizedTimelines) if (!timelines.has(timeline)) {
+            resizeObserver.unobserve(timeline); resizedTimelines.delete(timeline);
         }
+        for (const timeline of timelines) if (timeline && !resizedTimelines.has(timeline)) {
+            resizeObserver.observe(timeline); resizedTimelines.add(timeline);
+        }
+        dirtyRows.clear(); fullRefresh = structureChanged = storeChanged = false;
     }
 
     function scheduleRefresh() {
@@ -405,11 +465,16 @@ function setupLowcordChatAppearance() {
         observer?.disconnect();
         resizeObserver.disconnect();
         resizedTimelines.clear();
-        for (const store of stores.values()) store.removeChangeListener?.(scheduleRefresh);
+        for (const [store, listener] of storeListeners) store.removeChangeListener?.(listener);
+        storeListeners.clear();
         if (frame !== undefined) cancelAnimationFrame(frame);
         frame = undefined;
         if (!enabled) { clearBubbles(); return; }
-        for (const store of stores.values()) store.addChangeListener?.(scheduleRefresh);
+        for (const [name, store] of stores) {
+            const listener = name === "MessageStore" ? messageChanged : invalidate;
+            storeListeners.set(store, listener); store.addChangeListener?.(listener);
+        }
+        fullRefresh = structureChanged = true;
         if (document.body) {
             // Discord virtualizes the timeline. MutationObserver already
             // batches each DOM commit and runs before paint. Deferring again
@@ -418,19 +483,34 @@ function setupLowcordChatAppearance() {
             observer ??= new MutationObserver(records => {
                 // The app shell, member list, composer and settings animate
                 // independently. Only timeline changes need a message scan.
-                const rowSelector = `[id^="chat-messages-"], ${uploaderSelector}`;
-                if (records.some(record => record.target instanceof Element && (
-                    record.target.closest(rowSelector) ||
-                    [...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element &&
-                        (node.matches(rowSelector) || node.querySelector(rowSelector)))
-                ))) {
-                    // A store event may already have queued the same work.
+                let relevant = false;
+                const selector = '[id^="chat-messages-"]';
+                for (const record of records) {
+                    const target = record.target instanceof Element ? record.target : record.target.parentElement;
+                    const row = target?.closest(selector);
+                    const nodes = [...record.addedNodes, ...record.removedNodes];
+                    if (record.type === "childList" && nodes.length && nodes.every(node => node instanceof Element &&
+                        node.matches('.lowcord-bubble-time, .lowcord-bubble-avatar'))) continue;
+                    if (target?.closest('.lowcord-bubble-time, .lowcord-bubble-avatar')) continue;
+                    if (row) { dirtyRows.add(row); relevant = true; }
+                    if (record.attributeName === "id" && row) structureChanged = true;
+                    if (record.attributeName === "id" && renderedRows.has(target)) { structureChanged = true; relevant = true; }
+                    for (const node of nodes) if (node instanceof Element &&
+                        (node.matches(selector) || node.querySelector(selector))) {
+                        if (node.matches(selector)) dirtyRows.add(node);
+                        node.querySelectorAll(selector).forEach(row => dirtyRows.add(row));
+                        structureChanged = true; relevant = true;
+                    }
+                    if (target?.closest(uploaderSelector) || nodes.some(node => node instanceof Element &&
+                        (node.matches(uploaderSelector) || node.querySelector(uploaderSelector)))) { structureChanged = true; relevant = true; }
+                }
+                if (relevant) {
                     if (frame !== undefined) cancelAnimationFrame(frame);
                     refresh();
                 }
             });
             observer.observe(document.body, { childList: true, subtree: true,
-                attributes: true, attributeFilter: ["id", "class"] });
+                attributes: true, attributeFilter: ["id", "class", "src"] });
         }
         scheduleRefresh();
     }
@@ -449,7 +529,7 @@ function setupLowcordChatAppearance() {
         try { storage.setItem(optionsKey, JSON.stringify(next)); }
         catch { throw new Error("Couldn’t save this setting. Please try again."); }
         options = next;
-        scheduleRefresh();
+        invalidate();
         window.dispatchEvent(new Event(changeEvent));
     }
 
@@ -515,7 +595,8 @@ function setupLowcordChatAppearance() {
     ChatAppearanceSettings.displayName = "Chat Appearance";
     window.__lowcordChatAppearance = { get enabled() { return enabled; }, setEnabled, get options() { return { ...options }; }, setOptions,
         SettingsPanel: ChatAppearanceSettings };
-    window.addEventListener("resize", scheduleRefresh);
+    window.addEventListener("resize", invalidate);
+    window.addEventListener("languagechange", invalidate);
     window.addEventListener("storage", event => {
         if (event.storageArea !== storage || (event.key !== storageKey && event.key !== optionsKey && event.key !== null)) return;
         enabled = storage.getItem(storageKey) !== "false";

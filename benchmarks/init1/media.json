@@ -1,0 +1,231 @@
+{
+  "environment": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M4 Max",
+    "ramGiB": 64,
+    "node": "v22.23.2",
+    "recordedAt": "2026-10-05T23:32:58.735Z"
+  },
+  "scenario": "media",
+  "iterations": 5,
+  "rows": [
+    50,
+    200,
+    500
+  ],
+  "variants": [
+    {
+      "name": "baseline",
+      "directory": "/tmp/lowcord-init1-baseline"
+    },
+    {
+      "name": "current",
+      "directory": "/Users/yashsirmour/Documents/Vibe project/lowcord/"
+    }
+  ],
+  "results": [
+    {
+      "scenario": "media",
+      "variant": "baseline",
+      "repeat": 0,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 86.885333,
+      "cpuMs": 150.615,
+      "firstByteMs": [
+        27.088207999999995,
+        23.060834,
+        17.382583999999994
+      ],
+      "retainedArrayBuffersMiB": 192.08278560638428,
+      "peakRssDeltaMiB": 460.703125,
+      "endingRssDeltaMiB": 460.703125
+    },
+    {
+      "scenario": "media",
+      "variant": "current",
+      "repeat": 0,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 137.076417,
+      "cpuMs": 250.606,
+      "firstByteMs": [
+        55.136708999999996,
+        33.170041,
+        30.713082999999983
+      ],
+      "retainedArrayBuffersMiB": 0.06460094451904297,
+      "peakRssDeltaMiB": 172.953125,
+      "endingRssDeltaMiB": 172.953125
+    },
+    {
+      "scenario": "media",
+      "variant": "current",
+      "repeat": 1,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 146.747875,
+      "cpuMs": 255.537,
+      "firstByteMs": [
+        55.58375,
+        41.69470899999999,
+        31.13775000000001
+      ],
+      "retainedArrayBuffersMiB": 0.06460094451904297,
+      "peakRssDeltaMiB": 191.46875,
+      "endingRssDeltaMiB": 191.46875
+    },
+    {
+      "scenario": "media",
+      "variant": "baseline",
+      "repeat": 1,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 83.644459,
+      "cpuMs": 146.911,
+      "firstByteMs": [
+        27.651000000000003,
+        20.811458000000002,
+        16.202875000000006
+      ],
+      "retainedArrayBuffersMiB": 192.08278560638428,
+      "peakRssDeltaMiB": 443.734375,
+      "endingRssDeltaMiB": 443.734375
+    },
+    {
+      "scenario": "media",
+      "variant": "baseline",
+      "repeat": 2,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 84.931833,
+      "cpuMs": 147.552,
+      "firstByteMs": [
+        27.565999999999995,
+        21.01733399999999,
+        17.194333999999998
+      ],
+      "retainedArrayBuffersMiB": 192.08278560638428,
+      "peakRssDeltaMiB": 456.796875,
+      "endingRssDeltaMiB": 456.796875
+    },
+    {
+      "scenario": "media",
+      "variant": "current",
+      "repeat": 2,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 154.73008299999998,
+      "cpuMs": 300.733,
+      "firstByteMs": [
+        59.143709,
+        36.84966600000001,
+        41.045458999999994
+      ],
+      "retainedArrayBuffersMiB": 0.06460094451904297,
+      "peakRssDeltaMiB": 168.609375,
+      "endingRssDeltaMiB": 168.25
+    },
+    {
+      "scenario": "media",
+      "variant": "current",
+      "repeat": 3,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 140.74875,
+      "cpuMs": 257.428,
+      "firstByteMs": [
+        56.91524999999999,
+        32.995084000000006,
+        31.885707999999994
+      ],
+      "retainedArrayBuffersMiB": 0.06460094451904297,
+      "peakRssDeltaMiB": 179.421875,
+      "endingRssDeltaMiB": 179.421875
+    },
+    {
+      "scenario": "media",
+      "variant": "baseline",
+      "repeat": 3,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 83.29316600000001,
+      "cpuMs": 146.526,
+      "firstByteMs": [
+        26.840374999999995,
+        20.549125000000004,
+        16.758499999999998
+      ],
+      "retainedArrayBuffersMiB": 192.08278560638428,
+      "peakRssDeltaMiB": 466.109375,
+      "endingRssDeltaMiB": 466.109375
+    },
+    {
+      "scenario": "media",
+      "variant": "baseline",
+      "repeat": 4,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 83.970542,
+      "cpuMs": 146.59,
+      "firstByteMs": [
+        26.330125000000002,
+        21.790374999999997,
+        16.477333
+      ],
+      "retainedArrayBuffersMiB": 192.08278560638428,
+      "peakRssDeltaMiB": 455.0625,
+      "endingRssDeltaMiB": 455.0625
+    },
+    {
+      "scenario": "media",
+      "variant": "current",
+      "repeat": 4,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 136.855334,
+      "cpuMs": 247.392,
+      "firstByteMs": [
+        55.104291999999994,
+        33.44491699999999,
+        30.36862500000001
+      ],
+      "retainedArrayBuffersMiB": 0.06460094451904297,
+      "peakRssDeltaMiB": 149.0625,
+      "endingRssDeltaMiB": 149.0625
+    }
+  ],
+  "sources": {
+    "baseline": {
+      "src-tauri/injection/chat-appearance.js": "3b9bb16302ea80abf11bc85833e32a6e3f50f38ad1be23868e018a6045dba9dd",
+      "src-tauri/injection/discord.js": "f9b118e36419c6c76d90a83ecbb79e9e0c7b585405d0294e845797edcd5bc5f8",
+      "electron/social-posts.cjs": "589f7fef56158795050118c72921601321b5b68cc3d3943f99b619db8a901d83",
+      "electron/main.cjs": "faebf7e1497ac471cdc7c37a6560f3fe7ec25143e62acf3d6282698a95617a35"
+    },
+    "current": {
+      "src-tauri/injection/chat-appearance.js": "eea0c955524155140660c425633da5b45496e92170879114c9fb7ca69da22c4e",
+      "src-tauri/injection/discord.js": "c369aefe83966bb8ad5d8589a1cb485c18815dee73a06d8e7c7432e8ae3899b5",
+      "electron/social-posts.cjs": "d2f8e415db22ef6bf4c797e2af95196d25f6dccb73337a7706d6b5678a72a185",
+      "electron/main.cjs": "61b4a3e8875c78dd98cc6934b089d36606b8186f9073e011aa1b7fc587ad1fac"
+    }
+  },
+  "summary": [
+    {
+      "scenario": "media",
+      "variant": "baseline",
+      "peakRssDeltaMiB": 456.796875,
+      "retainedArrayBuffersMiB": 192.08278560638428,
+      "elapsedMs": 83.970542,
+      "cpuMs": 146.911
+    },
+    {
+      "scenario": "media",
+      "variant": "current",
+      "peakRssDeltaMiB": 172.953125,
+      "retainedArrayBuffersMiB": 0.06460094451904297,
+      "elapsedMs": 140.74875,
+      "cpuMs": 255.537
+    }
+  ]
+}

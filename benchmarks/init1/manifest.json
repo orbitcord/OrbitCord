@@ -1,0 +1,52 @@
+{
+  "branch": "init1",
+  "baseCommit": "791500e17da25449f8290795046598518733d4b0",
+  "baseline": "/tmp/lowcord-init1-baseline",
+  "recordedAt": "2026-10-05T23:38:00.723Z",
+  "files": {
+    "electron/main.cjs": {
+      "before": "faebf7e1497ac471cdc7c37a6560f3fe7ec25143e62acf3d6282698a95617a35",
+      "after": "61b4a3e8875c78dd98cc6934b089d36606b8186f9073e011aa1b7fc587ad1fac"
+    },
+    "electron/media-cache.cjs": {
+      "before": null,
+      "after": "51a5d15fc382d2f8c977450680e5da22efec56abf5d5c3f299dbb599da099ecd"
+    },
+    "electron/mp4-mux.cjs": {
+      "before": "556e2e7514b4c928db553118b80e215a63d3926941c4861e7b3e0e6debc9e61b",
+      "after": "7bf4bac591babc1625fde977e5d66134f29abd541f3f6e2ed788ef089d5b9e01"
+    },
+    "electron/social-posts.cjs": {
+      "before": "589f7fef56158795050118c72921601321b5b68cc3d3943f99b619db8a901d83",
+      "after": "d2f8e415db22ef6bf4c797e2af95196d25f6dccb73337a7706d6b5678a72a185"
+    },
+    "scripts/build.mjs": {
+      "before": null,
+      "after": "e9d97f8ee19fd5e7512608e384607be31ea17d3f41f8247112ad46af8f341050"
+    },
+    "scripts/performance.mjs": {
+      "before": null,
+      "after": "488cbaf5f85d22a8491a46e538d42a3fb4a0f918714ab0bb2c3eff620e8239d9"
+    },
+    "src-tauri/injection/chat-appearance.js": {
+      "before": "3b9bb16302ea80abf11bc85833e32a6e3f50f38ad1be23868e018a6045dba9dd",
+      "after": "4402730e575dda651100dda0c40a7b876ddf43b16a991670c31e7c8da4963dc8"
+    },
+    "src-tauri/injection/chat-appearance.css": {
+      "before": "46e7a4f03384e4ba900b37a8bbb2c8eee8530241b0c09397777c28f0667c4d8a",
+      "after": "46e7a4f03384e4ba900b37a8bbb2c8eee8530241b0c09397777c28f0667c4d8a"
+    },
+    "src-tauri/injection/discord.js": {
+      "before": "f9b118e36419c6c76d90a83ecbb79e9e0c7b585405d0294e845797edcd5bc5f8",
+      "after": "c369aefe83966bb8ad5d8589a1cb485c18815dee73a06d8e7c7432e8ae3899b5"
+    },
+    "src-tauri/injection/extensions.js": {
+      "before": "09ddb794cfeadc9a2538c9a825793f58e39d9e8d2de2b65d3ee780bc7f53691d",
+      "after": "f377e51ef43d9eb40e9fa6a8ad4078385f56f9657a050e08516efddac481e110"
+    },
+    "src-tauri/injection/settings.js": {
+      "before": "98501768f5134574ac56bd397cc5f8c51b6f625f0a28814435dc9efc716fd258",
+      "after": "58233f6c6233f719a56b14bb14753f1f44467c304cc7f2ae4f70c4d976d5e04d"
+    }
+  }
+}

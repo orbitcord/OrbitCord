@@ -994,6 +994,7 @@
     // went away or half a second has passed.
     let bars = [], scanned = 0;
     function placeVoiceButtons(event) {
+        if (!window.Lowcord.domChanged(event, '[class*="channelTextArea_"]')) return;
         const show = enabled("voiceMessages");
         const settled = bars.length && bars.every(bar => bar.isConnected && bar.querySelector(":scope > .lowcord-voice-button"));
         if (show && !event && settled && performance.now() - scanned < 500) return;
@@ -1013,7 +1014,8 @@
     // Allow playback only for official music embeds. Save the original allow
     // attribute so disabling the plugin restores Discord's own frame policy.
     const musicAllows = new WeakMap();
-    function fixMusicFrames() {
+    function fixMusicFrames(records) {
+        if (!window.Lowcord.domChanged(records, 'iframe[src]')) return;
         for (const frame of document.querySelectorAll('iframe[src]')) {
             let url;
             try { url = new URL(frame.src); } catch { continue; }

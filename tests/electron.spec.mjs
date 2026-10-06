@@ -3,9 +3,9 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 
-async function launch(dataDir) {
+async function launch(dataDir, { updater = false } = {}) {
     const app = await electron.launch({ args: [resolve('electron/main.cjs')], env: { ...process.env,
-        LOWCORD_TEST: '1', LOWCORD_TEST_URL: 'http://127.0.0.1:4319/electron', LOWCORD_TEST_DATA: dataDir } });
+        LOWCORD_TEST: '1', LOWCORD_TEST_UPDATER: updater ? '1' : '0', LOWCORD_TEST_URL: 'http://127.0.0.1:4319/electron', LOWCORD_TEST_DATA: dataDir } });
     app.process().stderr.on('data', data => {
         const message = data.toString();
         if (message.includes('[lowcord] Startup failed')) console.error(message);
@@ -131,9 +131,13 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(browser.userAgent).not.toMatch(/(?:Electron|Lowcord|Datcord|OrbitCord)\//i);
         expect(browser.getUserMedia).toBe('function');
         expect(browser.peerConnection).toBe('function');
-        expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true, extensions: 12, fetchHooked: true });
-        expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
-            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'setEmbedPreferences', 'resolveSocialLink', 'socialPost', 'socialVideo'] });
+        const injection = await page.evaluate(() => window.earlyInjection);
+        expect(injection).toMatchObject({ initialized: true, hooked: true, fetchHooked: true });
+        expect(injection.extensions).toBe(await page.evaluate(() => Lowcord.extensions.catalog.length));
+        const bridge = await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) }));
+        expect(bridge).toMatchObject({ node: 'undefined', process: 'undefined' });
+        expect(bridge.bridge).toEqual(expect.arrayContaining(['notify', 'setBadge', 'log', 'openExternal', 'appIcon',
+            'setEmbedPreferences', 'resolveSocialLink', 'socialPost', 'socialVideo']));
         // Card media loads like <img>/<video> (no CORS) from the privileged scheme;
         // an unhandled scheme would reject instead of answering.
         expect(await page.evaluate(() => fetch('lowcord-media://media/0123456789abcdef01234567', { mode: 'no-cors' }).then(r => r.type))).toBe('opaque');
@@ -182,6 +186,38 @@ test('Rust saves window state across Electron restarts and quits with its parent
         app = await launch(dir);
         await (await app.firstWindow()).waitForLoadState('domcontentloaded');
         expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds().width)).toBe(900);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('file-backed Reddit playback decodes both tracks, seeks, and cleans up', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lowcord-file-playback-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow(); await page.waitForLoadState('load');
+        const src = await app.evaluate(async ({ BrowserWindow }, { root, dir }) => {
+            const { createRedditFixture } = process.mainModule.require(`${root}/tests/fixtures/reddit-playback.cjs`);
+            const { createSocialPosts } = process.mainModule.require(`${root}/electron/social-posts.cjs`);
+            global.playbackTest = createSocialPosts(createRedditFixture(root).fetchPage, { directory: dir });
+            const protocol = BrowserWindow.getAllWindows()[0].webContents.session.protocol;
+            protocol.unhandle('lowcord-media');
+            protocol.handle('lowcord-media', request => global.playbackTest.serve(request));
+            return (await global.playbackTest.get('https://www.reddit.com/comments/abc/')).media[0].src;
+        }, { root: resolve('.'), dir });
+        // Chromium keeps protocol loader factories for the loaded document.
+        await page.reload();
+        await page.evaluate(async src => {
+            const video = document.createElement('video'); video.id = 'disk-video'; video.muted = true;
+            document.body.append(video); video.src = src; await video.play();
+        }, src);
+        await expect.poll(() => page.$eval('#disk-video', video => video.currentTime)).toBeGreaterThan(.2);
+        expect(await page.$eval('#disk-video', video => ({ width: video.videoWidth, duration: video.duration,
+            audio: video.webkitAudioDecodedByteCount > 0, video: video.webkitVideoDecodedByteCount > 0 })))
+            .toMatchObject({ width: 160, audio: true, video: true });
+        expect(await page.$eval('#disk-video', video => video.duration)).toBeCloseTo(2, 1);
+        await page.$eval('#disk-video', video => { video.pause(); video.currentTime = 1.5; });
+        await expect.poll(() => page.$eval('#disk-video', video => video.seeking)).toBe(false);
+        expect(await page.$eval('#disk-video', video => video.error)).toBeNull();
+        await app.evaluate(async () => { await global.playbackTest.close(); });
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -246,7 +282,7 @@ test('embed plugins reach only official child frames and update without reloadin
 
 test('downloaded update shows a quiet corner notice, dismisses across reloads and restarts only on a real click', async ({}, testInfo) => {
     const dir = await mkdtemp(join(tmpdir(), 'orbitcord-update-'));
-    const app = await launch(dir);
+    const app = await launch(dir, { updater: true });
     try {
         const page = await app.firstWindow();
         await page.waitForLoadState('load');
@@ -317,7 +353,7 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
         await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
         expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
-            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'setEmbedPreferences', 'resolveSocialLink', 'socialPost', 'socialVideo']);
+            .toEqual(expect.arrayContaining(['notify', 'setBadge', 'log', 'openExternal', 'appIcon', 'setEmbedPreferences', 'resolveSocialLink', 'socialPost', 'socialVideo']));
         expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
     } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
 });
@@ -334,7 +370,7 @@ test('opened image menu copies full image pixels and saves the original file', a
             Menu.prototype.popup = function () { global.imageMenu = this; };
             // Eagerly snapshot every format, including custom OS payloads, so
             // the test can restore the user's clipboard atomically afterwards.
-            global.savedClipboard = await Promise.all((await clipboard.read()).map(async item =>
+            global.savedClipboard = await Promise.all((await clipboard.read()).filter(item => item.types.length).map(async item =>
                 new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async type =>
                     [type, await item.getType(type)]))))));
             global.readCopiedImage = async () => {

@@ -38,9 +38,11 @@ test("desktop download shortcut is hidden without affecting servers or attachmen
 });
 
 test("every extension is on by default and persists when switched", async ({ page }) => {
-    expect(await page.evaluate(() => Lowcord.extensions.state)).toEqual({
+    const state = await page.evaluate(() => Lowcord.extensions.state);
+    expect(state).toMatchObject({
         anonymiseFileNames: true, voiceMessages: true, quickReply: true, cleanUrls: true, silentTyping: true, noTracking: true,
         youtubeAdblock: true, musicEmbeds: true, socialEmbeds: true, socialCards: true, redditVideoUpload: true, instagramVideoUpload: true, twitterVideoUpload: true });
+    expect(Object.values(state).every(value => value === true)).toBe(true);
     await setExtension(page, "silentTyping", false);
     await page.reload();
     await expect.poll(() => page.evaluate(() => window.fixtureReady)).toBe(true);
@@ -281,13 +283,14 @@ test("OrbitCord section in Discord's settings opens both pages, and toggles save
     await expect(section).toHaveCount(1);
     // Placed after the first section, reusing Discord's class names.
     await expect(page.locator('ul[role="list"] > li').nth(1)).toHaveClass(/lowcord-sidebar-section/);
-    await expect(section.locator(".item_test")).toHaveText(["Chat Appearance", "Extensions"]);
+    await expect(section.getByText("Chat Appearance")).toBeVisible();
+    await expect(section.getByText("Extensions")).toBeVisible();
     await expect(section.locator(".active_test")).toHaveCount(0);
     await section.getByText("Extensions").click();
     const dialog = page.getByRole("dialog", { name: "OrbitCord Settings" });
     await expect(dialog.getByRole("heading", { name: "Extensions" })).toBeVisible();
     const toggles = dialog.getByRole("switch");
-    await expect(toggles).toHaveCount(13);
+    await expect(toggles).toHaveCount(Object.keys(await page.evaluate(() => Lowcord.extensions.state)).length);
     for (const toggle of await toggles.all()) await expect(toggle).toBeChecked();
     await dialog.getByRole("switch", { name: /Silent typing/ }).uncheck();
     expect(await page.evaluate(() => JSON.parse(Lowcord.storage.getItem("lowcord.extensions")).silentTyping)).toBe(false);

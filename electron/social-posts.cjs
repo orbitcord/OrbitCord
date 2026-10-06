@@ -1,6 +1,7 @@
 const { randomBytes } = require('node:crypto');
 const links = require('./social-links.cjs');
-const { mux } = require('./mp4-mux.cjs');
+const { mux, muxToFile } = require('./mp4-mux.cjs');
+const { createMediaCache } = require('./media-cache.cjs');
 
 // Reads public post data for OrbitCord's social cards and video uploads.
 // Requests never carry Discord credentials, cookies or message text.
@@ -10,8 +11,9 @@ const scheme = 'lowcord-media';
 const bot = 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)';
 const browser = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36';
 
-function createSocialPosts(fetchPage = fetch) {
+function createSocialPosts(fetchPage = fetch, cacheOptions) {
     const posts = new Map(), pending = new Map(), media = new Map(), muxed = new Map();
+    const playbackCache = createMediaCache(cacheOptions);
 
     async function request(url, { headers = {}, timeout = 6000, method = 'GET', redirect = 'follow', signal } = {}) {
         const response = await fetchPage(url, { method, redirect, credentials: 'omit',
@@ -341,12 +343,12 @@ function createSocialPosts(fetchPage = fetch) {
         const response = await request(url, { method: 'HEAD', timeout: 8000 });
         return response.ok ? Number(response.headers.get('content-length')) || null : null;
     }
-    async function redditStreams(fallback) {
+    async function redditStreams(fallback, signal) {
         const folder = /^(https:\/\/v\.redd\.it\/\w+)\//.exec(fallback)?.[1];
         if (!folder) throw new Error('Not a Reddit video');
         let names = [];
         try {
-            const response = await request(`${folder}/DASHPlaylist.mpd`, { timeout: 6000 });
+            const response = await request(`${folder}/DASHPlaylist.mpd`, { timeout: 6000, ...(signal ? { signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]) } : {}) });
             if (response.ok) names = [...(await read(response, 512 * 1024)).toString('utf8').matchAll(/<BaseURL>([\w.-]+)<\/BaseURL>/g)].map(match => match[1]);
         } catch {}
         const height = name => Number(/_(\d+)\.mp4$/.exec(name)?.[1]) || 0;
@@ -410,18 +412,76 @@ function createSocialPosts(fetchPage = fetch) {
     }
 
     // ----- lowcord-media:// handler ------------------------------------------
+    async function downloadFile(url, path, limit, signal) {
+        const { createWriteStream } = require('node:fs');
+        const { Readable, Transform } = require('node:stream');
+        const { pipeline } = require('node:stream/promises');
+        const response = await request(url, { timeout: 120_000,
+            signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]) });
+        const tooLarge = () => Object.assign(new Error('Too large'), { code: 'too-large' });
+        if (!response.ok || Number(response.headers.get('content-length')) > limit) {
+            await response.body?.cancel().catch(() => {});
+            if (response.ok) throw tooLarge();
+            throw new Error(`HTTP ${response.status}`);
+        }
+        let size = 0;
+        await pipeline(Readable.fromWeb(response.body), new Transform({
+            transform(chunk, _encoding, callback) {
+                size += chunk.length;
+                callback(size > limit ? tooLarge() : null, chunk);
+            }
+        }), createWriteStream(path, { flags: 'wx', mode: 0o600, highWaterMark: 64 * 1024 }), { signal });
+        return size;
+    }
     async function playable(fallback) {
-        if (muxed.has(fallback)) return muxed.get(fallback);
-        const work = (async () => {
-            const streams = await redditStreams(fallback);
-            // Cards stream a modest quality; uploads pick their own.
-            const choice = streams.videos.find(item => item.height && item.height <= 480) ?? streams.videos.at(-1);
-            return combine(streams, choice, 80 * 1024 * 1024);
-        })();
-        muxed.set(fallback, work);
-        work.catch(() => muxed.delete(fallback));
-        while (muxed.size > 3) muxed.delete(muxed.keys().next().value);
-        return work;
+        try {
+            return await playbackCache.get(fallback, async (directory, signal) => {
+                const { join } = require('node:path');
+                const { rm } = require('node:fs/promises');
+                const streams = await redditStreams(fallback, signal);
+                const choice = streams.videos.find(item => item.height && item.height <= 480) ?? streams.videos.at(-1);
+                const video = join(directory, 'video.mp4'), audio = join(directory, 'audio.mp4'), output = join(directory, 'playable.mp4');
+                const limit = 80 * 1024 * 1024;
+                const transfers = new AbortController();
+                const transferSignal = AbortSignal.any([signal, transfers.signal]);
+                const videoWork = downloadFile(choice.url, video, limit, transferSignal).catch(error => { transfers.abort(); throw error; });
+                const audioWork = streams.audio ? downloadFile(streams.audio, audio, limit, transferSignal).catch(error => {
+                    if (transferSignal.aborted || ['ENOSPC', 'EACCES', 'EIO', 'EROFS'].includes(error.code)) { transfers.abort(); throw error; }
+                    return null;
+                }) : Promise.resolve(null);
+                // Wait for both handles to close before a failed entry is deleted.
+                const results = await Promise.allSettled([videoWork, audioWork]);
+                const failed = results.filter(result => result.status === 'rejected');
+                if (failed.length) throw (failed.find(result => result.reason.name !== 'AbortError') ?? failed[0]).reason;
+                const [size, sound] = results.map(result => result.value);
+                signal.throwIfAborted();
+                if (sound) {
+                    try {
+                        const result = await muxToFile(video, audio, output, { signal });
+                        await Promise.all([rm(video), rm(audio)]);
+                        return { path: output, size: result.size };
+                    } catch (error) {
+                        if (signal.aborted || ['ENOSPC', 'EACCES', 'EIO', 'EROFS'].includes(error.code)) throw error;
+                        // Keep the same silent-video fallback for unsupported MP4s.
+                    }
+                }
+                await rm(audio, { force: true });
+                return { path: video, size };
+            });
+        } catch (error) {
+            // A read-only/full temporary volume must not disable playback.
+            if (!['ENOSPC', 'EACCES', 'EIO', 'EROFS', 'ENOENT', 'ENOTDIR', 'EEXIST'].includes(error.code)) throw error;
+            if (muxed.has(fallback)) return muxed.get(fallback);
+            const work = (async () => {
+                const streams = await redditStreams(fallback);
+                const choice = streams.videos.find(item => item.height && item.height <= 480) ?? streams.videos.at(-1);
+                return combine(streams, choice, 80 * 1024 * 1024);
+            })();
+            muxed.set(fallback, work);
+            work.catch(() => { if (muxed.get(fallback) === work) muxed.delete(fallback); });
+            while (muxed.size > 3) muxed.delete(muxed.keys().next().value);
+            return work;
+        }
     }
     function bytes(data, range) {
         const match = /^bytes=(\d*)-(\d*)$/.exec(range ?? '');
@@ -438,7 +498,10 @@ function createSocialPosts(fetchPage = fetch) {
         const source = url.hostname === 'media' ? media.get(url.pathname.slice(1)) : null;
         if (!source) return new Response(null, { status: 404 });
         try {
-            if (source.reddit) return bytes(await playable(source.reddit), request.headers.get('range'));
+            if (source.reddit) {
+                const value = await playable(source.reddit);
+                return Buffer.isBuffer(value) ? bytes(value, request.headers.get('range')) : playbackCache.response(value, request);
+            }
             const range = request.headers.get('range');
             const upstream = await fetchPage(source.url, { credentials: 'omit', redirect: 'follow',
                 headers: { 'user-agent': browser, ...(range ? { range } : {}), ...source.headers }, signal: AbortSignal.timeout(30_000) });
@@ -453,6 +516,6 @@ function createSocialPosts(fetchPage = fetch) {
             return new Response(upstream.body, { status: upstream.status, headers });
         } catch { return new Response(null, { status: 502 }); }
     }
-    return { get, redditVideo, socialVideo, serve, metadata };
+    return { get, redditVideo, socialVideo, serve, metadata, close: () => { muxed.clear(); return playbackCache.close(); } };
 }
 module.exports = { createSocialPosts, scheme };

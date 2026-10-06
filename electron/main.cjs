@@ -3,7 +3,6 @@ const { join } = require('node:path');
 const { readFileSync, writeFileSync } = require('node:fs');
 const { NativeBackend } = require('./native.cjs');
 const { migrateProfile } = require('./profile.cjs');
-const { autoUpdater } = require('electron-updater');
 const { setupEmbedPlugins } = require('./embed-plugins.cjs');
 const { createSocialResolver } = require('./social-resolver.cjs');
 const { createSocialPosts, scheme: mediaScheme } = require('./social-posts.cjs');
@@ -24,7 +23,7 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 protocol.registerSchemesAsPrivileged([{ scheme: mediaScheme,
     privileges: { standard: true, secure: true, bypassCSP: true, stream: true, supportFetchAPI: true } }]);
 if (dev) app.commandLine.appendSwitch('remote-debugging-port', '9222');
-let mainWindow, tray, backend, stateTimer, quitting = false, finished = false;
+let mainWindow, tray, backend, socialPosts, autoUpdater, stateTimer, quitting = false, finished = false;
 let downloadedUpdate = null, updateDismissed = false, updateRestarting = false, updateError = null;
 
 const trusted = value => {
@@ -73,7 +72,20 @@ async function checkForMacUpdates() {
         console.error('[lowcord] Update check failed:', error.message);
     }
 }
+function initializeUpdater() {
+    if (autoUpdater) return;
+    autoUpdater = require('electron-updater').autoUpdater;
+    autoUpdater.on('error', updateFailed);
+    autoUpdater.on('update-downloaded', ({ version }) => {
+        if (typeof version !== 'string' || !version || downloadedUpdate === version) return;
+        downloadedUpdate = version;
+        updateDismissed = updateRestarting = false;
+        updateError = null;
+        publishUpdateNotice();
+    });
+}
 function startWindowsUpdater() {
+    initializeUpdater();
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
     const check = () => autoUpdater.checkForUpdates().catch(error =>
@@ -155,7 +167,8 @@ async function start() {
     });
     const embedPlugins = setupEmbedPlugins(mainWindow.webContents);
     const socialResolver = createSocialResolver();
-    const socialPosts = createSocialPosts();
+    socialPosts = createSocialPosts();
+    if (testing && process.env.LOWCORD_TEST_UPDATER === '1') initializeUpdater();
     ses.protocol.handle(mediaScheme, request => socialPosts.serve(request));
     await applyAppIcon(readAppIcon());
     if (saved?.maximized && onScreen) mainWindow.maximize();
@@ -296,14 +309,6 @@ async function start() {
         publishUpdateNotice();
         try { autoUpdater.quitAndInstall(); } catch (error) { updateFailed(error); }
     });
-    autoUpdater.on('error', updateFailed);
-    autoUpdater.on('update-downloaded', ({ version }) => {
-        if (typeof version !== 'string' || !version || downloadedUpdate === version) return;
-        downloadedUpdate = version;
-        updateDismissed = updateRestarting = false;
-        updateError = null;
-        publishUpdateNotice();
-    });
     ipcMain.handle('lowcord:badge', (event, count) => {
         assertSender(event);
         if (!Number.isSafeInteger(count) || count < 0 || count > 1000000) throw new Error('Invalid badge');
@@ -348,7 +353,10 @@ else {
         event.preventDefault();
         if (quitting) return;
         quitting = true;
-        void saveState().catch(console.error).finally(() => { finished = true; backend?.close(); app.quit(); });
+        void saveState().catch(console.error).finally(async () => {
+            await socialPosts?.close().catch(console.error);
+            finished = true; backend?.close(); app.quit();
+        });
     });
     app.whenReady().then(start).catch(error => {
         if (quitting || finished) return;
