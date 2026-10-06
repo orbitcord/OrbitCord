@@ -130,7 +130,8 @@ function setupLowcordChatAppearance() {
     }
 
     // Only emoji (unicode or custom) and spaces: shown as they are, no bubble.
-    const emojiOnlyPattern = /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|\p{Emoji_Modifier}|\uFE0F|\u200D|\u20E3|<a?:\w+:\d+>|\s)+$/u;
+    // Keycaps (1\uFE0F\u20E3) start with a plain digit; subdivision flags end in tag characters.
+    const emojiOnlyPattern = /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|\p{Emoji_Modifier}|[#*0-9]\uFE0F?\u20E3|\uFE0F|\u200D|[\u{E0020}-\u{E007F}]|<a?:\w+:\d+>|\s)+$/u;
     function isEmojiOnly(message) {
         const content = message.content ?? "";
         return content.trim() !== "" && emojiOnlyPattern.test(content);

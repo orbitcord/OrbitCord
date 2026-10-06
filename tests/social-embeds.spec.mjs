@@ -124,6 +124,30 @@ test('X and Reddit GIFs loop in the card and download flagged as GIFs', async ()
     expect([reddit.gif, Buffer.from(reddit.data).toString()]).toEqual([true, 'DASH_480.mp4']);
 });
 
+test('a photo carousel downloads every item as a typed file within one limit', async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
+    const png = Buffer.from('\x89PNG\r\n\x1a\n1234', 'latin1');
+    const tweet = media => async (url, init) => {
+        if (url.startsWith('https://api.fxtwitter.com/')) return jsonResponse({ tweet: { text: 't', author: { name: 'n', screen_name: 's' }, media: { all: media } } });
+        if (url === 'https://pbs.twimg.com/a.jpg') return new Response(jpeg, { headers: { 'content-type': 'image/jpeg' } });
+        // A CDN that labels its files generically is still read by content.
+        if (url === 'https://pbs.twimg.com/b') return new Response(png, { headers: { 'content-type': 'application/octet-stream' } });
+        if (url === 'https://pbs.twimg.com/page') return new Response('<html>', { headers: { 'content-type': 'text/html' } });
+        throw new Error(`must not fetch ${url} ${init?.method ?? ''}`);
+    };
+    const photo = url => ({ type: 'photo', url, width: 1, height: 1 });
+    const files = (await createSocialPosts(tweet([photo('https://pbs.twimg.com/a.jpg'), photo('https://pbs.twimg.com/b')]))
+        .socialMedia('https://x.com/s/status/1', 10 * 1024 * 1024)).files;
+    expect(files.map(({ name, type }) => ({ name, type }))).toEqual([{ name: 'x-1-1.jpg', type: 'image/jpeg' }, { name: 'x-1-2.png', type: 'image/png' }]);
+    expect(Buffer.from(files[0].data)).toEqual(jpeg);
+    const single = await createSocialPosts(tweet([photo('https://pbs.twimg.com/a.jpg')])).socialMedia('https://x.com/s/status/1', 1024 * 1024);
+    expect(single.files.map(file => file.name)).toEqual(['x-1.jpg']);
+    await expect(createSocialPosts(tweet([photo('https://pbs.twimg.com/page')])).socialMedia('https://x.com/s/status/1', 1024 * 1024)).rejects.toThrow();
+    await expect(createSocialPosts(tweet(Array(11).fill(photo('https://pbs.twimg.com/a.jpg')))).socialMedia('https://x.com/s/status/1', 1024 * 1024))
+        .rejects.toMatchObject({ code: 'too-many' });
+    await expect(createSocialPosts(tweet([])).socialMedia('https://x.com/s/status/1', 1024 * 1024)).rejects.toMatchObject({ code: 'not-media' });
+});
+
 test('a GIF post’s MP4 becomes a looping GIF within the size limit', async ({ page }) => {
     await page.goto('/extensions');
     await page.waitForFunction(() => window.fixtureReady);
@@ -378,6 +402,40 @@ test.describe('Videos as files', () => {
         await page.evaluate(() => finishPost());
         await expect.poll(() => page.evaluate(() => sends)).toBe(1);
         await expect(page.locator('.lowcord-toast')).toHaveCount(0);
+    });
+
+    test('a carousel is attached as every photo, and the link is not sent', async ({ page }) => {
+        await page.evaluate(() => { window.__LOWCORD_NATIVE__ = {
+            socialPost: async () => ({ media: [{ type: 'image' }, { type: 'image' }, { type: 'image' }] }),
+            socialVideo: () => Promise.reject(new Error('must not download a video')),
+            socialMedia: (url, limit) => {
+                window.mediaRequest = { url, limit };
+                return Promise.resolve({ files: [1, 2, 3].map(index => ({ name: `x-1-${index}.jpg`, type: 'image/jpeg', data: new Uint8Array(4) })) });
+            },
+        }; });
+        await page.evaluate(tweet => pasteText(tweet), tweet);
+        await expect.poll(() => page.evaluate(() => attached)).toEqual(Array(3).fill(expect.stringMatching(/^[a-z]{7}\.jpg$/)));
+        expect(await page.evaluate(() => window.mediaRequest)).toEqual({ url: tweet, limit: 10 * 1024 * 1024 });
+        await expect(page.locator('.lowcord-toast')).toContainText('X photos attached');
+        await page.evaluate(() => sendMessage());
+        const body = await lastMessage(page);
+        expect(body.content).toBe('');
+        expect(body.attachments).toHaveLength(3);
+    });
+
+    test('the photos toggle and posts over 10 items keep the link', async ({ page }) => {
+        await page.evaluate(() => { window.__LOWCORD_NATIVE__ = {
+            socialPost: async url => ({ media: Array(url.includes('/2') ? 11 : 2).fill({ type: 'image' }) }),
+            socialVideo: () => Promise.reject(new Error('must not download a video')),
+            socialMedia: () => Promise.reject(new Error('must not download')),
+        }; });
+        await page.evaluate(tweet => pasteText(tweet), tweet.replace(/\d+$/, '2'));
+        await expect(page.locator('.lowcord-toast-failure')).toContainText('more than 10 items');
+        await page.evaluate(() => { document.getElementById('composer').textContent = ''; Lowcord.extensions.set('socialPhotoUpload', false); });
+        await page.evaluate(tweet => pasteText(tweet), tweet);
+        await page.evaluate(() => sendMessage());
+        expect((await lastMessage(page)).content).toContain('/status/1234567890');
+        expect(await page.evaluate(() => attached)).toEqual([]);
     });
 
     test('image posts, oversized videos and the disabled toggle send the link', async ({ page }) => {

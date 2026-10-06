@@ -721,3 +721,31 @@ test("an upload in progress sits on the outgoing side", async ({ page }) => {
     await expect(uploader).toHaveAttribute("data-lowcord-uploader", "left");
     expect(await gap()).toBeGreaterThan(100);
 });
+
+test("mentions and replies in progress draw no bar or tint beside the bubble", async ({ page }) => {
+    await load(page);
+    await page.addStyleTag({ content: ".mentioned_test::before, .replying_test::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: orange; }"
+        + " .mentioned_test, .replying_test { background-color: rgb(80, 70, 20); }" });
+    await surface(page, 1).evaluate(node => node.classList.add("mentioned_test"));
+    await surface(page, 2).evaluate(node => node.classList.add("replying_test"));
+    await page.locator('[data-media="image"] .message_test').first().evaluate(node => node.classList.add("mentioned_test"));
+    const before = locator => locator.evaluate(node => getComputedStyle(node, "::before").content);
+    await expect(bubble(page, 1)).toHaveClass(/mentioned_test/);
+    expect(await before(bubble(page, 1))).toBe("none");
+    expect(await bubble(page, 1).evaluate(node => getComputedStyle(node).boxShadow)).toBe("none");
+    expect(await bubble(page, 1).evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe("rgb(80, 70, 20)");
+    const media = page.locator('[data-media="image"] [data-lowcord-media]').first();
+    expect(await before(media)).toBe("none");
+    expect(await media.evaluate(node => getComputedStyle(node).backgroundColor)).toBe("rgba(0, 0, 0, 0)");
+    // The message being replied to keeps a visible ring, like quick reply.
+    expect(await bubble(page, 2).evaluate(node => getComputedStyle(node).boxShadow)).toContain("inset");
+});
+
+test("keycap and subdivision flag emoji show without a bubble", async ({ page }) => {
+    await load(page);
+    await page.evaluate(() => {
+        const content = "1️⃣ 🏴󠁧󠁢󠁥󠁮󠁧󠁿";
+        window.fixture.add(95, "other", `<div class="messageContent_test">${content}</div>`, { content });
+    });
+    await expect(page.locator('#chat-messages-100-95 [data-lowcord-emoji="true"]')).toHaveCount(1);
+});

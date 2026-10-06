@@ -70,6 +70,7 @@ if (process.isMainFrame) {
         resolveSocialLink: (url, provider) => ipcRenderer.invoke('lowcord:resolve-social-link', url, provider),
         socialPost: url => ipcRenderer.invoke('lowcord:social-post', url),
         socialVideo: (url, limit) => ipcRenderer.invoke('lowcord:social-video', url, limit),
+        socialMedia: (url, limit) => ipcRenderer.invoke('lowcord:social-media', url, limit),
     });
     contextBridge.executeInMainWorld({ func: function initializeLowcord(chatAppearanceCSS, lowcordUiCSS) {
         if (window.self !== window.top || window.__LOWCORD_INIT__) return;

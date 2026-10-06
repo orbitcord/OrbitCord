@@ -411,6 +411,48 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         throw Object.assign(new Error('Unsupported link'), { code: 'not-video' });
     }
 
+    // A photo post or carousel as files: every item, in order, together within
+    // one message's upload limit. Discord takes at most 10 attachments.
+    const fileTypes = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'video/mp4': 'mp4' };
+    function sniff(data, declared) {
+        const ascii = (start, end) => data.subarray(start, end).toString('latin1');
+        if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'image/jpeg';
+        if (ascii(0, 8) === '\x89PNG\r\n\x1a\n') return 'image/png';
+        if (ascii(0, 4) === 'GIF8') return 'image/gif';
+        if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'image/webp';
+        if (ascii(4, 8) === 'ftyp') return 'video/mp4';
+        return fileTypes[declared] ? declared : null;
+    }
+    async function socialMedia(value, limit) {
+        const target = links.parse(value);
+        if (!Number.isSafeInteger(limit) || limit < 1024 * 1024 || limit > 1024 ** 3) throw new Error('Invalid limit');
+        if (!['reddit', 'instagram', 'twitter'].includes(target?.site)) throw Object.assign(new Error('Unsupported link'), { code: 'not-media' });
+        const post = await get(target.canonical);
+        const sources = (post?.media ?? []).map(item => media.get(/^lowcord-media:\/\/media\/([\da-f]+)$/.exec(item.src)?.[1]));
+        // Reddit's own videos are separate DASH streams; those posts go through socialVideo.
+        if (!sources.length || sources.some(source => !source?.url)) throw Object.assign(new Error('Not a media post'), { code: 'not-media' });
+        if (sources.length > 10) throw Object.assign(new Error('Too many files'), { code: 'too-many' });
+        const id = target.site === 'twitter' ? /\/status\/(\d+)/.exec(target.path)?.[1]
+            : target.site === 'instagram' ? /\/(?:p|reel|reels|tv)\/([\w-]+)/.exec(target.path)?.[1]
+            : /\/comments\/(\w+)/.exec(post.url ?? '')?.[1];
+        const prefix = `${target.site === 'twitter' ? 'x' : target.site}-${id ?? 'post'}`;
+        const files = [];
+        let left = limit;
+        // One at a time, so the shared budget bounds memory as well as the upload.
+        for (const [index, source] of sources.entries()) {
+            const response = await fetchPage(source.url, { credentials: 'omit', redirect: 'follow',
+                headers: { 'user-agent': browser, ...source.headers }, signal: AbortSignal.timeout(120_000) });
+            const declared = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? '';
+            if (!response.ok || !(response.url || source.url).startsWith('https:') || /html|xml|javascript/.test(declared)) { await response.body?.cancel().catch(() => {}); throw new Error(`HTTP ${response.status}`); }
+            const data = await read(response, left);
+            const type = sniff(data, declared);
+            if (!type) throw new Error('Unknown file type');
+            left -= data.length;
+            files.push({ name: `${prefix}${sources.length > 1 ? `-${index + 1}` : ''}.${fileTypes[type]}`, type, data });
+        }
+        return { files };
+    }
+
     // ----- lowcord-media:// handler ------------------------------------------
     async function downloadFile(url, path, limit, signal) {
         const { createWriteStream } = require('node:fs');
@@ -516,6 +558,6 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
             return new Response(upstream.body, { status: upstream.status, headers });
         } catch { return new Response(null, { status: 502 }); }
     }
-    return { get, redditVideo, socialVideo, serve, metadata, close: () => { muxed.clear(); return playbackCache.close(); } };
+    return { get, redditVideo, socialVideo, socialMedia, serve, metadata, close: () => { muxed.clear(); return playbackCache.close(); } };
 }
 module.exports = { createSocialPosts, scheme };

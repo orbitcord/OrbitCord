@@ -131,13 +131,9 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(browser.userAgent).not.toMatch(/(?:Electron|Lowcord|Datcord|OrbitCord)\//i);
         expect(browser.getUserMedia).toBe('function');
         expect(browser.peerConnection).toBe('function');
-        const injection = await page.evaluate(() => window.earlyInjection);
-        expect(injection).toMatchObject({ initialized: true, hooked: true, fetchHooked: true });
-        expect(injection.extensions).toBe(await page.evaluate(() => Lowcord.extensions.catalog.length));
-        const bridge = await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) }));
-        expect(bridge).toMatchObject({ node: 'undefined', process: 'undefined' });
-        expect(bridge.bridge).toEqual(expect.arrayContaining(['notify', 'setBadge', 'log', 'openExternal', 'appIcon',
-            'setEmbedPreferences', 'resolveSocialLink', 'socialPost', 'socialVideo']));
+        expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true, extensions: 14, fetchHooked: true });
+        expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
+            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'appIcon', 'setEmbedPreferences', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia'] });
         // Card media loads like <img>/<video> (no CORS) from the privileged scheme;
         // an unhandled scheme would reject instead of answering.
         expect(await page.evaluate(() => fetch('lowcord-media://media/0123456789abcdef01234567', { mode: 'no-cors' }).then(r => r.type))).toBe('opaque');
@@ -353,7 +349,7 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
         await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
         expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
-            .toEqual(expect.arrayContaining(['notify', 'setBadge', 'log', 'openExternal', 'appIcon', 'setEmbedPreferences', 'resolveSocialLink', 'socialPost', 'socialVideo']));
+            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'appIcon', 'setEmbedPreferences', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia']);
         expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
     } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
 });

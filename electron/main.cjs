@@ -294,6 +294,12 @@ async function start() {
         try { return await socialPosts.socialVideo(url, limit); }
         catch (error) { return { error: error.code ?? 'failed' }; }
     });
+    ipcMain.handle('lowcord:social-media', async (event, url, limit) => {
+        assertSender(event);
+        if (typeof url !== 'string' || url.length > 2048) throw new Error('Invalid link');
+        try { return await socialPosts.socialMedia(url, limit); }
+        catch (error) { return { error: error.code ?? 'failed' }; }
+    });
     ipcMain.handle('lowcord:update-state', event => { assertSender(event); return updateNoticeState(); });
     ipcMain.handle('lowcord:update-dismiss', event => {
         assertSender(event);

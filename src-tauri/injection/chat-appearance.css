@@ -77,7 +77,14 @@
 }
 [id^="chat-messages-"] > [data-lowcord-bubble] [class*="reactions_"] { margin: 0 !important; padding: 0 !important; }
 [id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="right"] [class*="reactions_"] { justify-content: flex-end; }
-[id^="chat-messages-"] > [data-lowcord-bubble][class*="mentioned_"] { box-shadow: inset 3px 0 var(--brand-500, #5865f2); }
+/* Discord marks mentions (reply pings included), the message being replied to,
+   ephemeral and AutoMod rows with a ::before bar and a row tint. Neither fits a
+   bubble or bare media: the bar floats beside the bubble. The message being
+   replied to gets the same ring as quick reply instead. */
+[id^="chat-messages-"] > :is([data-lowcord-bubble], [data-lowcord-media])::before { content: none !important; display: none !important; }
+[id^="chat-messages-"] > [data-lowcord-media] { background: none !important; }
+[id^="chat-messages-"] > [data-lowcord-bubble][class*="replying_"] { box-shadow: inset 0 0 0 2px var(--brand-500, #5865f2); }
+[id^="chat-messages-"] > [data-lowcord-media][class*="replying_"] { outline: 2px solid var(--brand-500, #5865f2); outline-offset: -2px; }
 
 /* Discord's faces, names and inline times. Lowcord draws its own face and
    footer time; one-to-one DMs already name the person in the header. */
