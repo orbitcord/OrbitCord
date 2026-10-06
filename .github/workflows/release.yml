@@ -42,7 +42,7 @@ jobs:
           test "$TAG" = "$VERSION" || { echo "Tag v$TAG does not match package version $VERSION"; exit 1; }
       - run: pnpm install --frozen-lockfile
       - name: Verify media decoding and fullscreen on the release platform
-        run: pnpm test:electron --grep "decodes|fullscreen|file-backed"
+        run: node node_modules/@playwright/test/cli.js test --config playwright.electron.config.mjs --grep "decodes|fullscreen|file-backed"
       - if: matrix.platform == 'macos'
         run: pnpm build:mac
       - if: matrix.platform == 'windows'
