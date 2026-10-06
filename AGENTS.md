@@ -6,7 +6,7 @@
 - Show emoji-only messages and stickers without a bubble; show reply quotes as a lightweight connector line above the bubble, not as a bubble card.
 - Lowcord settings pages opened from Discord's settings should feel native: fill Discord's settings content column, keep Discord's sidebar and close (X) button, and never open as a nested popover or separate floating pane.
 - Leave media upload, drag-and-drop, and delete on Discord's native behavior; do not restyle or resize Discord's attachment grid internals.
-- Prefer network-level request hooks over patching Discord's code for new extensions; keep all extensions on by default.
+- Prefer network-level request hooks over patching Discord's code for new extensions; keep all extensions on by default except social photo/carousel uploads, which users enable themselves.
 - Prioritize low memory, low CPU, and fast startup while staying cross-platform (macOS, Windows, Linux).
 
 ## Learned Workspace Facts

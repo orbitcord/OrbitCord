@@ -37,16 +37,22 @@ test("desktop download shortcut is hidden without affecting servers or attachmen
     await expect(page.locator('[aria-label="Download Apps"]').first()).not.toBeFocused();
 });
 
-test("every extension is on by default and persists when switched", async ({ page }) => {
+test("photo uploads require opt-in and extension choices persist", async ({ page }) => {
     const state = await page.evaluate(() => Lowcord.extensions.state);
     expect(state).toMatchObject({
         anonymiseFileNames: true, voiceMessages: true, quickReply: true, cleanUrls: true, silentTyping: true, noTracking: true,
-        youtubeAdblock: true, musicEmbeds: true, socialEmbeds: true, socialCards: true, redditVideoUpload: true, instagramVideoUpload: true, twitterVideoUpload: true });
-    expect(Object.values(state).every(value => value === true)).toBe(true);
+        youtubeAdblock: true, musicEmbeds: true, socialEmbeds: true, socialCards: true, redditVideoUpload: true, instagramVideoUpload: true, twitterVideoUpload: true,
+        socialPhotoUpload: false });
+    expect(Object.entries(state).every(([id, value]) => value === (id !== "socialPhotoUpload"))).toBe(true);
+    await page.evaluate(() => window.__lowcordOpenSettings("extensions"));
+    const photos = page.getByRole("switch", { name: /Photos and carousels as files/ });
+    await expect(photos).not.toBeChecked();
+    await photos.check();
     await setExtension(page, "silentTyping", false);
     await page.reload();
     await expect.poll(() => page.evaluate(() => window.fixtureReady)).toBe(true);
     expect(await page.evaluate(() => Lowcord.extensions.enabled("silentTyping"))).toBe(false);
+    expect(await page.evaluate(() => Lowcord.extensions.enabled("socialPhotoUpload"))).toBe(true);
 });
 
 test("silent typing answers Discord's typing request locally, over XHR and fetch", async ({ page }) => {
@@ -291,7 +297,8 @@ test("OrbitCord section in Discord's settings opens both pages, and toggles save
     await expect(dialog.getByRole("heading", { name: "Extensions" })).toBeVisible();
     const toggles = dialog.getByRole("switch");
     await expect(toggles).toHaveCount(Object.keys(await page.evaluate(() => Lowcord.extensions.state)).length);
-    for (const toggle of await toggles.all()) await expect(toggle).toBeChecked();
+    await expect(dialog.getByRole("switch", { name: /Photos and carousels as files/ })).not.toBeChecked();
+    expect(await toggles.evaluateAll(inputs => inputs.filter(input => input.checked).length)).toBe((await toggles.count()) - 1);
     await dialog.getByRole("switch", { name: /Silent typing/ }).uncheck();
     expect(await page.evaluate(() => JSON.parse(Lowcord.storage.getItem("lowcord.extensions")).silentTyping)).toBe(false);
     await dialog.getByRole("button", { name: "Chat Appearance" }).click();

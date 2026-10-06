@@ -1,7 +1,7 @@
 module.exports = {
     appId: 'dev.lowcord.app', productName: 'OrbitCord', asar: true,
     directories: { output: 'dist' },
-    buildVersion: '0.1.5.2', artifactName: '${productName}-0.1.5.2-${os}-${arch}.${ext}',
+    buildVersion: '0.1.6', artifactName: '${productName}-0.1.6-${os}-${arch}.${ext}',
     files: ['electron/**', '.lowcord/preload.cjs', 'src-tauri/icons/32x32.png', 'src-tauri/icons/128x128.png', 'src-tauri/icons/icon.png', 'src-tauri/icons/trayTemplate.png', 'src-tauri/icons/app/*.png', 'package.json', 'LICENSE'],
     extraResources: [{ from: '.lowcord/native-${os}-${arch}', to: 'native', filter: ['lowcord-native', 'lowcord-native.exe'] }],
     beforePack: async context => {
@@ -32,6 +32,6 @@ module.exports = {
         installerHeader: 'build/installers/windows-header.bmp',
         installerSidebar: 'build/installers/windows-sidebar.bmp',
         uninstallerSidebar: 'build/installers/windows-sidebar.bmp',
-        artifactName: '${productName}-0.1.5.2-windows-${arch}-Setup.${ext}' },
+        artifactName: '${productName}-0.1.6-windows-${arch}-Setup.${ext}' },
     linux: { icon: 'src-tauri/icons', category: 'Network', target: ['AppImage'] },
 };

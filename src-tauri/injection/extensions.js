@@ -18,14 +18,14 @@
         { id: "redditVideoUpload", title: "Reddit videos as files", description: "Sends a pasted Reddit video, with sound, as a file instead of the link." },
         { id: "instagramVideoUpload", title: "Instagram Reels as files", description: "Sends a pasted Instagram Reel or video as a file instead of the link." },
         { id: "twitterVideoUpload", title: "X videos as files", description: "Sends a pasted X video as a file instead of the link." },
-        { id: "socialPhotoUpload", title: "Photos and carousels as files", description: "Sends the photos of a pasted Instagram, Reddit or X post, or a whole carousel, as files instead of the link." },
+        { id: "socialPhotoUpload", defaultEnabled: false, title: "Photos and carousels as files", description: "Sends the photos of a pasted Instagram, Reddit or X post, or a whole carousel, as files instead of the link." },
     ];
     const storage = window.Lowcord.storage;
     const changeEvent = "lowcord-extensions-change";
     function read() {
         let saved = {};
         try { saved = JSON.parse(storage.getItem(storageKey)) ?? {}; } catch {}
-        return Object.fromEntries(catalog.map(({ id }) => [id, typeof saved[id] === "boolean" ? saved[id] : true]));
+        return Object.fromEntries(catalog.map(({ id, defaultEnabled = true }) => [id, typeof saved[id] === "boolean" ? saved[id] : defaultEnabled]));
     }
     let state = read();
     const optionsKey = "lowcord.embed-options";

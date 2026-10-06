@@ -405,6 +405,7 @@ test.describe('Videos as files', () => {
     });
 
     test('a carousel is attached as every photo, and the link is not sent', async ({ page }) => {
+        await page.evaluate(() => Lowcord.extensions.set('socialPhotoUpload', true));
         await page.evaluate(() => { window.__LOWCORD_NATIVE__ = {
             socialPost: async () => ({ media: [{ type: 'image' }, { type: 'image' }, { type: 'image' }] }),
             socialVideo: () => Promise.reject(new Error('must not download a video')),
@@ -424,6 +425,7 @@ test.describe('Videos as files', () => {
     });
 
     test('the photos toggle and posts over 10 items keep the link', async ({ page }) => {
+        await page.evaluate(() => Lowcord.extensions.set('socialPhotoUpload', true));
         await page.evaluate(() => { window.__LOWCORD_NATIVE__ = {
             socialPost: async url => ({ media: Array(url.includes('/2') ? 11 : 2).fill({ type: 'image' }) }),
             socialVideo: () => Promise.reject(new Error('must not download a video')),

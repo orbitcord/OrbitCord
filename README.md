@@ -10,7 +10,7 @@ OrbitCord is a Discord desktop client for macOS and Windows. It keeps Discord's 
 - Turn supported social links into post cards with text and carousel media.
 - Paste a Reddit video link by itself to attach the video with sound.
 
-The embed extensions are on by default. Find them under **OrbitCord Settings → Extensions**. Embed volume starts at 50%. OrbitCord uses Discord's own players when available and avoids adding a second player. Code blocks and suppressed embeds are left alone.
+The embed extensions are on by default. **Photos and carousels as files** starts off; enable it under **OrbitCord Settings → Extensions** to send social image posts as attachments. Embed volume starts at 50%. OrbitCord uses Discord's own players when available and avoids adding a second player. Code blocks and suppressed embeds are left alone.
 
 ## Install
 
