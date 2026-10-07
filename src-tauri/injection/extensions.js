@@ -163,33 +163,69 @@
     // The pasted link shows at once. A single-video post, or a photo post or
     // carousel, downloads in the background and joins the composer's
     // attachments through Discord's own uploader, so it sends like any file;
-    // the send hook drops the link.
+    // the send hook drops the link. Each draft is tracked per channel and
+    // post, so the same link can wait unsent in several DMs at once.
     const videoToggles = { reddit: "redditVideoUpload", instagram: "instagramVideoUpload", twitter: "twitterVideoUpload" };
     const videos = new Map();
-    function forgetVideo(key) {
-        clearTimeout(videos.get(key)?.timer);
-        videos.delete(key);
+    const draftId = (channelId, key) => `${channelId}:${key}`;
+    function forgetVideo(id) {
+        videos.delete(id);
     }
     // Discord's composer takes pasted files as attachments of the open channel.
+    // It keeps only the first file of a paste, so each file is its own paste.
     function attachFiles(editor, files, channelId) {
         if (window.Lowcord.store("SelectedChannelStore")?.getChannelId?.() !== channelId) return false;
-        const target = editor.isConnected ? editor : document.querySelector('[class*="channelTextArea_"] [contenteditable="true"][role="textbox"]');
+        const target = editor?.isConnected ? editor : document.querySelector('[class*="channelTextArea_"] [contenteditable="true"][role="textbox"]');
         if (!target || target.closest('[role="dialog"]')) return false;
-        const data = new DataTransfer();
-        for (const file of files) data.items.add(file);
-        target.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+        for (const file of files) {
+            const data = new DataTransfer();
+            data.items.add(file);
+            target.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+        }
         return true;
+    }
+    // Attaches a finished download to its draft. If the user has moved to
+    // another channel, the files wait until they come back to it.
+    function deliver(editor, entry, files, message) {
+        if (attachFiles(editor, files, entry.channelId)) {
+            entry.names = files.map(file => file.name);
+            entry.pending = null;
+            toast(message);
+        } else if (window.Lowcord.store("SelectedChannelStore")?.getChannelId?.() !== entry.channelId) {
+            entry.pending = { files, message };
+            watchChannels();
+        }
+    }
+    let watchingChannels = false;
+    function watchChannels() {
+        const store = window.Lowcord.store("SelectedChannelStore");
+        if (watchingChannels || !store?.addChangeListener) return;
+        watchingChannels = true;
+        store.addChangeListener(() => {
+            const channelId = store.getChannelId?.();
+            const waiting = [...videos.values()].filter(entry => entry.pending && entry.channelId === channelId);
+            if (!waiting.length) return;
+            // The channel's composer mounts after the store changes.
+            let tries = 0;
+            const retry = () => {
+                if (store.getChannelId?.() !== channelId) return;
+                for (const entry of waiting) if (entry.pending) deliver(null, entry, entry.pending.files, entry.pending.message);
+                if (waiting.some(entry => entry.pending) && ++tries < 40) setTimeout(retry, 100);
+            };
+            setTimeout(retry, 100);
+        });
     }
     function prepareVideo(editor, link) {
         const target = links.parse(link);
         const native = window.__LOWCORD_NATIVE__;
         const channelId = window.Lowcord.store("SelectedChannelStore")?.getChannelId?.();
-        if (!target || !channelId || !videoToggles[target.site] || videos.has(target.key)) return;
+        const id = target && channelId ? draftId(channelId, target.key) : null;
+        if (!id || !videoToggles[target.site] || videos.has(id)) return;
         const videoOn = enabled(videoToggles[target.site]) && Boolean(native?.socialVideo);
         const photosOn = enabled("socialPhotoUpload") && Boolean(native?.socialMedia && native.socialPost);
         if (!videoOn && !photosOn) return;
         const service = links.sites[target.site].name;
-        const entry = { key: target.key, service, kind: "video", names: null, timer: setTimeout(() => forgetVideo(target.key), 15 * 60_000) };
+        const entry = { id, key: target.key, channelId, service, kind: "video", names: null };
         entry.work = (async () => {
             // A single-video post downloads as a video, any other post with
             // media as photos (and the videos of a carousel).
@@ -197,7 +233,7 @@
             let post = null;
             try { post = await native.socialPost?.(link); } catch {}
             if (post && !(post.media?.length === 1 && post.media[0].type === "video")) {
-                if (photosOn && post.media?.length) await preparePhotos(editor, link, channelId, entry, post);
+                if (photosOn && post.media?.length) await preparePhotos(editor, link, entry, post);
                 return;
             }
             if (!videoOn) return;
@@ -210,7 +246,7 @@
             let result;
             try { result = await native.socialVideo(link, uploadLimit()); }
             catch { result = { error: "failed" }; }
-            if (videos.get(target.key) !== entry || result?.error === "not-video") return;
+            if (videos.get(id) !== entry || result?.error === "not-video") return;
             if (result?.gif) entry.kind = "GIF";
             if (result?.error === "too-large") { toast(`This ${service} ${entry.kind} is too large to upload, so the link will be sent.`, true); return; }
             if (!(result?.data instanceof Uint8Array)) { toast(`Couldn’t download that ${service} ${entry.kind}, so the link will be sent.`, true); return; }
@@ -218,24 +254,25 @@
             if (result.gif) {
                 let gif = null;
                 try { gif = await window.Lowcord.gif?.fromVideo(result.data, uploadLimit()); } catch {}
-                if (videos.get(target.key) !== entry) return;
+                if (videos.get(id) !== entry) return;
                 if (!gif) { toast(`Couldn’t make that ${service} GIF small enough to upload, so the link will be sent.`, true); return; }
                 file = new File([gif], result.name.replace(/\.mp4$/, ".gif"), { type: "image/gif" });
             }
             file = anonymousFile(file);
-            if (attachFiles(editor, [file], channelId)) { entry.names = [file.name]; toast(`${service} ${entry.kind} attached. It will be sent instead of the link.`); }
-        })().finally(() => { entry.done = true; if (!entry.names) forgetVideo(target.key); });
-        // Bound memory: only a few downloads are tracked at once.
-        if (videos.size >= 3) forgetVideo(videos.keys().next().value);
-        videos.set(target.key, entry);
+            deliver(editor, entry, [file], `${service} ${entry.kind} attached. It will be sent instead of the link.`);
+        })().finally(() => { entry.done = true; if (!entry.names && !entry.pending) forgetVideo(id); });
+        // An entry holds only file names (Discord keeps the files), and lasts
+        // until its draft is sent; the bound covers drafts left behind.
+        if (videos.size >= 30) forgetVideo(videos.keys().next().value);
+        videos.set(id, entry);
     }
-    async function preparePhotos(editor, link, channelId, entry, post) {
+    async function preparePhotos(editor, link, entry, post) {
         const { service } = entry;
         const count = post.media.length;
         const photos = post.media.every(item => item.type === "image");
         const many = count > 1;
         entry.kind = photos ? (many ? "photos" : "photo") : "carousel";
-        const these = many && photos ? `These ${service} photos are` : `This ${service} ${entry.kind} is`;
+        const these = many ? `One of the ${service} ${photos ? "photos" : "carousel’s items"} is` : `This ${service} photo is`;
         // Discord takes at most 10 files per message.
         if (count > 10) { toast(`This ${service} post has more than 10 items, so the link will be sent.`, true); return; }
         entry.video = true;
@@ -246,7 +283,7 @@
         let result;
         try { result = await window.__LOWCORD_NATIVE__.socialMedia(link, uploadLimit()); }
         catch { result = { error: "failed" }; }
-        if (videos.get(entry.key) !== entry || result?.error === "not-media") return;
+        if (videos.get(entry.id) !== entry || result?.error === "not-media") return;
         if (result?.error === "too-large") { toast(`${these} too large to upload, so the link will be sent.`, true); return; }
         if (result?.error === "too-many") { toast(`This ${service} post has more than 10 items, so the link will be sent.`, true); return; }
         const files = Array.isArray(result?.files) ? result.files.filter(file => file?.data instanceof Uint8Array) : [];
@@ -255,12 +292,12 @@
             return;
         }
         const attached = files.map(file => anonymousFile(new File([file.data], file.name, { type: file.type })));
-        if (attachFiles(editor, attached, channelId)) {
-            entry.names = attached.map(file => file.name);
-            toast(`${service} ${entry.kind} attached. ${entry.plural ? "They" : "It"} will be sent instead of the link.`);
-        }
+        deliver(editor, entry, attached, `${service} ${entry.kind} attached. ${entry.plural ? "They" : "It"} will be sent instead of the link.`);
     }
-    const composerVideos = text => links.collect(text, 10).map(target => videos.get(target.key)).filter(Boolean);
+    const composerVideos = text => {
+        const channelId = window.Lowcord.store("SelectedChannelStore")?.getChannelId?.();
+        return links.collect(text, 10).map(target => videos.get(draftId(channelId, target.key))).filter(Boolean);
+    };
     // A send before the download finishes waits for it, then sends with the file.
     window.addEventListener("keydown", event => {
         if (!videos.size || event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
@@ -364,11 +401,11 @@
     function withoutVideoLinks(data) {
         const names = new Set((data.attachments ?? []).map(attachment => attachment.filename));
         if (!videos.size || typeof data.content !== "string" || !names.size) return false;
-        const sent = new Set();
-        for (const [key, entry] of videos) if (entry.names?.some(name => names.has(name))) sent.add(key);
-        if (!sent.size) return false;
-        data.content = links.mapUrls(data.content, value => sent.has(links.parse(value)?.key) ? "" : null).trim();
-        sent.forEach(forgetVideo);
+        const sent = [...videos.values()].filter(entry => entry.names?.some(name => names.has(name)));
+        if (!sent.length) return false;
+        const keys = new Set(sent.map(entry => entry.key));
+        data.content = links.mapUrls(data.content, value => keys.has(links.parse(value)?.key) ? "" : null).trim();
+        sent.forEach(entry => forgetVideo(entry.id));
         return true;
     }
 

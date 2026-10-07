@@ -411,8 +411,8 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         throw Object.assign(new Error('Unsupported link'), { code: 'not-video' });
     }
 
-    // A photo post or carousel as files: every item, in order, together within
-    // one message's upload limit. Discord takes at most 10 attachments.
+    // A photo post or carousel as files: every item, in order, each within
+    // Discord's per-file upload limit. Discord takes at most 10 attachments.
     const fileTypes = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'video/mp4': 'mp4' };
     function sniff(data, declared) {
         const ascii = (start, end) => data.subarray(start, end).toString('latin1');
@@ -437,17 +437,15 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
             : /\/comments\/(\w+)/.exec(post.url ?? '')?.[1];
         const prefix = `${target.site === 'twitter' ? 'x' : target.site}-${id ?? 'post'}`;
         const files = [];
-        let left = limit;
-        // One at a time, so the shared budget bounds memory as well as the upload.
+        // One at a time, so memory holds one download in flight.
         for (const [index, source] of sources.entries()) {
             const response = await fetchPage(source.url, { credentials: 'omit', redirect: 'follow',
                 headers: { 'user-agent': browser, ...source.headers }, signal: AbortSignal.timeout(120_000) });
             const declared = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? '';
             if (!response.ok || !(response.url || source.url).startsWith('https:') || /html|xml|javascript/.test(declared)) { await response.body?.cancel().catch(() => {}); throw new Error(`HTTP ${response.status}`); }
-            const data = await read(response, left);
+            const data = await read(response, limit);
             const type = sniff(data, declared);
             if (!type) throw new Error('Unknown file type');
-            left -= data.length;
             files.push({ name: `${prefix}${sources.length > 1 ? `-${index + 1}` : ''}.${fileTypes[type]}`, type, data });
         }
         return { files };

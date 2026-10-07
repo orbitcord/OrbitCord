@@ -124,7 +124,7 @@ test('X and Reddit GIFs loop in the card and download flagged as GIFs', async ()
     expect([reddit.gif, Buffer.from(reddit.data).toString()]).toEqual([true, 'DASH_480.mp4']);
 });
 
-test('a photo carousel downloads every item as a typed file within one limit', async () => {
+test('a photo carousel downloads every item as a typed file within the per-file limit', async () => {
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
     const png = Buffer.from('\x89PNG\r\n\x1a\n1234', 'latin1');
     const tweet = media => async (url, init) => {
@@ -313,7 +313,17 @@ test.describe('Videos as files', () => {
             // Discord's composer takes pasted files as attachments.
             window.attached = [];
             editor.addEventListener('paste', event => { for (const file of event.clipboardData.files) attached.push(file.name); });
-            const stores = { SelectedChannelStore: { getChannelId: () => channel } };
+            // Switching channels swaps the composer's draft, as in Discord.
+            const channelListeners = new Set();
+            window.drafts = {};
+            window.switchChannel = id => {
+                drafts[channel] = { text: editor.textContent, attached };
+                channel = id;
+                editor.textContent = drafts[id]?.text ?? '';
+                attached = drafts[id]?.attached ?? [];
+                channelListeners.forEach(listener => listener());
+            };
+            const stores = { SelectedChannelStore: { getChannelId: () => channel, addChangeListener: fn => channelListeners.add(fn) } };
             Object.defineProperty(Lowcord, 'store', { configurable: true, value: name => stores[name] });
             window.pasteText = text => {
                 editor.focus();
@@ -414,14 +424,46 @@ test.describe('Videos as files', () => {
                 return Promise.resolve({ files: [1, 2, 3].map(index => ({ name: `x-1-${index}.jpg`, type: 'image/jpeg', data: new Uint8Array(4) })) });
             },
         }; });
+        // Discord keeps only the first file of a paste, so each photo is its own paste.
+        await page.evaluate(() => {
+            window.pasteSizes = [];
+            document.getElementById('composer').addEventListener('paste', event => { if (event.clipboardData.files.length) pasteSizes.push(event.clipboardData.files.length); });
+        });
         await page.evaluate(tweet => pasteText(tweet), tweet);
         await expect.poll(() => page.evaluate(() => attached)).toEqual(Array(3).fill(expect.stringMatching(/^[a-z]{7}\.jpg$/)));
+        expect(await page.evaluate(() => pasteSizes)).toEqual([1, 1, 1]);
         expect(await page.evaluate(() => window.mediaRequest)).toEqual({ url: tweet, limit: 10 * 1024 * 1024 });
         await expect(page.locator('.lowcord-toast')).toContainText('X photos attached');
         await page.evaluate(() => sendMessage());
         const body = await lastMessage(page);
         expect(body.content).toBe('');
         expect(body.attachments).toHaveLength(3);
+    });
+
+    test('the same link waits unsent in two DMs, and a DM left mid-download gets its files on return', async ({ page }) => {
+        await page.evaluate(() => {
+            window.finishers = [];
+            window.__LOWCORD_NATIVE__ = {
+                socialPost: async () => ({ media: [{ type: 'video' }] }),
+                socialVideo: () => new Promise(resolve => finishers.push(() => resolve({ name: 'x-1.mp4', type: 'video/mp4', data: new Uint8Array(4) }))),
+            };
+        });
+        const first = await page.evaluate(() => channel);
+        await page.evaluate(tweet => pasteText(tweet), tweet);
+        await expect.poll(() => page.evaluate(() => finishers.length)).toBe(1);
+        // Leave before the download finishes; the same link goes into a second DM.
+        await page.evaluate(() => switchChannel('424242'));
+        await page.evaluate(tweet => pasteText(tweet), tweet);
+        await expect.poll(() => page.evaluate(() => finishers.length)).toBe(2);
+        await page.evaluate(() => finishers.forEach(finish => finish()));
+        await expect.poll(() => page.evaluate(() => attached)).toEqual([expect.stringMatching(/^[a-z]{7}\.mp4$/)]);
+        await page.evaluate(() => sendMessage());
+        expect(await lastMessage(page)).toMatchObject({ content: '', attachments: [{ id: '0' }] });
+        // Back in the first DM, its own file joins the draft and the link is dropped.
+        await page.evaluate(first => switchChannel(first), first);
+        await expect.poll(() => page.evaluate(() => attached)).toEqual([expect.stringMatching(/^[a-z]{7}\.mp4$/)]);
+        await page.evaluate(() => sendMessage());
+        expect(await lastMessage(page)).toMatchObject({ content: '', attachments: [{ id: '0' }] });
     });
 
     test('the photos toggle and posts over 10 items keep the link', async ({ page }) => {
