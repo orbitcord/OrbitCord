@@ -7,8 +7,9 @@ function setupLowcordChatAppearance() {
     // original Storage object from before that happens.
     const storage = Lowcord.storage;
     const optionsKey = "lowcord.dmChatAppearance";
+    // A null text color means automatic: black or white, whichever reads better.
     const defaults = { style: "bubbles", outgoingPosition: "right", timestamps: true, outgoingColor: "#006be6", incomingColor: "#3a3a3c",
-        dms: true, groupDms: true };
+        outgoingTextColor: null, incomingTextColor: null, dms: true, groupDms: true };
     // Matches the CSS: 16px gutter, plus a 28px face and 8px gap in avatar style.
     const gutter = 16, face = 36;
     function normalizeOptions(value) {
@@ -18,6 +19,7 @@ function setupLowcordChatAppearance() {
             outgoingPosition: ["left", "right"].includes(value?.outgoingPosition) ? value.outgoingPosition : defaults.outgoingPosition,
             timestamps: typeof value?.timestamps === "boolean" ? value.timestamps : defaults.timestamps,
             outgoingColor: color("outgoingColor"), incomingColor: color("incomingColor"),
+            outgoingTextColor: color("outgoingTextColor"), incomingTextColor: color("incomingTextColor"),
             ...Object.fromEntries(["dms", "groupDms"].map(key =>
                 [key, typeof value?.[key] === "boolean" ? value[key] : defaults[key]])) };
     }
@@ -37,6 +39,9 @@ function setupLowcordChatAppearance() {
     } catch {}
     let options = readOptions();
     // Pick the more readable foreground for either user-selected bubble color.
+    function textColorsFor(value) {
+        return { incoming: value.incomingTextColor ?? foreground(value.incomingColor), outgoing: value.outgoingTextColor ?? foreground(value.outgoingColor) };
+    }
     function foreground(hex) {
         const channels = hex.slice(1).match(/../g).map(value => {
             const channel = parseInt(value, 16) / 255;
@@ -48,9 +53,9 @@ function setupLowcordChatAppearance() {
     const changeEvent = "lowcord-chat-appearance-change";
     const marker = "data-lowcord-bubble";
     const attributes = [marker, "data-lowcord-media", "data-lowcord-align", "data-lowcord-show-author", "data-lowcord-continuation",
-        "data-lowcord-cluster", "data-lowcord-emoji", "data-lowcord-style", "data-lowcord-actions", "data-lowcord-timed", "data-lowcord-caption"];
+        "data-lowcord-cluster", "data-lowcord-emoji", "data-lowcord-style", "data-lowcord-actions", "data-lowcord-timed", "data-lowcord-caption", "data-lowcord-fit"];
     const properties = ["--lowcord-bubble-color", "--lowcord-bubble-text", "--lowcord-reply-max-width", "--lowcord-actions-max-width",
-        "--lowcord-actions-inset", "--lowcord-actions-top", "--lowcord-actions-bridge-height"];
+        "--lowcord-actions-inset", "--lowcord-actions-top", "--lowcord-actions-bridge-height", "--lowcord-actions-shift", "--lowcord-fit"];
     const stores = new Map();
     // The pending nonce leaves MessageStore before React replaces its row.
     // Keep that row's last message until the DOM identity changes. Weak keys
@@ -83,7 +88,9 @@ function setupLowcordChatAppearance() {
     // An upload in progress is a list item of its own, not a chat-messages row.
     const uploaderSelector = '[data-list-item-id^="chat-messages___Uploader"]';
     function clearBubbles() {
-        document.querySelectorAll("[data-lowcord-uploader]").forEach(node => node.removeAttribute("data-lowcord-uploader"));
+        document.querySelectorAll("[data-lowcord-uploader]").forEach(node => {
+            node.removeAttribute("data-lowcord-uploader"); node.removeAttribute("data-lowcord-style");
+        });
         resizeObserver.disconnect();
         resizedTimelines.clear();
         mediaObserver.disconnect();
@@ -294,6 +301,64 @@ function setupLowcordChatAppearance() {
         setProperty(surface, "--lowcord-actions-bridge-height", `${Math.max(bubbleBounds.height, barBounds.height)}px`);
     }
 
+    // Media rows span the timeline, so Discord's toolbar stays at the far right.
+    // Left-aligned media pulls it back over the content's top-right corner,
+    // where Discord puts it for right-hand messages. A translate keeps
+    // Discord's own anchoring and vertical offset intact.
+    function placeMediaActions(surface, alignment) {
+        const actions = surface.querySelector(':scope > [class*="buttonContainer_"], :scope > [class*="buttons_"]');
+        const bar = actions && (actions.querySelector('[class*="buttonsInner_"]') ?? actions).getBoundingClientRect();
+        if (alignment !== "left" || !bar?.width) { surface.style.removeProperty("--lowcord-actions-shift"); return; }
+        const surfaceBounds = surface.getBoundingClientRect();
+        let left = Infinity, right = -Infinity;
+        const measure = node => {
+            const rect = node.getBoundingClientRect();
+            if (!rect.width || !rect.height || rect.width >= surfaceBounds.width - 1) return false;
+            left = Math.min(left, rect.left); right = Math.max(right, rect.right);
+            return true;
+        };
+        for (const box of surface.querySelectorAll(accessoriesSelector)) for (const item of box.children) {
+            if (item.matches('[class*="reactions_"], [class*="messageContent_"]')) continue;
+            // The grid column is wider than its picture; prefer the media itself.
+            const inner = item.matches(".lowcord-social-card") ? [] : [...item.querySelectorAll(mediaSelector)];
+            if (!inner.map(measure).some(Boolean)) measure(item);
+        }
+        const text = surface.querySelector(':scope > [class*="contents_"] > [class*="messageContent_"]');
+        if (text && surface.hasAttribute("data-lowcord-caption")) measure(text);
+        else if (text && surface.getAttribute("data-lowcord-emoji") === "true") text.querySelectorAll("img").forEach(measure);
+        if (!Number.isFinite(right)) { surface.style.removeProperty("--lowcord-actions-shift"); return; }
+        const current = parseFloat(surface.style.getPropertyValue("--lowcord-actions-shift")) || 0;
+        const target = Math.max(right, left + bar.width);
+        setProperty(surface, "--lowcord-actions-shift", `${Math.min(0, Math.round(target - (bar.right - current)))}px`);
+    }
+
+    // A wrapped bubble is as wide as its longest possible line, so a long
+    // message can end in a wide gap. Fit wrapped bubbles to their widest
+    // line: release every width, read all of them in one layout, then write.
+    function fitBubbles(entries) {
+        for (const { surface } of entries) surface.removeAttribute("data-lowcord-fit");
+        const widths = entries.map(({ surface }) => wrappedWidth(surface));
+        entries.forEach(({ surface }, i) => {
+            if (!widths[i]) { surface.style.removeProperty("--lowcord-fit"); return; }
+            setProperty(surface, "--lowcord-fit", `${widths[i]}px`);
+            surface.setAttribute("data-lowcord-fit", "");
+        });
+    }
+    function wrappedWidth(surface) {
+        const text = surface.querySelector(':scope > [class*="contents_"] > [class*="messageContent_"]');
+        // Code blocks and tables scroll inside the bubble; leave them be.
+        if (!text || text.querySelector("pre, table")) return 0;
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        const rects = [...range.getClientRects()].filter(rect => rect.width && rect.height);
+        if (!rects.length || !rects.some(rect => rect.top >= rects[0].bottom - 2)) return 0;
+        const left = text.getBoundingClientRect().left;
+        let right = Math.max(...rects.map(rect => rect.right));
+        // Reactions sit inside the bubble too; never cut them off.
+        surface.querySelectorAll('[class*="reactions_"] > *').forEach(node => { right = Math.max(right, node.getBoundingClientRect().right); });
+        return Math.ceil(right - left) + 1;
+    }
+
     function apply(entry, channel) {
         const { row, surface, message, side, alignment, media } = entry;
         const avatars = options.style === "avatars";
@@ -306,6 +371,7 @@ function setupLowcordChatAppearance() {
             surface.removeAttribute("data-lowcord-media");
             surface.removeAttribute("data-lowcord-emoji");
             surface.removeAttribute("data-lowcord-caption");
+            surface.style.removeProperty("--lowcord-actions-shift");
             clearAccessories(surface);
             setAttribute(surface, marker, side);
         }
@@ -397,10 +463,14 @@ function setupLowcordChatAppearance() {
         const format = Intl.DateTimeFormat().resolvedOptions();
         const nextTimeContext = `${format.locale}:${format.timeZone}`;
         if (timeContext !== nextTimeContext) { timeContext = nextTimeContext; timeCache = new WeakMap(); fullRefresh = true; }
-        const nextColors = `${options.incomingColor}:${options.outgoingColor}`;
-        if (colorKey !== nextColors) { colorKey = nextColors; textColors = { incoming: foreground(options.incomingColor), outgoing: foreground(options.outgoingColor) }; }
+        const nextColors = `${options.incomingColor}:${options.outgoingColor}:${options.incomingTextColor}:${options.outgoingTextColor}`;
+        if (colorKey !== nextColors) { colorKey = nextColors; textColors = textColorsFor(options); }
         if (fullRefresh || structureChanged) {
-            document.querySelectorAll(uploaderSelector).forEach(node => setAttribute(node, "data-lowcord-uploader", options.outgoingPosition));
+            // The card uses the media gutter, so it doesn't jump sideways when the upload lands.
+            document.querySelectorAll(uploaderSelector).forEach(node => {
+                setAttribute(node, "data-lowcord-uploader", options.outgoingPosition);
+                setAttribute(node, "data-lowcord-style", options.style);
+            });
             const previous = orderedRows;
             orderedRows = [...document.querySelectorAll('[id^="chat-messages-"]')];
             const present = new Set(orderedRows);
@@ -440,9 +510,11 @@ function setupLowcordChatAppearance() {
         // Read widths before writing padding, colors, avatars and timestamps.
         for (const entry of work) entry.width = entry.row.clientWidth;
         for (const entry of work) apply(entry, channel);
+        fitBubbles(work.filter(entry => !entry.media));
         for (const entry of work) if (!entry.media) placeActions(entry.surface, entry.row, entry.alignment);
         const seenMedia = new Set();
         for (const entry of work) if (entry.media) alignAccessories(entry.surface, entry.side === "outgoing" && entry.alignment === "right", seenMedia);
+        for (const entry of work) if (entry.media) placeMediaActions(entry.surface, entry.alignment);
         for (const media of observedMedia) {
             if (!media.isConnected || (changed.has(media.closest('[id^="chat-messages-"]')) && !seenMedia.has(media))) {
                 mediaObserver.unobserve(media); observedMedia.delete(media);
@@ -537,19 +609,53 @@ function setupLowcordChatAppearance() {
         const h = React.createElement;
         const [state, setState] = React.useState(() => ({ enabled, ...options }));
         const [error, setError] = React.useState("");
+        // A theme can color the bubbles instead of the colors chosen here.
+        const themes = window.__lowcordThemes;
+        const themeState = () => {
+            const current = themes?.state;
+            const theme = current?.bubbles ? themes.catalog.find(entry => entry.id === current.id) ?? null : null;
+            return theme;
+        };
+        const [theme, setTheme] = React.useState(themeState);
         React.useEffect(() => {
             const update = () => setState({ enabled, ...options });
+            const updateTheme = () => setTheme(themeState());
             window.addEventListener(changeEvent, update);
-            return () => window.removeEventListener(changeEvent, update);
+            if (themes) window.addEventListener(themes.changeEvent, updateTheme);
+            return () => {
+                window.removeEventListener(changeEvent, update);
+                if (themes) window.removeEventListener(themes.changeEvent, updateTheme);
+            };
         }, []);
         const save = callback => { try { callback(); setError(""); } catch (failure) { setError(failure.message); } };
         const toggle = (title, description, checked, onChange) => h("label", { className: "lowcord-chat-toggle" },
             h("span", null, h("strong", null, title), h("span", { className: "lowcord-chat-description" }, description)),
             h("input", { type: "checkbox", role: "switch", checked, onChange: event => save(() => onChange(event.target.checked)) }));
-        const colorControl = (key, title) => h("label", { className: "lowcord-color-control" }, h("span", null, title),
-            h("span", { className: "lowcord-color-value" },
-                h("input", { type: "color", value: state[key], "aria-label": title,
-                    onChange: event => save(() => setOptions({ [key]: event.target.value })) }), h("code", null, state[key].toUpperCase())));
+        // The colors on screen: the theme's while it colors the bubbles. The
+        // first edit takes them over as the user's own, so nothing jumps.
+        const colors = theme ? theme.bubbles : state;
+        const ink = { outgoing: colors.outgoingTextColor ?? foreground(colors.outgoingColor),
+            incoming: colors.incomingTextColor ?? foreground(colors.incomingColor) };
+        const setColors = value => save(() => {
+            setOptions(theme ? { ...theme.bubbles, ...value } : value);
+            if (theme) themes.set({ bubbles: false });
+        });
+        const swatch = (key, label, value) => h("span", { className: "lowcord-color-swatch", style: { "--lowcord-swatch": value } },
+            h("input", { type: "color", value, "aria-label": label, onChange: event => setColors({ [key]: event.target.value }) }));
+        const colorCard = (side, title) => {
+            const bubbleKey = `${side}Color`, textKey = `${side}TextColor`, auto = colors[textKey] == null;
+            return h("div", { className: "lowcord-color-card" },
+                h("div", { className: "lowcord-color-card-header" }, h("strong", null, title),
+                    h("span", { className: "lowcord-color-sample", "aria-hidden": true,
+                        style: { background: colors[bubbleKey], color: ink[side] } }, "Aa")),
+                h("div", { className: "lowcord-color-row" }, h("span", { className: "lowcord-color-label" }, "Bubble"),
+                    swatch(bubbleKey, `${title} bubble color`, colors[bubbleKey]), h("code", null, colors[bubbleKey].toUpperCase())),
+                h("div", { className: "lowcord-color-row" }, h("span", { className: "lowcord-color-label" }, "Text"),
+                    swatch(textKey, `${title} text color`, ink[side]), h("code", null, ink[side].toUpperCase()),
+                    auto ? h("span", { className: "lowcord-color-auto" }, "Auto")
+                        : h("button", { type: "button", className: "lowcord-color-auto", "aria-label": `Use automatic text color for ${title.toLowerCase()}`,
+                            onClick: () => setColors({ [textKey]: null }) }, "Auto")));
+        };
         const avatars = state.enabled && state.style === "avatars";
         const example = (side, name, texts, time, quote) => h("div", { className: `lowcord-preview-group ${side}` },
             state.enabled && quote ? h("div", { className: "lowcord-preview-quote" },
@@ -572,22 +678,31 @@ function setupLowcordChatAppearance() {
                             h("input", { type: "radio", name: "lowcord-bubble-style", value, checked: state.style === value,
                                 onChange: () => save(() => setOptions({ style: value })) }),
                             h("span", null, h("strong", null, title), h("span", { className: "lowcord-chat-description" }, description))))),
+                h("label", { className: "lowcord-position-control" },
+                    h("span", null, h("strong", null, "Bubble side"),
+                        h("span", { className: "lowcord-chat-description" }, "Where your messages sit. Received messages stay on the left.")),
+                    h("select", { value: state.outgoingPosition, "aria-label": "Bubble side", onChange: event => save(() => setOptions({ outgoingPosition: event.target.value })) },
+                        h("option", { value: "right" }, "Right"), h("option", { value: "left" }, "Left"))),
                 h("div", { className: "lowcord-chat-preview", "data-bubbles": String(state.enabled), "data-style": state.style,
                     "data-outgoing-position": state.outgoingPosition,
-                    style: { "--lowcord-outgoing-color": state.outgoingColor, "--lowcord-outgoing-text": foreground(state.outgoingColor),
-                        "--lowcord-incoming-color": state.incomingColor, "--lowcord-incoming-text": foreground(state.incomingColor) },
+                    style: { "--lowcord-outgoing-color": colors.outgoingColor, "--lowcord-outgoing-text": ink.outgoing,
+                        "--lowcord-incoming-color": colors.incomingColor, "--lowcord-incoming-text": ink.incoming },
                     "aria-label": "Message layout preview" },
                     example("incoming", "Alex", ["Hey! How’s your day going?"], "10:41 AM"),
                     example("outgoing", "You", ["Pretty good!", "What about you?"], "10:42 AM", "Hey! How’s your day going?")),
                 h("div", { className: "lowcord-color-settings" },
-                    colorControl("outgoingColor", "Your messages"), colorControl("incomingColor", "Received messages"),
-                    h("button", { type: "button", onClick: () => save(() => setOptions({ outgoingColor: defaults.outgoingColor, incomingColor: defaults.incomingColor })) }, "Reset colors")),
+                    h("div", { className: "lowcord-color-heading" },
+                        h("span", null, h("strong", null, "Colors"), h("span", { className: "lowcord-chat-description" }, theme
+                            ? `Showing ${theme.name}’s colors. Change one to make them your own.`
+                            : "Text is set automatically for contrast until you pick a color.")),
+                        h("button", { type: "button", onClick: () => setColors({ outgoingColor: defaults.outgoingColor, incomingColor: defaults.incomingColor,
+                            outgoingTextColor: null, incomingTextColor: null }) }, "Reset colors")),
+                    h("div", { className: "lowcord-color-cards" }, colorCard("outgoing", "Your messages"), colorCard("incoming", "Received messages"))),
                 toggle("Show timestamps", "Show the time under the last message of each group.", state.timestamps, value => setOptions({ timestamps: value })),
                 h("div", { className: "lowcord-channel-settings" },
                     h("h3", null, "Where to use bubbles"),
                     toggle("Direct messages", "One-to-one conversations.", state.dms, value => setOptions({ dms: value })),
                     toggle("Group messages", "Keep sender names visible in group DMs.", state.groupDms, value => setOptions({ groupDms: value })))),
-            h("p", { className: "lowcord-chat-description" }, "Changes apply immediately and are saved on this device."),
             error ? h("p", { role: "alert" }, error) : null);
     }
     ChatAppearanceSettings.displayName = "Chat Appearance";

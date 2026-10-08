@@ -1,0 +1,356 @@
+/* OrbitCord themes. themes.js writes each theme's --oc-* palette; this file
+   maps that palette onto Discord's own design tokens, then adds a short block
+   of signature details per theme. Only the shared block and the active
+   theme's block are ever in the page.
+
+   Keeping themes free:
+   - Colors travel through custom properties. Nothing is restyled by script.
+   - A Discord class-substring selector only appears as the element being
+     styled, never as an ancestor, so Discord's own class changes recalculate
+     one element rather than a subtree.
+   - No backdrop-filter on large panels, no fixed backgrounds (they repaint on
+     every scroll), and no animation that keeps running. */
+
+/* Discord declares its semantic tokens on the root and again on every themed
+   container (.theme-dark, .theme-light, …). Each is redeclared here. The
+   palette's derived tints live in the same rule, so a region can override
+   one palette color and every token follows. */
+:root[data-orbitcord-theme].theme-dark, :root[data-orbitcord-theme].theme-light,
+:root[data-orbitcord-theme].theme-darker, :root[data-orbitcord-theme].theme-midnight,
+:root[data-orbitcord-theme] .theme-dark, :root[data-orbitcord-theme] .theme-light,
+:root[data-orbitcord-theme] .theme-darker, :root[data-orbitcord-theme] .theme-midnight {
+    --oc-tint-1: color-mix(in srgb, var(--oc-text) 5%, transparent);
+    --oc-tint-2: color-mix(in srgb, var(--oc-text) 8%, transparent);
+    --oc-tint-3: color-mix(in srgb, var(--oc-text) 12%, transparent);
+    --oc-tint-4: color-mix(in srgb, var(--oc-text) 18%, transparent);
+    --oc-text-subtle: color-mix(in srgb, var(--oc-text) 72%, var(--oc-muted));
+    --oc-accent-soft: color-mix(in srgb, var(--oc-accent) 16%, transparent);
+
+    /* Surfaces, lowest to highest. */
+    --app-frame-background: var(--oc-frame);
+    --app-frame-border: var(--oc-rule);
+    --background-base-lowest: var(--oc-frame);
+    --background-base-lower: var(--oc-chat);
+    --background-base-low: var(--oc-surface);
+    --background-surface-high: var(--oc-surface);
+    --background-surface-higher: var(--oc-raised);
+    --background-surface-highest: var(--oc-raised);
+    --background-secondary-alt: var(--oc-surface);
+    --bg-surface-raised: var(--oc-surface);
+    --chat-background: var(--oc-chat);
+    --chat-background-default: var(--oc-surface);
+    --channeltextarea-background: var(--oc-surface);
+    --card-background-default: var(--oc-surface);
+    --card-secondary-bg: var(--oc-tint-1);
+    --card-primary-pressed-bg: var(--oc-raised);
+    --card-secondary-pressed-bg: var(--oc-raised);
+    --embed-background: var(--oc-surface);
+    --embed-background-alternate: var(--oc-surface);
+    --modal-background: var(--oc-raised);
+    --modal-footer-background: var(--oc-surface);
+    --panel-bg: var(--oc-sidebar);
+    --home-background: var(--oc-chat);
+    --background-code: var(--oc-code);
+    --background-mod-muted: var(--oc-tint-1);
+    --background-mod-subtle: var(--oc-tint-2);
+    --background-mod-normal: var(--oc-tint-3);
+    --background-mod-strong: var(--oc-tint-4);
+    --background-scrim: var(--oc-scrim);
+    --context-menu-backdrop-background: var(--oc-scrim);
+    --input-background-default: var(--oc-input);
+    --spoiler-hidden-background: color-mix(in srgb, var(--oc-muted) 70%, var(--oc-surface));
+    --spoiler-hidden-background-hover: color-mix(in srgb, var(--oc-muted) 85%, var(--oc-surface));
+    --spoiler-revealed-background: var(--oc-tint-2);
+
+    /* Lines. */
+    --border-muted: var(--oc-tint-1);
+    --border-subtle: var(--oc-hairline);
+    --border-normal: var(--oc-border);
+    --border-strong: color-mix(in srgb, var(--oc-text) 32%, transparent);
+    --border-focus: var(--oc-accent);
+    --chat-border: var(--oc-hairline);
+    --card-border-default: var(--oc-hairline);
+    --input-border-default: var(--oc-hairline);
+    --input-border-hover: color-mix(in srgb, var(--oc-text) 28%, transparent);
+    --input-border-active: var(--oc-accent);
+    --spine-default: var(--oc-border);
+    --thread-channel-spine: var(--oc-border);
+    --shadow-border: 0 0 0 1px var(--oc-hairline);
+
+    /* Text and icons. */
+    --text-strong: var(--oc-text);
+    --text-default: var(--oc-text);
+    --text-subtle: var(--oc-text-subtle);
+    --text-muted: var(--oc-muted);
+    --text-link: var(--oc-link);
+    --text-brand: var(--oc-link);
+    --text-invert: var(--oc-chat);
+    --chat-text-muted: var(--oc-muted);
+    --channels-default: var(--oc-muted);
+    --channel-icon: var(--oc-muted);
+    --channel-text-area-placeholder: var(--oc-muted);
+    --input-placeholder-text-default: var(--oc-muted);
+    --input-text-default: var(--oc-text);
+    --input-icon-default: var(--oc-muted);
+    --textbox-markdown-syntax: var(--oc-muted);
+    --app-message-embed-secondary-text: var(--oc-muted);
+    --logo-primary: var(--oc-text);
+    --navigator-header-tint: var(--oc-text);
+    --icon-strong: var(--oc-text);
+    --icon-default: var(--oc-text);
+    --icon-subtle: var(--oc-text-subtle);
+    --icon-muted: var(--oc-muted);
+    --icon-brand: var(--oc-link);
+    --icon-link: var(--oc-link);
+    --icon-invert: var(--oc-chat);
+    --interactive-text-default: var(--oc-text-subtle);
+    --interactive-text-hover: var(--oc-text);
+    --interactive-text-active: var(--oc-text);
+    --interactive-icon-default: var(--oc-text-subtle);
+    --interactive-icon-hover: var(--oc-text);
+    --interactive-icon-active: var(--oc-text);
+    --interactive-muted: color-mix(in srgb, var(--oc-muted) 55%, transparent);
+
+    /* Rows, hover and selection. */
+    --interactive-background-default: var(--oc-tint-1);
+    --interactive-background-hover: var(--oc-tint-2);
+    --interactive-background-active: var(--oc-tint-3);
+    --interactive-background-selected: var(--oc-tint-3);
+    --message-background-hover: var(--oc-tint-1);
+    --message-highlight-background-default: color-mix(in srgb, var(--oc-accent) 10%, transparent);
+    --message-highlight-background-hover: color-mix(in srgb, var(--oc-accent) 14%, transparent);
+    --message-mentioned-background-default: var(--oc-mention);
+    --message-mentioned-background-hover: color-mix(in srgb, var(--oc-mention), var(--oc-text) 4%);
+    --mention-background: var(--oc-mention-pill);
+    --mention-foreground: var(--oc-mention-ink);
+    --keyword-highlight-background: color-mix(in srgb, var(--oc-accent) 28%, transparent);
+    --reaction-background-default: var(--oc-tint-1);
+    --reaction-background-hover: var(--oc-tint-2);
+    --reaction-border-default: var(--oc-hairline);
+    --reaction-background-reacted-default: var(--oc-accent-soft);
+    --reaction-background-reacted-hover: color-mix(in srgb, var(--oc-accent) 24%, transparent);
+    --reaction-border-reacted-default: var(--oc-accent);
+    --reaction-text-reacted-default: var(--oc-text);
+
+    /* The accent. */
+    --background-brand: var(--oc-accent);
+    --background-accent: var(--oc-accent);
+    --control-brand-foreground: var(--oc-link);
+    --control-brand-foreground-new: var(--oc-link);
+    --control-primary-background-default: var(--oc-accent);
+    --control-primary-background-hover: var(--oc-accent-hover);
+    --control-primary-background-active: var(--oc-accent-hover);
+    --control-primary-border-default: transparent;
+    --control-primary-border-hover: transparent;
+    --control-primary-border-active: transparent;
+    --control-primary-text-default: var(--oc-on-accent);
+    --control-primary-text-hover: var(--oc-on-accent);
+    --control-primary-text-active: var(--oc-on-accent);
+    --control-primary-icon-default: var(--oc-on-accent);
+    --control-primary-icon-hover: var(--oc-on-accent);
+    --control-primary-icon-active: var(--oc-on-accent);
+    --control-secondary-background-default: var(--oc-tint-2);
+    --control-secondary-background-hover: var(--oc-tint-3);
+    --control-secondary-background-active: var(--oc-tint-4);
+    --control-secondary-border-default: var(--oc-hairline);
+    --control-secondary-border-hover: var(--oc-hairline);
+    --control-secondary-border-active: var(--oc-hairline);
+    --control-secondary-text-default: var(--oc-text);
+    --control-secondary-text-hover: var(--oc-text);
+    --control-secondary-text-active: var(--oc-text);
+    --control-secondary-icon-default: var(--oc-text);
+    --control-secondary-icon-hover: var(--oc-text);
+    --control-secondary-icon-active: var(--oc-text);
+    --control-icon-only-icon-default: var(--oc-text-subtle);
+    --control-icon-only-icon-hover: var(--oc-text);
+    --control-icon-only-icon-active: var(--oc-text);
+    --control-icon-only-background-hover: var(--oc-tint-2);
+    --control-icon-only-background-active: var(--oc-tint-3);
+    --interactive-accent-background-default: var(--oc-tint-3);
+    --interactive-accent-background-hover: var(--oc-accent);
+    --interactive-accent-background-active: var(--oc-accent-hover);
+    --interactive-accent-background-selected: var(--oc-accent);
+    --checkbox-background-selected-default: var(--oc-accent);
+    --checkbox-background-selected-hover: var(--oc-accent-hover);
+    --checkbox-border-selected-default: var(--oc-accent);
+    --checkbox-border-selected-hover: var(--oc-accent-hover);
+    --radio-background-selected-default: var(--oc-accent);
+    --radio-background-selected-hover: var(--oc-accent-hover);
+    --radio-border-selected-default: var(--oc-accent);
+    --radio-border-selected-hover: var(--oc-accent-hover);
+    --switch-background-selected-default: var(--oc-accent);
+    --switch-background-selected-hover: var(--oc-accent-hover);
+    --switch-thumb-background-selected-default: var(--oc-on-accent);
+    --switch-thumb-icon-active: var(--oc-accent);
+    --tabs-indicator-default: var(--oc-accent);
+    --tabs-indicator-overlay: var(--oc-text);
+    --progressbar-indicator-background: var(--oc-accent);
+
+    /* Status. */
+    --status-danger: var(--oc-danger);
+    --status-positive: var(--oc-success);
+    --status-online: var(--oc-success);
+    --status-speaking: var(--oc-success);
+    --status-warning: var(--oc-warning);
+    --text-feedback-critical: var(--oc-danger);
+    --text-feedback-positive: var(--oc-success);
+    --text-feedback-warning: var(--oc-warning);
+    --icon-feedback-critical: var(--oc-danger);
+    --icon-feedback-positive: var(--oc-success);
+    --icon-feedback-warning: var(--oc-mention-rule);
+    --text-status-online: var(--oc-success);
+    --text-status-idle: var(--oc-warning);
+    --text-status-dnd: var(--oc-danger);
+    --text-status-offline: var(--oc-muted);
+    --icon-status-online: var(--oc-success);
+    --icon-status-idle: var(--oc-warning);
+    --icon-status-dnd: var(--oc-danger);
+    --icon-status-offline: var(--oc-muted);
+    --control-critical-primary-background-default: var(--oc-danger);
+    --control-critical-primary-background-hover: color-mix(in srgb, var(--oc-danger), #000 10%);
+    --control-critical-primary-background-active: color-mix(in srgb, var(--oc-danger), #000 18%);
+
+    /* Scrollbars stay quiet. */
+    --scrollbar-auto-thumb: var(--oc-tint-4);
+    --scrollbar-auto-track: transparent;
+    --scrollbar-thin-thumb: var(--oc-tint-4);
+    --scrollbar-thin-track: transparent;
+    --scrollbar-auto-scrollbar-color-thumb: var(--oc-tint-4);
+    --scrollbar-auto-scrollbar-color-track: transparent;
+}
+
+:root[data-orbitcord-theme] {
+    --oc-hairline: color-mix(in srgb, var(--oc-border) 80%, transparent);
+    /* The frame's own dividers, under the title bar and between columns. */
+    --oc-rule: var(--oc-hairline);
+    --oc-input: color-mix(in srgb, var(--oc-frame) 45%, transparent);
+    --oc-mention-pill: color-mix(in srgb, var(--oc-accent) 18%, transparent);
+    --oc-mention-ink: var(--oc-link);
+    --oc-mention-rule: var(--oc-accent);
+    /* Discord's gradient hooks, the ones its own Nitro themes use: the
+       channel list sits a step above the frame, the member list beside it. */
+    --background-gradient-high: var(--oc-sidebar);
+    --custom-channel-members-bg: var(--oc-sidebar);
+    /* Discord retired these names; OrbitCord's own pages still read them. */
+    --text-normal: var(--oc-text);
+    --header-primary: var(--oc-text);
+    --header-secondary: var(--oc-muted);
+    --interactive-normal: var(--oc-text-subtle);
+    --interactive-hover: var(--oc-text);
+    --interactive-active: var(--oc-text);
+    --background-primary: var(--oc-chat);
+    --background-secondary: var(--oc-sidebar);
+    --background-tertiary: var(--oc-frame);
+    --background-floating: var(--oc-raised);
+    --background-modifier-hover: color-mix(in srgb, var(--oc-text) 8%, transparent);
+    --background-modifier-selected: color-mix(in srgb, var(--oc-text) 12%, transparent);
+    --background-modifier-accent: color-mix(in srgb, var(--oc-text) 18%, transparent);
+    --brand-500: var(--oc-accent);
+    --brand-560: var(--oc-accent-hover);
+    /* Corners scale from the theme's radius; pills and avatars stay round. */
+    --radius-xs: calc(var(--oc-radius) * .5);
+    --radius-sm: var(--oc-radius);
+    --radius-md: calc(var(--oc-radius) * 1.25);
+    --radius-lg: calc(var(--oc-radius) * 1.6);
+}
+:root[data-orbitcord-theme][data-orbitcord-theme-fonts] {
+    /* Every typeface renders at Discord's own x-height, so text keeps one
+       size across themes whichever fallback font a machine has. */
+    font-size-adjust: ex-height var(--oc-x-height);
+    --font-primary: var(--oc-font);
+    --font-display: var(--oc-font-display);
+    --font-headline: var(--oc-font-display);
+    --font-code: var(--oc-font-code);
+}
+/* Set once on the root: highlights inherit. A universal ::selection rule
+   would be matched against every element on every style recalc. */
+:root[data-orbitcord-theme]::selection { background-color: var(--oc-selection); }
+
+/* Regions. The server rail can have a color of its own. A
+   selected server's initials sit on the accent, so they take its ink. */
+:root[data-orbitcord-theme] nav[class*="guilds_"] { background-color: var(--oc-rail); --white: var(--oc-on-accent); }
+
+/* OrbitCord's chat bubbles in the theme's colors, over the user's own. */
+:root[data-orbitcord-theme-bubbles] [data-lowcord-bubble="outgoing"],
+:root[data-orbitcord-theme-bubbles] [data-lowcord-media="outgoing"] {
+    --lowcord-bubble-color: var(--oc-bubble-out) !important;
+    --lowcord-bubble-text: var(--oc-bubble-out-text) !important;
+}
+:root[data-orbitcord-theme-bubbles] [data-lowcord-bubble="incoming"],
+:root[data-orbitcord-theme-bubbles] [data-lowcord-media="incoming"] {
+    --lowcord-bubble-color: var(--oc-bubble-in) !important;
+    --lowcord-bubble-text: var(--oc-bubble-in-text) !important;
+}
+:root[data-orbitcord-theme-bubbles] .lowcord-chat-preview {
+    --lowcord-outgoing-color: var(--oc-bubble-out) !important;
+    --lowcord-outgoing-text: var(--oc-bubble-out-text) !important;
+    --lowcord-incoming-color: var(--oc-bubble-in) !important;
+    --lowcord-incoming-text: var(--oc-bubble-in-text) !important;
+}
+
+/* OrbitCord's own controls put white on the accent; some accents are light. */
+:root[data-orbitcord-theme] :is(.lowcord-button-primary, .lowcord-segmented button[aria-checked="true"]) { color: var(--oc-on-accent); }
+:root[data-orbitcord-theme] .lowcord-chat-toggle input:checked::before { background: var(--oc-on-accent); }
+:root[data-orbitcord-theme] .lowcord-icon-check path { stroke: var(--oc-on-accent); }
+
+/* @theme fjord */
+/* Nordic slate. The selected channel carries a frost rule at its edge. */
+:root[data-orbitcord-theme="fjord"] { --oc-mention-pill: rgb(136 192 208 / .16); }
+:root[data-orbitcord-theme="fjord"] a[data-list-item-id^="channels___"][aria-current="page"] { box-shadow: inset 2px 0 0 var(--oc-accent); }
+
+/* @theme ember */
+/* Warm charcoal. A faint amber glow rises from under the composer; it is
+   part of the chat panel's background, painted once. */
+:root[data-orbitcord-theme="ember"] { --oc-mention-pill: rgb(232 162 92 / .16); }
+:root[data-orbitcord-theme="ember"] main[class*="chatContent_"] {
+    background: radial-gradient(70% 30% at 50% 108%, rgb(232 162 92 / .07), transparent 70%), var(--oc-chat);
+}
+
+/* @theme moss */
+/* Forest greens. Mentions are marked in wheat rather than the accent. */
+:root[data-orbitcord-theme="moss"] { --oc-mention-rule: #dbbc7f; --oc-mention-pill: rgb(167 192 128 / .18); }
+:root[data-orbitcord-theme="moss"] a[data-list-item-id^="channels___"][aria-current="page"] {
+    --interactive-background-selected: rgb(167 192 128 / .14); --text-strong: #c9dcae; --interactive-text-active: #c9dcae;
+}
+
+/* @theme velvet */
+/* A soft serif for the server name and channel title, over a friendly sans. */
+:root[data-orbitcord-theme="velvet"] { --oc-mention-rule: #eb6f92; --oc-mention-pill: rgb(235 111 146 / .18); --oc-mention-ink: #f3a6bd; }
+:root[data-orbitcord-theme="velvet"][data-orbitcord-theme-fonts] :is([class*="guildBadgeAndName_"] > h2, h1[class*="title_"]) {
+    font-family: var(--oc-font-display); font-style: italic;
+}
+
+/* @theme phosphor */
+/* A terminal: square corners, a block caret, faint
+   scanlines, and a barely-there bloom on the channel title. */
+:root[data-orbitcord-theme="phosphor"] { --button-border-radius: 0; --oc-mention-pill: #4d8dff; --oc-mention-ink: #050506; }
+/* Monospace sets loose; a touch of negative tracking keeps it even. */
+:root[data-orbitcord-theme="phosphor"][data-orbitcord-theme-fonts] { letter-spacing: -.035em; }
+/* Chat bubbles keep their shape but with near-square corners. */
+:root[data-orbitcord-theme="phosphor"] [id^="chat-messages-"] > [data-lowcord-cluster],
+:root[data-orbitcord-theme="phosphor"] .lowcord-chat-preview { --lowcord-radius: 4px; --lowcord-stack: 2px; }
+:root[data-orbitcord-theme="phosphor"] [role="textbox"] { caret-shape: block; caret-color: var(--oc-accent); }
+/* The selected channel is a solid cobalt bar. Its row reads these tokens. */
+:root[data-orbitcord-theme="phosphor"] a[data-list-item-id^="channels___"][aria-current="page"] {
+    --interactive-background-selected: var(--oc-accent); --interactive-text-active: var(--oc-on-accent); --text-strong: var(--oc-on-accent);
+    --channel-icon: var(--oc-on-accent); --icon-strong: var(--oc-on-accent); --interactive-icon-default: var(--oc-on-accent);
+}
+:root[data-orbitcord-theme="phosphor"] h1[class*="title_"] { color: var(--oc-link); text-shadow: 0 0 10px rgb(77 141 255 / .45); }
+:root[data-orbitcord-theme="phosphor"] [id^="message-username-"]::before { content: "<"; color: var(--oc-muted); }
+:root[data-orbitcord-theme="phosphor"] [id^="message-username-"]::after { content: ">"; color: var(--oc-muted); }
+:root[data-orbitcord-theme="phosphor"] time[id^="message-timestamp-"]::before { content: "["; }
+:root[data-orbitcord-theme="phosphor"] time[id^="message-timestamp-"]::after { content: "]"; }
+/* Scanlines and a vignette are painted as the chat panel's own background,
+   under the messages. An overlay above the window would need a compositor
+   layer the size of the window. */
+:root[data-orbitcord-theme="phosphor"] main[class*="chatContent_"] {
+    background:
+        radial-gradient(130% 100% at 50% 40%, transparent 55%, rgb(0 0 0 / .38)),
+        repeating-linear-gradient(to bottom, rgb(255 255 255 / .025) 0 1px, transparent 1px 3px),
+        var(--oc-chat);
+}
+
+/* @theme custom */
+/* The custom theme's Corners choice shapes the chat bubbles too. */
+:root[data-orbitcord-theme="custom"] [id^="chat-messages-"] > [data-lowcord-cluster],
+:root[data-orbitcord-theme="custom"] .lowcord-chat-preview { --lowcord-radius: var(--oc-bubble-radius); --lowcord-stack: var(--oc-bubble-stack); }

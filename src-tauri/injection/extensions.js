@@ -7,6 +7,7 @@
     const catalog = [
         { id: "anonymiseFileNames", title: "Anonymise file names", description: "Uploads get a random 7-letter name. Extensions and spoilers stay." },
         { id: "voiceMessages", title: "Voice messages", description: "Record voice messages from the waveform button." },
+        { id: "chatCapture", title: "Chat screenshots", description: "The camera button in the message bar captures every message from a first to a last one as a single image." },
         { id: "quickReply", title: "Quick reply", description: "Shift + ↑/↓ in an empty box picks a message to reply to. Esc cancels. Replaces Discord’s edit shortcut." },
         { id: "cleanUrls", title: "Clean links", description: "Strips tracking parameters like utm_ and fbclid from links you send." },
         { id: "silentTyping", title: "Silent typing", description: "Hides your typing indicator." },
@@ -1232,5 +1233,5 @@
     window.addEventListener(changeEvent, fixMusicFrames);
     window.Lowcord.extensions = { catalog, enabled, set, setOption, changeEvent,
         get state() { return { ...state }; }, get options() { return { ...options }; },
-        cleanContent, socialContent, anonymous, openRecorder, toast };
+        cleanContent, socialContent, anonymous, openRecorder, toast, progress, ui };
 })();

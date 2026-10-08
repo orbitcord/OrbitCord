@@ -24,6 +24,10 @@
 /* A page shown over Discord's settings content column, beside its sidebar. */
 [class*="content_"]:has(> .lowcord-settings-inline) { position: relative; }
 [class*="content_"]:has(> .lowcord-settings-inline) > [class*="contentHeader_"] button[aria-label="Close"] { position: relative; z-index: 2; }
+/* Discord's page stays mounted underneath. Its own layers (the Nitro table's
+   highlighted column sits at z-index 9) must not paint through, so it gets a
+   stacking context of its own and is hidden while an OrbitCord page shows. */
+[class*="content_"]:has(> .lowcord-settings-inline) > :not(.lowcord-settings-inline, [class*="contentHeader_"]) { isolation: isolate; visibility: hidden; }
 .lowcord-settings-inline {
     position: absolute; inset: 0; z-index: 1; display: flex; box-sizing: border-box;
     background: var(--background-base-low, var(--background-primary, #313338));
@@ -175,11 +179,41 @@
 .lowcord-updates-page progress { width: min(100%, 360px); accent-color: var(--brand-500, #5865f2); }
 .lowcord-voice-record.lowcord-recording { background: var(--status-danger, #da373c); }
 
-.lowcord-voice-button {
+.lowcord-voice-button, .lowcord-capture-button {
     display: grid; place-items: center; width: 32px; height: 44px; margin: 0 2px; padding: 0;
     border: 0; background: transparent; color: var(--interactive-normal, #b5bac1); cursor: pointer;
 }
-.lowcord-voice-button:hover { color: var(--interactive-hover, #dbdee1); }
+.lowcord-voice-button:hover, .lowcord-capture-button:hover { color: var(--interactive-hover, #dbdee1); }
+.lowcord-capture-button:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px; }
+
+/* Chat screenshots: a picking bar over the chat, and the chosen range. */
+.lowcord-capture-bar {
+    position: fixed; z-index: 10001; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px; box-sizing: border-box;
+    max-width: min(520px, calc(100vw - 32px)); padding: 8px 8px 8px 16px; border-radius: 16px;
+    background: rgb(24 25 28 / .9);
+    -webkit-backdrop-filter: blur(18px) saturate(1.5); backdrop-filter: blur(18px) saturate(1.5);
+    border: 1px solid rgb(255 255 255 / .1);
+    box-shadow: 0 14px 36px rgb(0 0 0 / .34), 0 2px 8px rgb(0 0 0 / .2);
+    color: #f2f3f5;
+}
+.lowcord-capture-bar .lowcord-toast-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.lowcord-capture-bar .lowcord-toast-title { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lowcord-capture-bar .lowcord-toast-detail { font-size: 12px; color: #b5bac1; }
+.lowcord-capture-bar .lowcord-button { flex: none; padding: 6px 14px; }
+[data-lowcord-capture-picking] [id^="chat-messages-"] { cursor: crosshair; }
+[data-lowcord-capture-picking] [id^="chat-messages-"][data-lowcord-capture] {
+    background: color-mix(in srgb, var(--brand-500, #5865f2) 16%, transparent);
+    box-shadow: inset 3px 0 0 var(--brand-500, #5865f2);
+}
+/* While capturing, nothing that floats over the chat may land in the picture. */
+[data-lowcord-capturing] [id^="chat-messages-"] { pointer-events: none; }
+[data-lowcord-capturing] :is([class*="buttonContainer_"], [class*="newMessagesBar_"], [class*="jumpToPresentBar_"], [class*="chatGradient_"], .lowcord-toast) {
+    visibility: hidden !important;
+}
+/* While capturing, the bar sits on the channel header: compact, no shadow over the chat. */
+[data-lowcord-capturing] .lowcord-capture-bar { box-shadow: none; padding-block: 4px; }
+[data-lowcord-capturing] .lowcord-capture-bar .lowcord-toast-detail { display: none; }
 
 /* Keep selection inside the message so tightly grouped rows never overlap. */
 [id^="chat-messages-"][data-lowcord-quick-reply] > [data-list-item-id^="chat-messages"] {
@@ -328,3 +362,137 @@
 .lowcord-icon-check { position: absolute; top: 8px; right: 8px; color: var(--brand-500, #5865f2); }
 .lowcord-icon-note { margin: 16px 0 0; font-size: 12px; line-height: 16px; color: var(--text-muted, #949ba4); }
 @media (prefers-reduced-motion: reduce) { .lowcord-icon-option { transition: none; } }
+
+/* Themes page: a grid of miniatures, each drawn in its own palette (the
+   --t-* properties are set per card). */
+.lowcord-themes-page { color: var(--text-default, var(--text-normal, #f2f3f5)); }
+.lowcord-theme-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px 16px; }
+@media (max-width: 760px) { .lowcord-theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.lowcord-theme-card {
+    position: relative; display: flex; flex-direction: column; min-width: 0; padding: 0;
+    border: 0; border-radius: 12px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.lowcord-theme-card:focus-visible { outline: 2px solid var(--border-focus, var(--brand-500, #5865f2)); outline-offset: 4px; }
+.lowcord-theme-preview {
+    --t-line: color-mix(in srgb, var(--t-muted) 50%, transparent);
+    --t-hair: color-mix(in srgb, var(--t-border) 70%, transparent);
+    display: grid; grid-template-columns: 13% 29% minmax(0, 1fr); aspect-ratio: 16 / 10; overflow: hidden;
+    border-radius: 10px; background: var(--t-frame);
+    box-shadow: 0 0 0 1px var(--border-subtle, rgb(148 155 164 / .2)), 0 1px 3px rgb(0 0 0 / .12);
+    transition: box-shadow .18s ease, translate .18s ease;
+}
+.lowcord-theme-card:hover .lowcord-theme-preview { translate: 0 -2px; box-shadow: 0 0 0 1px var(--border-strong, rgb(148 155 164 / .4)), 0 6px 16px rgb(0 0 0 / .16); }
+.lowcord-theme-card:active .lowcord-theme-preview { translate: 0; transition-duration: .06s; }
+.lowcord-theme-card[aria-checked="true"] .lowcord-theme-preview {
+    box-shadow: 0 0 0 2px var(--background-base-low, #313338), 0 0 0 4px var(--brand-500, #5865f2), 0 6px 16px rgb(0 0 0 / .16);
+}
+.lowcord-theme-rail { display: flex; flex-direction: column; align-items: center; gap: 5px; padding-top: 9px; background: var(--t-rail); }
+.lowcord-theme-rail b { width: 56%; aspect-ratio: 1; border-radius: 32%; background: color-mix(in srgb, var(--t-text) 15%, transparent); }
+.lowcord-theme-rail b:first-child { background: var(--t-accent); }
+.lowcord-theme-sidebar { display: flex; flex-direction: column; gap: 7px; padding: 9px 8px; background: var(--t-sidebar); box-shadow: inset 1px 0 0 var(--t-hair); }
+.lowcord-theme-sidebar .lowcord-theme-line:first-child { margin-bottom: 3px; }
+.lowcord-theme-line { display: block; flex: none; height: 4px; border-radius: 2px; background: var(--t-line); }
+.lowcord-theme-line.is-text { background: color-mix(in srgb, var(--t-text) 78%, transparent); }
+.lowcord-theme-line.is-selected { background: color-mix(in srgb, var(--t-text) 72%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--t-text) 12%, transparent); }
+.lowcord-theme-chat { display: flex; flex-direction: column; gap: 7px; min-width: 0; padding: 0 9px 8px; background: var(--t-chat); box-shadow: inset 1px 0 0 var(--t-hair); }
+.lowcord-theme-header { display: flex; align-items: center; flex: none; height: 17px; margin: 0 -9px 1px; padding: 0 9px; box-shadow: inset 0 -1px 0 var(--t-hair); }
+.lowcord-theme-message { display: flex; align-items: flex-start; gap: 5px; }
+.lowcord-theme-message > span { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
+.lowcord-theme-avatar { flex: none; width: 10px; height: 10px; border-radius: 50%; background: color-mix(in srgb, var(--t-accent) 65%, var(--t-muted)); }
+.lowcord-theme-message[data-mention] { margin: -1px -9px; padding: 3px 9px; background: var(--t-mention); box-shadow: inset 2px 0 0 var(--t-accent); }
+.lowcord-theme-composer {
+    display: flex; align-items: center; justify-content: flex-end; flex: none; height: 13px; margin-top: auto; padding: 0 3px;
+    border-radius: min(var(--t-radius), 7px); background: var(--t-surface); box-shadow: inset 0 0 0 1px var(--t-hair);
+}
+.lowcord-theme-composer b { width: 7px; height: 7px; border-radius: 50%; background: var(--t-accent); }
+.lowcord-theme-label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 12px; }
+.lowcord-theme-name { overflow: hidden; font-family: var(--t-font); font-size: 15px; font-weight: 600; line-height: 20px; white-space: nowrap; text-overflow: ellipsis; color: var(--text-strong, #f2f3f5); }
+.lowcord-theme-scheme { flex: none; font-size: 12px; line-height: 16px; color: var(--text-muted, #949ba4); }
+.lowcord-theme-blurb { margin-top: 2px; font-size: 13px; line-height: 18px; color: var(--text-muted, #949ba4); text-wrap: pretty; }
+.lowcord-theme-check { position: absolute; top: 8px; right: 8px; color: var(--brand-500, #5865f2); --lowcord-check-ink: var(--oc-on-accent, #fff); filter: drop-shadow(0 1px 2px rgb(0 0 0 / .3)); }
+/* Each miniature carries its theme's signature. */
+[data-theme-card="fjord"] .lowcord-theme-line.is-selected { box-shadow: -3px 0 0 #88c0d0, 0 0 0 3px rgb(229 233 240 / .1); }
+[data-theme-card="ember"] .lowcord-theme-chat { background: radial-gradient(80% 35% at 50% 110%, rgb(232 162 92 / .16), transparent 70%), var(--t-chat); }
+[data-theme-card="velvet"] .lowcord-theme-name { font-style: italic; }
+[data-theme-card="phosphor"] :is(.lowcord-theme-rail b, .lowcord-theme-avatar, .lowcord-theme-composer b, .lowcord-theme-line) { border-radius: 0; }
+[data-theme-card="phosphor"] .lowcord-theme-line.is-selected { background: #4d8dff; box-shadow: 0 0 0 3px #4d8dff; }
+[data-theme-card="phosphor"] .lowcord-theme-preview { position: relative; }
+[data-theme-card="phosphor"] .lowcord-theme-preview::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(to bottom, rgb(255 255 255 / .035) 0 1px, transparent 1px 3px);
+}
+[data-theme-card="phosphor"] .lowcord-theme-name { color: #7aa9ff; }
+/* Make your own: a card under the grid, three colors and two choices. */
+.lowcord-theme-editor {
+    display: grid; gap: 18px; margin-top: 36px; padding: 20px;
+    border-radius: 12px; background: var(--background-base-lower, var(--background-secondary, #2b2d31));
+    box-shadow: inset 0 0 0 1px var(--border-subtle, rgb(148 155 164 / .16));
+    transition: box-shadow .18s ease;
+}
+.lowcord-theme-editor[data-active="true"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand-500, #5865f2) 55%, transparent); }
+.lowcord-theme-editor h3, .lowcord-theme-options h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.lowcord-theme-editor-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.lowcord-theme-editor-head .lowcord-chat-description { margin-top: 4px; font-size: 13px; }
+.lowcord-theme-use {
+    flex: none; height: 32px; padding: 0 14px; border: 0; border-radius: 8px; cursor: pointer;
+    font: inherit; font-size: 14px; font-weight: 500; white-space: nowrap;
+    background: var(--brand-500, #5865f2); color: #fff; transition: filter .15s;
+}
+.lowcord-theme-use:hover { filter: brightness(1.08); }
+:root[data-orbitcord-theme] .lowcord-theme-use { color: var(--oc-on-accent); }
+.lowcord-theme-colors { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.lowcord-theme-color {
+    position: relative; display: flex; align-items: center; min-width: 0; padding: 12px; border-radius: 10px;
+    background: var(--background-mod-subtle, rgb(148 155 164 / .08));
+}
+.lowcord-theme-color-pick { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; cursor: pointer; }
+.lowcord-theme-color .lowcord-color-swatch { width: 34px; height: 34px; border-radius: 10px; }
+.lowcord-theme-color-text { display: grid; gap: 2px; min-width: 0; }
+.lowcord-theme-color-text strong { font-size: 14px; line-height: 18px; }
+.lowcord-theme-color-text code { font-size: 12px; line-height: 16px; color: var(--text-muted, #949ba4); font-variant-numeric: tabular-nums; }
+.lowcord-theme-color .lowcord-color-auto { flex: none; margin-left: 8px; }
+.lowcord-theme-editor-row {
+    display: flex; align-items: center; gap: 16px; padding-top: 16px;
+    border-top: 1px solid var(--border-subtle, rgb(148 155 164 / .16));
+}
+.lowcord-theme-editor-label { flex: none; width: 84px; font-size: 13px; font-weight: 500; color: var(--text-muted, #949ba4); }
+.lowcord-theme-seeds { display: flex; flex-wrap: wrap; gap: 6px; }
+.lowcord-theme-seed {
+    display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px 0 6px;
+    border: 0; border-radius: 14px; cursor: pointer; font: inherit; font-size: 13px;
+    color: var(--text-default, var(--text-normal, #f2f3f5)); background: transparent;
+    box-shadow: inset 0 0 0 1px var(--border-subtle, rgb(148 155 164 / .3));
+    transition: background-color .15s, box-shadow .15s;
+}
+.lowcord-theme-seed:hover { background: var(--background-mod-subtle, rgb(148 155 164 / .12)); }
+.lowcord-theme-seed[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--brand-500, #5865f2); }
+.lowcord-theme-seed b {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: radial-gradient(circle, var(--seed-accent) 0 3.5px, var(--seed-background) 4.5px);
+    box-shadow: inset 0 0 0 1px rgb(128 128 128 / .35);
+}
+.lowcord-theme-editor .lowcord-segmented button { display: inline-flex; align-items: center; gap: 7px; }
+.lowcord-theme-corner {
+    width: 9px; height: 9px; border: solid currentColor; border-width: 2px 0 0 2px; border-top-left-radius: var(--corner);
+    translate: 1px 1px;
+}
+.lowcord-theme-seed:focus-visible, .lowcord-theme-use:focus-visible, .lowcord-theme-color-pick:has(input:focus-visible) .lowcord-color-swatch {
+    outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px;
+}
+@media (max-width: 760px) {
+    .lowcord-theme-colors { grid-template-columns: 1fr; }
+    .lowcord-theme-editor-row { flex-direction: column; align-items: flex-start; gap: 10px; }
+}
+.lowcord-theme-options { display: grid; gap: 22px; margin-top: 36px; padding-top: 24px; border-top: 1px solid var(--border-subtle, rgb(78 80 88 / .48)); }
+.lowcord-theme-typeface .lowcord-position-control { margin-bottom: 12px; }
+.lowcord-theme-typeface select { min-width: 180px; }
+.lowcord-font-sample { margin: 0; padding: 12px 14px; border-radius: 8px; font-size: 15px; line-height: 1.4;
+    background: var(--background-base-lower, var(--background-secondary, #2b2d31)); color: var(--text-default, var(--text-normal, #f2f3f5)); }
+.lowcord-theme-options .lowcord-chat-toggle { transition: opacity .15s; }
+.lowcord-theme-options .lowcord-chat-toggle[data-off="true"] { opacity: .5; cursor: default; }
+.lowcord-theme-options .lowcord-chat-toggle[data-off="true"] input { cursor: default; }
+@media (prefers-reduced-motion: reduce) {
+    .lowcord-theme-preview, .lowcord-theme-editor, .lowcord-theme-seed, .lowcord-theme-options .lowcord-chat-toggle { transition: none; }
+}
+/* A theme switch cross-fades the window once. */
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .3s; animation-timing-function: ease; }

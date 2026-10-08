@@ -14,6 +14,8 @@
     } catch {}
     const style = document.createElement("style");
     style.id = "lowcord-boot";
+    // A theme repaints this with its own frame color.
+    window.__lowcordBootStyle = style;
     style.textContent = `html,body,#app-mount{background:${light ? "#ffffff" : "#313338"}!important;color-scheme:${light ? "light" : "dark"}}`;
     const attach = () => {
         const parent = document.head || document.documentElement;

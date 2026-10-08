@@ -30,7 +30,7 @@ const routes = {
     "/media/dash-audio.mp4": ["video/mp4", await readFile("tests/fixtures/media/dash-audio.mp4")],
     "/favicon.ico": ["image/x-icon", ""]
 };
-for (const file of ["discord.js", "extensions.js", "gif.js", "music-embeds.js", "social-embeds.js", "settings.js", "lowcord-ui.css"]) {
+for (const file of ["discord.js", "extensions.js", "chat-capture.js", "gif.js", "music-embeds.js", "social-embeds.js", "settings.js", "themes.js", "themes.css", "lowcord-ui.css"]) {
     routes[`/injection/${file}`] = [file.endsWith(".css") ? "text/css" : "text/javascript", await readFile(`src-tauri/injection/${file}`)];
 }
 // A stand-in Discord API that records exactly what reached the network.

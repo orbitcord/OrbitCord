@@ -4,6 +4,8 @@
 function setupLowcordSettings() {
     if (window.__lowcordOpenSettings) return;
     const pages = [
+        { id: "themes", title: "Themes", icon: "M12 3a9 9 0 1 0 0 18c1.5 0 2.2-1.2 1.6-2.4l-.3-.7c-.6-1.2.3-2.4 1.6-2.4H17a4 4 0 0 0 4-4c0-4.4-4-8.5-9-8.5ZM7.5 12.5a1 1 0 1 0 0-.01M9.5 8a1 1 0 1 0 0-.01M14.5 8a1 1 0 1 0 0-.01",
+            component: () => window.__lowcordThemes?.SettingsPanel },
         { id: "appearance", title: "Chat Appearance", icon: "M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 4V6a2 2 0 0 1 2-2Z",
             component: () => window.__lowcordChatAppearance?.SettingsPanel },
         { id: "icon", title: "Icon", icon: "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm4 6.5a1.5 1.5 0 1 0 0 .01M21 16l-5-5L5 21",

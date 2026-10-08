@@ -1,6 +1,7 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, session, screen, dialog, desktopCapturer, protocol, net, shell } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, session, screen, dialog, desktopCapturer, protocol, net, shell, clipboard, ClipboardItem } = require('electron');
 const { join } = require('node:path');
 const { readFileSync, writeFileSync } = require('node:fs');
+const { writeFile } = require('node:fs/promises');
 const { NativeBackend } = require('./native.cjs');
 const { migrateProfile } = require('./profile.cjs');
 const { setupEmbedPlugins } = require('./embed-plugins.cjs');
@@ -323,6 +324,44 @@ async function start() {
         if (typeof url !== 'string' || url.length > 2048) throw new Error('Invalid link');
         try { return await socialPosts.socialMedia(url, limit); }
         catch (error) { return { error: error.code ?? 'failed' }; }
+    });
+    // Chat screenshots. The page captures only its own window, one visible
+    // screenful at a time; files are written only where the user picks.
+    ipcMain.handle('lowcord:capture-region', async (event, rect) => {
+        assertSender(event);
+        const [width, height] = mainWindow.getContentSize();
+        const { x, y, width: w, height: h } = rect ?? {};
+        if (![x, y, w, h].every(Number.isInteger) || x < 0 || y < 0 || w < 1 || h < 1) throw new Error('Invalid region');
+        // The page measures CSS pixels; capturePage takes window points.
+        const zoom = mainWindow.webContents.getZoomFactor();
+        const region = { x: Math.round(x * zoom), y: Math.round(y * zoom), width: Math.round(w * zoom), height: Math.round(h * zoom) };
+        region.width = Math.min(region.width, width - region.x);
+        region.height = Math.min(region.height, height - region.y);
+        if (region.width < 1 || region.height < 1) throw new Error('Invalid region');
+        return (await mainWindow.webContents.capturePage(region)).toPNG();
+    });
+    const capturedImage = bytes => {
+        if (!(bytes instanceof Uint8Array) || bytes.length > 256 * 1024 * 1024) throw new Error('Invalid image');
+        const image = nativeImage.createFromBuffer(Buffer.from(bytes));
+        if (image.isEmpty()) throw new Error('Invalid image');
+        return image;
+    };
+    ipcMain.handle('lowcord:copy-image', async (event, bytes) => {
+        assertSender(event);
+        capturedImage(bytes);
+        await clipboard.write([new ClipboardItem({ 'image/png': new Blob([bytes], { type: 'image/png' }) })]);
+    });
+    ipcMain.handle('lowcord:save-image', async (event, bytes, name) => {
+        assertSender(event);
+        capturedImage(bytes);
+        const fileName = typeof name === 'string' ? name.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').trim().slice(0, 80) : '';
+        const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+            title: 'Save chat image', defaultPath: join(app.getPath('pictures'), fileName.endsWith('.png') ? fileName : 'Chat.png'),
+            filters: [{ name: 'PNG image', extensions: ['png'] }],
+        });
+        if (canceled || !filePath) return false;
+        await writeFile(filePath, bytes);
+        return true;
     });
     ipcMain.handle('lowcord:updates-status', event => { assertSender(event); return updates.snapshot(); });
     ipcMain.handle('lowcord:updates-check', event => { assertSender(event); return updates.check(); });

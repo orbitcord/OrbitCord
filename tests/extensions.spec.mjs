@@ -346,3 +346,106 @@ test("OrbitCord section in Discord's settings opens both pages, and toggles save
     await page.evaluate(() => window.__lowcordOpenSettings("extensions"));
     await expect(dialog.getByRole("switch", { name: /Silent typing/ })).not.toBeChecked();
 });
+
+// A chat of solid-coloured rows. The stand-in capture paints exactly what the
+// window shows inside each requested rectangle, so the stitched image proves
+// every message lands once, in order, with no gaps or overlaps.
+async function captureChat(page) {
+    await page.evaluate(() => {
+        const color = i => `rgb(${(i * 6) % 256}, ${255 - ((i * 6) % 256)}, ${(i * 37) % 256})`;
+        document.body.insertAdjacentHTML("beforeend", `<div id="capture-chat" style="position:fixed;inset:0;z-index:5;display:flex;flex-direction:column;background:#313338">
+            <div style="flex:1;position:relative"><div id="capture-scroller" style="position:absolute;inset:0;overflow-y:auto;background:rgb(49, 51, 56)"><ol data-list-id="chat-messages" style="margin:0;padding:0 0 24px;list-style:none">
+            ${Array.from({ length: 40 }, (_, i) => `<li id="chat-messages-7-${i}" style="height:${40 + (i % 3) * 25}px;background:${color(i)}">Message ${i}</li>`).join("")}
+            </ol></div><div class="chatGradient_test" data-overlay style="position:absolute;left:0;right:0;bottom:0;height:16px;pointer-events:none;background:black"></div></div>
+            <div class="channelTextArea_test" data-overlay style="position:relative;height:48px;margin-top:-16px;background:black"><div class="buttons_test" id="capture-buttons"></div></div></div>`);
+        window.rowClicks = 0;
+        document.querySelectorAll("#capture-chat li").forEach(row => row.addEventListener("click", () => window.rowClicks++));
+        window.captures = [];
+        window.__LOWCORD_NATIVE__ = { ...window.__LOWCORD_NATIVE__,
+            async captureRegion(rect) {
+                window.captures.push(rect);
+                const canvas = new OffscreenCanvas(rect.width, rect.height), context = canvas.getContext("2d");
+                context.fillStyle = "rgb(49, 51, 56)"; context.fillRect(0, 0, rect.width, rect.height);
+                for (const row of document.querySelectorAll("#capture-chat li")) {
+                    const r = row.getBoundingClientRect();
+                    context.fillStyle = row.style.background;
+                    context.fillRect(r.left - rect.x, r.top - rect.y, r.width, r.height);
+                }
+                // Overlays paint over the chat, as in a real window: Discord's
+                // message bar and gradient, and the capture bar with its shadow.
+                context.fillStyle = "black";
+                for (const node of document.querySelectorAll("[data-overlay], .lowcord-capture-bar")) {
+                    if (getComputedStyle(node).visibility === "hidden") continue;
+                    const r = node.getBoundingClientRect();
+                    const shadow = node.matches(".lowcord-capture-bar") && getComputedStyle(node).boxShadow !== "none" ? 40 : 0;
+                    context.fillRect(r.left - rect.x, r.top - rect.y, r.width, r.height + shadow);
+                }
+                return new Uint8Array(await (await canvas.convertToBlob()).arrayBuffer());
+            },
+            async copyImage(bytes) { window.copied = bytes; },
+            async saveImage() { return true; } };
+    });
+}
+
+test("chat screenshots stitch the picked range into one image and restore the scroll", async ({ page }) => {
+    await page.setViewportSize({ width: 700, height: 420 });
+    await captureChat(page);
+    const button = page.locator("#capture-buttons .lowcord-capture-button");
+    await expect(button).toHaveAccessibleName("Screenshot messages");
+    await button.click();
+    const bar = page.getByRole("dialog", { name: "Chat screenshot" });
+    await expect(bar).toContainText("Click the first message");
+    await expect(bar.getByRole("button", { name: "Capture" })).toBeDisabled();
+    await page.locator("#chat-messages-7-5").scrollIntoViewIfNeeded();
+    await page.locator("#chat-messages-7-5").click();
+    await expect(bar).toContainText("Click the last message");
+    await page.locator("#chat-messages-7-34").scrollIntoViewIfNeeded();
+    await page.locator("#chat-messages-7-34").click({ position: { x: 300, y: 10 } });
+    await expect(bar).toContainText("30 messages selected");
+    await expect(page.locator('[data-lowcord-capture="range"]')).toHaveCount(30);
+    // Picking must not reach the messages' own handlers.
+    expect(await page.evaluate(() => window.rowClicks)).toBe(0);
+    const scrolled = await page.locator("#capture-scroller").evaluate(node => node.scrollTop);
+    await bar.getByRole("button", { name: "Capture" }).click();
+    await expect.poll(() => page.evaluate(() => Boolean(window.copied))).toBe(true);
+    await expect(bar).toHaveCount(0);
+    await expect(page.locator("[data-lowcord-capture]")).toHaveCount(0);
+    await expect(page.locator(".lowcord-toast")).toContainText("Chat image copied");
+    expect(await page.locator("#capture-scroller").evaluate(node => node.scrollTop)).toBe(scrolled);
+    const result = await page.evaluate(async () => {
+        const bitmap = await createImageBitmap(new Blob([window.copied], { type: "image/png" }));
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height), context = canvas.getContext("2d");
+        context.drawImage(bitmap, 0, 0);
+        const rows = [...document.querySelectorAll("#capture-chat li")].slice(5, 35);
+        const top = rows[0].getBoundingClientRect().top;
+        const misses = [];
+        for (const row of rows) {
+            const r = row.getBoundingClientRect();
+            for (let y = r.top - top + 1; y < r.bottom - top - 1; y += 3) {
+                const [red, green, blue] = context.getImageData(10, Math.floor(y), 1, 1).data;
+                if (`rgb(${red}, ${green}, ${blue})` !== row.style.background) misses.push([row.id, Math.floor(y)]);
+            }
+        }
+        const scroller = document.querySelector("#capture-scroller");
+        return { width: bitmap.width, height: bitmap.height, expected: rows.at(-1).getBoundingClientRect().bottom - top,
+            scrollerWidth: scroller.clientWidth, captures: window.captures.length, misses };
+    });
+    expect(result.misses).toEqual([]);
+    expect(result.height).toBe(Math.round(result.expected));
+    expect(result.width).toBe(result.scrollerWidth);
+    expect(result.captures).toBeGreaterThan(3);
+});
+
+test("chat screenshots cancel with Escape and leave Discord's clicks alone afterwards", async ({ page }) => {
+    await captureChat(page);
+    await page.locator("#capture-buttons .lowcord-capture-button").click();
+    await page.locator("#chat-messages-7-4").click();
+    await expect(page.locator('[data-lowcord-capture="range"]')).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Chat screenshot" })).toHaveCount(0);
+    await expect(page.locator("[data-lowcord-capture]")).toHaveCount(0);
+    await page.locator("#chat-messages-7-1").click();
+    expect(await page.evaluate(() => window.rowClicks)).toBe(1);
+    await setExtension(page, "chatCapture", false);
+    await expect(page.locator(".lowcord-capture-button")).toHaveCount(0);
+});

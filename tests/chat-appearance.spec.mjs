@@ -295,6 +295,41 @@ for (const width of [1000, 520]) for (const theme of ["dark", "light"]) {
     });
 }
 
+for (const style of ["bubbles", "avatars"]) {
+    test(`a reply to an attachment keeps its icon and badge inside the quote, ${style}`, async ({ page }) => {
+        await load(page);
+        await settings(page, { style, outgoingPosition: "right" });
+        await page.evaluate(() => {
+            for (const [id, author] of [[97, "self"], [98, "other"]]) {
+                const row = fixture.add(id, author, '<div class="messageContent_test">love her too</div>', {}, true);
+                // Discord's attachment placeholder, its image icon, a reply
+                // badge and an unrecognised extra, all of which once landed
+                // on the bubble.
+                row.querySelector('.repliedTextPreview_test').innerHTML = '<span class="repliedTextPlaceholder_test">Click to see attachment</span>'
+                    + '<svg class="repliedTextContentIcon_test" width="24" height="24"><rect width="24" height="24" fill="red"/></svg>';
+                row.querySelector('.repliedMessage_test').insertAdjacentHTML("afterbegin",
+                    '<div class="replyBadge_test"><svg width="16" height="16"><rect width="16" height="16"/></svg></div>');
+                row.querySelector('.repliedMessage_test').insertAdjacentHTML("beforeend", '<svg class="extra_test" width="24" height="24"></svg>');
+            }
+        });
+        for (const id of [97, 98]) {
+            const quote = bubble(page, id).locator('.repliedMessage_test');
+            await expect(quote.locator('.repliedTextContentIcon_test')).toBeVisible();
+            const parts = await quote.evaluate(node => {
+                const box = node.getBoundingClientRect(), text = node.parentElement.querySelector('.messageContent_test').getBoundingClientRect();
+                const icon = node.querySelector('.repliedTextContentIcon_test').getBoundingClientRect();
+                const placeholder = node.querySelector('.repliedTextPlaceholder_test').getBoundingClientRect();
+                const visible = [...node.querySelectorAll('*')].filter(child => child.getBoundingClientRect().height > 0);
+                return { inside: visible.every(child => child.getBoundingClientRect().bottom <= Math.min(box.bottom, text.top) + .5),
+                    sameLine: Math.abs(icon.top + icon.height / 2 - (placeholder.top + placeholder.height / 2)) < 2,
+                    extra: getComputedStyle(node.querySelector('.extra_test')).display,
+                    badge: getComputedStyle(node.querySelector('.replyBadge_test')).display };
+            });
+            expect(parts).toEqual({ inside: true, sameLine: true, extra: "none", badge: style === "avatars" ? "flex" : "none" });
+        }
+    });
+}
+
 test("settings controls, persisted position, disable and failed saves", async ({ page }) => {
     await load(page);
     await settings(page, { outgoingPosition: "left" });
@@ -447,6 +482,33 @@ for (const width of [1000, 520]) for (const position of ["left", "right"]) {
         }
         await page.evaluate(() => { document.querySelectorAll(".buttonContainer_test").forEach(node => node.remove()); fixture.toolbar(1, 10); });
         await expect.poll(() => page.locator(".buttonsInner_test").evaluate(node => node.scrollWidth <= node.clientWidth && node.getBoundingClientRect().right <= innerWidth)).toBe(true);
+    });
+}
+
+for (const style of ["bubbles", "avatars"]) {
+    test(`hover toolbar sits on left-aligned media, ${style}`, async ({ page }) => {
+        await load(page);
+        await settings(page, { style, outgoingPosition: "left" });
+        // Incoming image, outgoing image on the left, sticker and captioned image.
+        const rows = { 10: ".imageWrapper_test img", 11: ".imageWrapper_test img", 22: ".sticker_test", 28: ".imageWrapper_test img" };
+        await page.evaluate(ids => ids.forEach(id => fixture.toolbar(id)), Object.keys(rows));
+        for (const [id, media] of Object.entries(rows)) {
+            const row = page.locator(`#chat-messages-100-${id}`);
+            await expect(row.locator(".message_test")).toHaveAttribute("data-lowcord-media", /.+/);
+            await expect.poll(() => row.evaluate((node, media) => {
+                const bar = node.querySelector(".buttonsInner_test").getBoundingClientRect();
+                const content = node.querySelector(media).getBoundingClientRect();
+                return Math.abs(bar.right - Math.max(content.right, content.left + bar.width)) <= 1;
+            }, media)).toBe(true);
+        }
+        // Clicking through the moved toolbar still reaches Discord's handler.
+        await surface(page, 10).scrollIntoViewIfNeeded();
+        const reply = await surface(page, 10).getByLabel("Reply", { exact: true }).boundingBox();
+        const image = await surface(page, 10).locator(".imageWrapper_test img").boundingBox();
+        await page.mouse.move(image.x + 4, image.y + image.height / 2);
+        await page.mouse.move(reply.x + reply.width / 2, reply.y + reply.height / 2, { steps: 20 });
+        await page.mouse.down(); await page.mouse.up();
+        expect(await page.evaluate(() => fixture.replies)).toBe(1);
     });
 }
 
@@ -712,7 +774,11 @@ test("an upload in progress sits on the outgoing side", async ({ page }) => {
     const gap = async () => uploader.evaluate(node => node.getBoundingClientRect().right - node.querySelector(".fileWrapper_test").getBoundingClientRect().right);
     expect(await gap()).toBeLessThanOrEqual(17);
     await expect(uploader.locator(".avatar_test")).toBeHidden();
-    await settings(page, { outgoingPosition: "left" });
+    // Avatar style moves sent media inward by the face column; the card matches.
+    await settings(page, { style: "avatars" });
+    await expect(uploader).toHaveAttribute("data-lowcord-style", "avatars");
+    expect(Math.round(await gap())).toBe(await edge(page.locator('[data-media="image"] [data-lowcord-media="outgoing"]')));
+    await settings(page, { style: "bubbles", outgoingPosition: "left" });
     await expect(uploader).toHaveAttribute("data-lowcord-uploader", "left");
     expect(await gap()).toBeGreaterThan(100);
 });
@@ -743,4 +809,22 @@ test("keycap and subdivision flag emoji show without a bubble", async ({ page })
         window.fixture.add(95, "other", `<div class="messageContent_test">${content}</div>`, { content });
     });
     await expect(page.locator('#chat-messages-100-95 [data-lowcord-emoji="true"]')).toHaveCount(1);
+});
+
+test("the bubble side dropdown moves your bubbles and is saved", async ({ page }) => {
+    await load(page);
+    const side = page.getByRole("combobox", { name: "Bubble side" });
+    await expect(side).toHaveValue("right");
+    await expect(bubble(page, 2)).toHaveAttribute("data-lowcord-align", "right");
+    await side.selectOption("left");
+    await expect(bubble(page, 2)).toHaveAttribute("data-lowcord-align", "left");
+    await expect(bubble(page, 1)).toHaveAttribute("data-lowcord-align", "left");
+    await expect(page.locator(".lowcord-chat-preview")).toHaveAttribute("data-outgoing-position", "left");
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("lowcord.dmChatAppearance")).outgoingPosition)).toBe("left");
+    // Both sides share one left edge.
+    const lefts = await page.locator("#chat-messages-100-1 [data-lowcord-bubble], #chat-messages-100-2 [data-lowcord-bubble]")
+        .evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().left)));
+    expect(lefts[0]).toBe(lefts[1]);
+    await page.getByRole("switch", { name: /Chat bubbles/ }).uncheck();
+    await expect(side).toBeDisabled();
 });
