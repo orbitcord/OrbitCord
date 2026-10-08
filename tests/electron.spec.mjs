@@ -150,9 +150,9 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(browser.userAgent).not.toMatch(/(?:Electron|Lowcord|Datcord|OrbitCord)\//i);
         expect(browser.getUserMedia).toBe('function');
         expect(browser.peerConnection).toBe('function');
-        expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true, extensions: 14, fetchHooked: true });
+        expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true, extensions: 15, fetchHooked: true });
         expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
-            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia'] });
+            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'captureRegion', 'copyImage', 'saveImage'] });
         // Card media loads like <img>/<video> (no CORS) from the privileged scheme;
         // an unhandled scheme would reject instead of answering.
         expect(await page.evaluate(() => fetch('lowcord-media://media/0123456789abcdef01234567', { mode: 'no-cors' }).then(r => r.type))).toBe('opaque');
@@ -441,7 +441,7 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
         await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
         expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
-            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia']);
+            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'captureRegion', 'copyImage', 'saveImage']);
         expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
     } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
 });
@@ -574,6 +574,75 @@ test('text fields get a native edit menu that pastes, and passkey autofill stays
         expect(await app.evaluate(() => !!global.editMenu)).toBe(false);
     } finally {
         await app.evaluate(({ clipboard }) => clipboard.writeText(global.savedText ?? '')).catch(() => {});
+        await app.close();
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('chat screenshots capture real window pixels across scrolling, at page zoom, to the clipboard', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-chat-capture-'));
+    const app = await launch(dir);
+    let clipboardSaved = false;
+    try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('domcontentloaded');
+        await app.evaluate(async ({ BrowserWindow, clipboard, ClipboardItem }) => {
+            const window = BrowserWindow.getAllWindows()[0];
+            window.setContentSize(720, 480);
+            window.show();
+            window.webContents.setZoomFactor(1.25);
+            global.savedClipboard = await Promise.all((await clipboard.read()).filter(item => item.types.length).map(async item =>
+                new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async type =>
+                    [type, await item.getType(type)]))))));
+            clipboard.clear();
+        });
+        clipboardSaved = true;
+        await page.evaluate(() => {
+            const color = i => `rgb(${(i * 50) % 256}, ${(i * 90 + 60) % 256}, ${(i * 130 + 30) % 256})`;
+            document.body.insertAdjacentHTML('beforeend', `<div id="capture-chat" style="position:fixed;inset:0;z-index:5;display:flex;flex-direction:column;background:#313338">
+                <div style="flex:1;position:relative"><div id="capture-scroller" style="position:absolute;inset:0;overflow-y:auto;background:rgb(49, 51, 56)"><ol data-list-id="chat-messages" style="margin:0;padding:0 0 24px;list-style:none">
+                ${Array.from({ length: 30 }, (_, i) => `<li id="chat-messages-7-${i}" style="height:${50 + (i % 3) * 20}px;background:${color(i)}"></li>`).join('')}
+                </ol></div><div class="chatGradient_test" style="position:absolute;left:0;right:0;bottom:0;height:16px;pointer-events:none;background:linear-gradient(transparent, black)"></div></div>
+                <div class="channelTextArea_test" style="position:relative;height:48px;margin-top:-16px;background:black"><div class="buttons_test" id="capture-buttons"></div></div></div>`);
+        });
+        // A native resize and zoom confuse Playwright's pointer geometry, so the
+        // picks are DOM clicks; the pixels below are real window captures.
+        await expect(page.locator('#capture-buttons .lowcord-capture-button')).toHaveCount(1);
+        await page.evaluate(() => document.querySelector('#capture-buttons .lowcord-capture-button').click());
+        for (const id of [3, 24]) await page.evaluate(id => {
+            const row = document.getElementById(`chat-messages-7-${id}`);
+            row.scrollIntoView({ block: 'center' });
+            row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        }, id);
+        await expect(page.locator('.lowcord-capture-bar')).toContainText('22 messages selected');
+        await page.evaluate(() => [...document.querySelectorAll('.lowcord-capture-bar button')].find(b => b.textContent === 'Capture').click());
+        await expect(page.locator('.lowcord-toast')).toContainText('Chat image copied', { timeout: 15000 });
+        const rows = await page.evaluate(() => {
+            const rows = [...document.querySelectorAll('#capture-chat li')].slice(3, 25);
+            const top = rows[0].getBoundingClientRect().top;
+            return { width: document.querySelector('#capture-scroller').clientWidth,
+                list: rows.map(row => { const r = row.getBoundingClientRect(); return { top: r.top - top, height: r.height, color: row.style.background }; }) };
+        });
+        const result = await app.evaluate(async ({ clipboard, screen, nativeImage }, rows) => {
+            const item = (await clipboard.read()).find(item => item.types.includes('image/png'));
+            const image = nativeImage.createFromBuffer(Buffer.from(await (await item.getType('image/png')).arrayBuffer()));
+            const size = image.getSize();
+            const density = size.width / rows.width;
+            const pixel = y => {
+                const [b, g, r] = image.crop({ x: 20, y: Math.floor(y * density), width: 1, height: 1 }).toBitmap();
+                return [r, g, b];
+            };
+            return { size, density, scale: screen.getPrimaryDisplay().scaleFactor,
+                samples: rows.list.flatMap(row => Array.from({ length: Math.floor((row.height - 4) / 4) }, (_, i) => row.top + 2 + i * 4).map(y => ({ want: row.color, got: pixel(y) }))) };
+        }, rows);
+        expect(result.density).toBeCloseTo(1.25 * result.scale, 1);
+        const total = rows.list.at(-1).top + rows.list.at(-1).height;
+        expect(Math.abs(result.size.height - total * result.density)).toBeLessThanOrEqual(2);
+        // Allow for the display colour profile; neighbouring rows differ by far more.
+        const off = result.samples.filter(({ want, got }) => want.match(/\d+/g).map(Number).some((value, i) => Math.abs(value - got[i]) > 14));
+        expect(off).toEqual([]);
+    } finally {
+        if (clipboardSaved) await app.evaluate(({ clipboard }) => clipboard.write(global.savedClipboard));
         await app.close();
         await rm(dir, { recursive: true, force: true });
     }

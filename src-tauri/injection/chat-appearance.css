@@ -43,6 +43,8 @@
     background: var(--lowcord-bubble-color) !important;
     color: var(--lowcord-bubble-text) !important;
 }
+/* Wrapped text fits its widest line (measured in chat-appearance.js). */
+[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-fit] { width: calc(var(--lowcord-fit) + 24px) !important; }
 [id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="right"] {
     margin-left: auto !important;
     margin-right: var(--lowcord-edge) !important;
@@ -112,7 +114,8 @@
 }
 [id^="chat-messages-"] > [data-lowcord-media] > [class*="contents_"] { margin: 0 !important; padding: 0 !important; position: static !important; }
 /* Discord's upload progress card sits on the outgoing side, like the message it becomes. */
-[data-lowcord-uploader] { padding: 2px 16px !important; padding-inline: 16px !important; min-height: 0 !important; }
+[data-lowcord-uploader] { --lowcord-edge: 16px; padding: 2px var(--lowcord-edge) !important; padding-inline: var(--lowcord-edge) !important; min-height: 0 !important; }
+[data-lowcord-uploader][data-lowcord-style="avatars"] { --lowcord-edge: 52px; }
 [data-lowcord-uploader] > [class*="contents_"] { margin: 0 !important; padding: 0 !important; position: static !important; }
 [data-lowcord-uploader] > [class*="contents_"] > :is([class*="avatar_"], [class*="avatarDecoration_"], [class*="decoration_"], [class*="header_"]),
 [data-lowcord-uploader] [class*="avatarDecoration_"] { display: none !important; }
@@ -138,6 +141,7 @@
    are only translated; --lowcord-media-shift is measured from the content. */
 [id^="chat-messages-"] > [data-lowcord-media] .lowcord-media-item { transform: translateX(var(--lowcord-media-shift, 0px)); }
 [id^="chat-messages-"] > [data-lowcord-media="outgoing"][data-lowcord-align="right"] [class*="reactions_"] { justify-content: flex-end; }
+[id^="chat-messages-"] > [data-lowcord-media] > :is([class*="buttonContainer_"], [class*="buttons_"]) { translate: var(--lowcord-actions-shift, 0px) 0; }
 
 /* Footer time under the last message of a group. */
 .lowcord-bubble-time {
@@ -237,29 +241,52 @@
     margin: 0 !important;
     color: var(--text-normal, #f2f3f5) !important;
 }
-:is([data-lowcord-bubble], [data-lowcord-media]) [class*="repliedTextPreview_"] {
+/* The preview is one line: the text (or "Click to see attachment") and,
+   for attachments, Discord's icon after it. */
+:is([data-lowcord-bubble], [data-lowcord-media]) [class*="repliedTextPreview_"],
+[id^="chat-messages-"] > :is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > [class*="repliedText"]:not([class*="Icon_"]) {
     grid-column: var(--lowcord-reply-text-column); grid-row: 2;
-    display: -webkit-box !important;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 1;
+    display: flex !important;
+    align-items: center;
+    gap: 4px;
     min-width: 0 !important;
-    max-width: none !important;
+    max-width: 100% !important;
+    height: 16px !important;
     margin: 0 !important;
     overflow: hidden;
     font-size: 12px !important;
     line-height: 16px !important;
-    white-space: normal !important;
+    white-space: nowrap !important;
     color: var(--text-muted, #949ba4) !important;
 }
-:is([data-lowcord-bubble], [data-lowcord-media]) [class*="repliedTextContent_"] {
-    display: inline !important;
-    white-space: normal !important;
+:is([data-lowcord-bubble], [data-lowcord-media])[data-lowcord-align="right"] [class*="repliedTextPreview_"] { justify-content: flex-end; }
+:is([data-lowcord-bubble], [data-lowcord-media]) [class*="repliedTextPreview_"] > :is([class*="repliedTextContent_"], [class*="repliedTextPlaceholder_"]) {
+    display: block !important;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-height: 16px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap !important;
     font-size: inherit !important;
     line-height: inherit !important;
     color: inherit !important;
 }
+:is([data-lowcord-bubble], [data-lowcord-media]) [class*="repliedTextPreview_"] :is([class*="repliedTextContentIcon_"], svg) {
+    position: static !important;
+    flex: none;
+    width: 16px !important;
+    height: 16px !important;
+    margin: 0 !important;
+}
+/* The quote has two rows. Anything else Discord adds (badges, icons) would
+   fall into new rows over the bubble, so only known parts are shown. */
+[id^="chat-messages-"] > :is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > :not(
+    [class*="username_"], :has([class*="username_"]), [class*="repliedText"]:not([class*="Icon_"]), :has([class*="repliedTextPreview_"]),
+    [class*="replyAvatar_"], :has([class*="replyAvatar_"]), [class*="replyBadge_"]) { display: none !important; }
 :is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > [class*="replyAvatar_"],
-:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > :has([class*="replyAvatar_"]) {
+:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > :has([class*="replyAvatar_"]),
+:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > [class*="replyBadge_"] {
     display: none !important;
     grid-column: var(--lowcord-reply-avatar-column, 1); grid-row: 1 / 3; align-self: center;
 }
@@ -275,7 +302,11 @@
     --lowcord-reply-text-column: 1;
     --lowcord-reply-avatar-column: 2;
 }
-:is([data-lowcord-bubble], [data-lowcord-media])[data-lowcord-style="avatars"] > [class*="repliedMessage_"] > :has([class*="replyAvatar_"]) { display: flex !important; }
+/* Discord's reply badge (an arrow in place of the avatar) takes the avatar's place. */
+:is([data-lowcord-bubble], [data-lowcord-media])[data-lowcord-style="avatars"] > [class*="repliedMessage_"] > :is(:has([class*="replyAvatar_"]), [class*="replyBadge_"]) { display: flex !important; }
+:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > [class*="replyBadge_"] {
+    position: static !important; align-items: center; justify-content: center; width: 20px !important; height: 20px !important; margin: 0 !important;
+}
 :is([data-lowcord-bubble], [data-lowcord-media])[data-lowcord-style="avatars"] [class*="replyAvatar_"] { display: block !important; }
 
 /* The outer action container can have zero width in Discord. Give it an
@@ -330,6 +361,8 @@
 [data-lowcord-bubble][data-lowcord-align="right"][data-lowcord-actions="outside"]::after { left: auto; right: 100%; }
 @media (max-width: 700px) {
     [id^="chat-messages-"] > [data-lowcord-cluster] { --lowcord-gutter: 10px; }
+    [data-lowcord-uploader] { --lowcord-edge: 10px; }
+    [data-lowcord-uploader][data-lowcord-style="avatars"] { --lowcord-edge: 46px; }
     [id^="chat-messages-"] > [data-lowcord-bubble] { max-width: min(84%, 520px, calc(100% - 2 * var(--lowcord-edge))) !important; }
 }
 /* Unbubbled message text must set its own color, or it inherits black and
@@ -368,7 +401,7 @@
 .lowcord-chat-toggle input:checked::before { transform: translateX(16px); }
 .lowcord-chat-toggle input:focus-visible { outline: 3px solid var(--brand-500, #5865f2); outline-offset: 4px; }
 .lowcord-appearance-controls { border: 0; padding: 0; margin: 28px 0 0; min-width: 0; }
-.lowcord-appearance-controls legend { font-weight: 600; font-size: 16px; margin-bottom: 12px; }
+.lowcord-appearance-controls legend { font-weight: 600; font-size: 16px; margin-bottom: 12px; padding: 0; }
 .lowcord-appearance-controls:disabled { opacity: .5; }
 .lowcord-appearance-controls:disabled label, .lowcord-appearance-controls:disabled input { cursor: default; }
 .lowcord-style-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 24px; }
@@ -382,17 +415,51 @@
 .lowcord-style-option input { margin: 2px 0 0; accent-color: var(--brand-500, #5865f2); }
 .lowcord-style-option .lowcord-chat-description { font-size: 12px; margin-top: 5px; }
 .lowcord-position-control { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
-.lowcord-position-control select { color: var(--text-normal, #f2f3f5); background: var(--background-secondary, #2b2d31); border: 1px solid var(--background-modifier-accent, #4e5058); border-radius: 6px; padding: 8px 12px; font: inherit; }
-.lowcord-color-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-bottom: 24px; }
-.lowcord-color-control { flex: 1 1 180px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
-.lowcord-color-value { display: flex; align-items: center; gap: 10px; }
-.lowcord-color-value code { font-size: 12px; color: var(--text-muted, #949ba4); }
-.lowcord-color-value input { width: 44px; height: 32px; padding: 2px; border: 1px solid var(--background-modifier-accent, #4e5058); border-radius: 6px; background: transparent; cursor: pointer; }
-.lowcord-color-settings button { color: var(--text-normal, #f2f3f5); background: var(--background-secondary, #2b2d31); border: 1px solid var(--background-modifier-accent, #4e5058); border-radius: 6px; padding: 8px 12px; cursor: pointer; }
-.lowcord-color-settings button:hover { background: var(--background-modifier-hover, rgba(148, 155, 164, .12)); }
+.lowcord-position-control select {
+    appearance: none; -webkit-appearance: none; box-sizing: border-box; min-width: 96px; height: 36px; margin: 0;
+    padding: 0 34px 0 14px; font: inherit; line-height: 1; cursor: pointer;
+    color: var(--text-normal, #f2f3f5); background-color: var(--background-secondary, #2b2d31);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23b5bac1' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 12px center; background-size: 14px 14px;
+    border: 1px solid var(--background-modifier-accent, #4e5058); border-radius: 8px;
+    transition: border-color 160ms ease, background-color 160ms ease;
+}
+.lowcord-position-control select:hover { border-color: var(--text-muted, #949ba4); }
+.lowcord-position-control select:disabled { cursor: default; }
+/* Colors: one card per side, bubble and text swatches with a live sample. */
+.lowcord-color-settings { margin-bottom: 24px; }
+.lowcord-color-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.lowcord-color-heading strong { font-size: 16px; }
+.lowcord-color-heading .lowcord-chat-description { margin-top: 4px; font-size: 13px; }
+.lowcord-color-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.lowcord-color-card { display: grid; gap: 10px; padding: 14px 16px; border-radius: 10px; background: var(--background-base-lower, var(--background-secondary, #2b2d31)); }
+.lowcord-color-card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 2px; }
+.lowcord-color-card-header strong { font-size: 14px; }
+.lowcord-color-sample { display: grid; place-items: center; min-width: 44px; height: 28px; padding: 0 10px; border-radius: 14px; font-size: 13px; font-weight: 600; }
+.lowcord-color-row { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.lowcord-color-label { width: 52px; font-size: 13px; color: var(--text-muted, #949ba4); }
+.lowcord-color-row code { font-size: 12px; color: var(--text-muted, #949ba4); font-variant-numeric: tabular-nums; }
+/* A round swatch; the native picker opens from the whole circle. */
+.lowcord-color-swatch {
+    position: relative; flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--lowcord-swatch);
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / .14), 0 0 0 1px rgb(0 0 0 / .28);
+}
+.lowcord-color-swatch input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; opacity: 0; cursor: pointer; }
+.lowcord-color-swatch:has(input:focus-visible) { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 3px; }
+.lowcord-color-auto { margin-left: auto; padding: 2px 8px; border: 0; border-radius: 10px; font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .02em;
+    color: var(--text-muted, #949ba4); background: var(--background-mod-subtle, rgb(148 155 164 / .12)); }
+button.lowcord-color-auto { cursor: pointer; background: transparent; box-shadow: inset 0 0 0 1px var(--border-subtle, rgb(148 155 164 / .3)); }
+button.lowcord-color-auto:hover { color: var(--text-default, #f2f3f5); }
+.lowcord-color-heading button {
+    flex: none; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; height: 32px; padding: 0 14px;
+    font: inherit; font-size: 14px; line-height: 1; white-space: nowrap;
+    color: var(--text-default, var(--text-normal, #f2f3f5)); background: transparent;
+    border: 1px solid var(--border-subtle, var(--background-modifier-accent, #4e5058)); border-radius: 8px; cursor: pointer;
+}
+.lowcord-color-heading button:hover { background: var(--background-mod-subtle, rgba(148, 155, 164, .12)); }
+@media (max-width: 600px) { .lowcord-color-cards { grid-template-columns: 1fr; } }
 .lowcord-style-option:focus-within,
 .lowcord-position-control select:focus-visible,
-.lowcord-color-settings input:focus-visible,
 .lowcord-color-settings button:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 3px; }
 
 /* Preview: the same geometry as the timeline, at the same gutters. */

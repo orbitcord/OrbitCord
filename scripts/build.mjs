@@ -53,8 +53,8 @@ export async function prepare(release = false, { platform = process.platform, ar
 export async function buildPreload({ sourceRoot = root, output = join(sourceRoot, '.lowcord'), release = false } = {}) {
     await mkdir(output, { recursive: true });
     const read = file => readFile(join(sourceRoot, 'src-tauri', 'injection', file), 'utf8');
-    const [boot, shim, discord, extensions, background, gif, musicEmbeds, socialEmbeds, appearance, settings, appearanceCSS, uiCSS] = await Promise.all(
-        ['boot.js', 'shim.js', 'discord.js', 'extensions.js', 'background.js', 'gif.js', 'music-embeds.js', 'social-embeds.js', 'chat-appearance.js', 'settings.js', 'chat-appearance.css', 'lowcord-ui.css'].map(read));
+    const [boot, shim, discord, themes, extensions, chatCapture, background, gif, musicEmbeds, socialEmbeds, appearance, settings, themesCSS, appearanceCSS, uiCSS] = await Promise.all(
+        ['boot.js', 'shim.js', 'discord.js', 'themes.js', 'extensions.js', 'chat-capture.js', 'background.js', 'gif.js', 'music-embeds.js', 'social-embeds.js', 'chat-appearance.js', 'settings.js', 'themes.css', 'chat-appearance.css', 'lowcord-ui.css'].map(read));
     // Static function body, serialized by Electron into the page's main world
     // synchronously at document start. No eval, script tag or CSP bypass.
     const socialLinks = await readFile(join(sourceRoot, 'electron', 'social-links.cjs'), 'utf8');
@@ -85,15 +85,19 @@ if (process.isMainFrame && location.protocol !== 'data:') {
         socialPost: url => ipcRenderer.invoke('lowcord:social-post', url),
         socialVideo: (url, limit) => ipcRenderer.invoke('lowcord:social-video', url, limit),
         socialMedia: (url, limit) => ipcRenderer.invoke('lowcord:social-media', url, limit),
+        captureRegion: rect => ipcRenderer.invoke('lowcord:capture-region', rect),
+        copyImage: bytes => ipcRenderer.invoke('lowcord:copy-image', bytes),
+        saveImage: (bytes, name) => ipcRenderer.invoke('lowcord:save-image', bytes, name),
     });
-    contextBridge.executeInMainWorld({ func: function initializeLowcord(chatAppearanceCSS, lowcordUiCSS) {
+    contextBridge.executeInMainWorld({ func: function initializeLowcord(themesCSS, chatAppearanceCSS, lowcordUiCSS) {
         if (window.self !== window.top || window.__LOWCORD_INIT__) return;
         window.__LOWCORD_INIT__ = true;
-        ${boot}\n${shim}\n${discord}\n${socialLinks}\n${musicLinks}\n${extensions}\n${background}\n${gif}\n${musicEmbeds}\n${socialEmbeds}\n${appearance}\n
+        // The theme is applied first, before Discord paints anything.
+        ${boot}\n${shim}\n${discord}\n${themes}\nsetupLowcordThemes();\n${socialLinks}\n${musicLinks}\n${extensions}\n${chatCapture}\n${background}\n${gif}\n${musicEmbeds}\n${socialEmbeds}\n${appearance}\n
         setupLowcordChatAppearance();
         ${settings}\nsetupLowcordSettings();
         ${release ? '' : 'window.__LOWCORD_REPORT__();'}
-    }, args: [${JSON.stringify(appearanceCSS)}, ${JSON.stringify(uiCSS)}] });
+    }, args: [${JSON.stringify(themesCSS)}, ${JSON.stringify(appearanceCSS)}, ${JSON.stringify(uiCSS)}] });
 }`;
     await build({ stdin: { contents, resolveDir: sourceRoot, sourcefile: 'lowcord-preload.js' }, bundle: true,
         platform: 'node', format: 'cjs', external: ['electron'], minify: release, outfile: join(output, 'preload.cjs') });
