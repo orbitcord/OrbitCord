@@ -139,13 +139,16 @@
         if (!editor?.closest('[class*="channelTextArea_"]') || editor.closest('[role="dialog"]')) return;
         const text = event.clipboardData?.getData("text/plain");
         if (!text || /`/.test(editor.value ?? editor.textContent)) return;
-        prepareVideo(editor, text.trim());
+        // A post on its way to becoming files keeps its own link: the send
+        // drops it, or rewrites it if the download fails after all.
+        if (prepareVideo(editor, text.trim())) return;
         if (!enabled("socialEmbeds") && !enabled("musicEmbeds")) return;
         const replacement = musicContent(socialContent(text));
         if (replacement === text) return;
         // If insertion is unavailable, let the original paste through; the
-        // send hook covers it.
-        if (insertText(editor, replacement)) event.preventDefault();
+        // send hook covers it. Discord's editor inserts a paste even after
+        // preventDefault, so the original must not reach it as well.
+        if (insertText(editor, replacement)) { event.preventDefault(); event.stopImmediatePropagation(); }
         // Warm the bounded, shared cache while the user composes their message.
         void checkedSocialContent(replacement);
     }, true);
@@ -170,6 +173,11 @@
     const draftId = (channelId, key) => `${channelId}:${key}`;
     function forgetVideo(id) {
         videos.delete(id);
+    }
+    // Names of the files in a channel's message draft; null when unknown.
+    function draftFiles(channelId) {
+        const uploads = window.Lowcord.store("UploadAttachmentStore")?.getUploads?.(channelId, 0);
+        return Array.isArray(uploads) ? new Set(uploads.map(upload => upload?.filename ?? upload?.item?.file?.name)) : null;
     }
     // Discord's composer takes pasted files as attachments of the open channel.
     // It keeps only the first file of a paste, so each file is its own paste.
@@ -220,18 +228,31 @@
         const native = window.__LOWCORD_NATIVE__;
         const channelId = window.Lowcord.store("SelectedChannelStore")?.getChannelId?.();
         const id = target && channelId ? draftId(channelId, target.key) : null;
-        if (!id || !videoToggles[target.site] || videos.has(id)) return;
+        if (!id || !videoToggles[target.site]) return false;
+        const prior = videos.get(id);
+        if (prior) {
+            // Files the user removed (or a cleared draft) leave a finished
+            // entry behind; pasting the post again must download it again.
+            const inDraft = draftFiles(channelId);
+            if (!prior.done || prior.pending || !inDraft || prior.names?.some(name => inDraft.has(name))) return true;
+            forgetVideo(id);
+        }
         const videoOn = enabled(videoToggles[target.site]) && Boolean(native?.socialVideo);
         const photosOn = enabled("socialPhotoUpload") && Boolean(native?.socialMedia && native.socialPost);
-        if (!videoOn && !photosOn) return;
+        if (!videoOn && !photosOn) return false;
         const service = links.sites[target.site].name;
         const entry = { id, key: target.key, channelId, service, kind: "video", names: null };
+        // Shown at once: finding the post can take a few seconds.
+        entry.status = progress(`Checking the ${service} post…`);
         entry.work = (async () => {
             // A single-video post downloads as a video, any other post with
             // media as photos (and the videos of a carousel).
             // A GIF arrives as an MP4 and is sent as a GIF file.
             let post = null;
             try { post = await native.socialPost?.(link); } catch {}
+            // The lookup failed. The download reads the post again, and
+            // gives files only if the whole post comes back.
+            if (!post && photosOn) { await prepareWhole(editor, link, entry); return; }
             if (post && !(post.media?.length === 1 && post.media[0].type === "video")) {
                 if (photosOn && post.media?.length) await preparePhotos(editor, link, entry, post);
                 return;
@@ -241,7 +262,7 @@
                 entry.video = true;
                 if (post.media[0].gif) entry.kind = "GIF";
                 if (entry.announce) entry.announce();
-                else toast(`Getting the ${service} ${entry.kind}. It will be sent as a ${entry.kind} instead of the link.`);
+                else entry.status.update(`Getting the ${service} ${entry.kind}…`, "It will be sent instead of the link.");
             }
             let result;
             try { result = await native.socialVideo(link, uploadLimit()); }
@@ -252,6 +273,7 @@
             if (!(result?.data instanceof Uint8Array)) { toast(`Couldn’t download that ${service} ${entry.kind}, so the link will be sent.`, true); return; }
             let file = new File([result.data], result.name, { type: "video/mp4" });
             if (result.gif) {
+                if (!entry.announce) entry.status.update(`Making the ${service} GIF…`, "It will be sent instead of the link.");
                 let gif = null;
                 try { gif = await window.Lowcord.gif?.fromVideo(result.data, uploadLimit()); } catch {}
                 if (videos.get(id) !== entry) return;
@@ -260,11 +282,31 @@
             }
             file = anonymousFile(file);
             deliver(editor, entry, [file], `${service} ${entry.kind} attached. It will be sent instead of the link.`);
-        })().finally(() => { entry.done = true; if (!entry.names && !entry.pending) forgetVideo(id); });
+        })().finally(() => { entry.status.end(); entry.done = true; if (!entry.names && !entry.pending) forgetVideo(id); });
         // An entry holds only file names (Discord keeps the files), and lasts
         // until its draft is sent; the bound covers drafts left behind.
         if (videos.size >= 30) forgetVideo(videos.keys().next().value);
         videos.set(id, entry);
+        return true;
+    }
+    async function prepareWhole(editor, link, entry) {
+        const { service } = entry;
+        const native = window.__LOWCORD_NATIVE__;
+        entry.video = true;
+        entry.kind = "post";
+        if (entry.announce) entry.announce();
+        else entry.status.update(`Getting the ${service} post…`, "It will be sent instead of the link.");
+        let result;
+        try { result = await native.socialMedia(link, uploadLimit()); }
+        catch { result = { error: "failed" }; }
+        if (videos.get(entry.id) !== entry) return;
+        const sent = result?.files;
+        const files = Array.isArray(sent) ? sent.filter(file => file?.data instanceof Uint8Array) : [];
+        if (result?.error === "too-large") { toast(`This ${service} post is too large to upload, so the link will be sent.`, true); return; }
+        if (result?.error === "too-many") { toast(`This ${service} post has more than 10 items, so the link will be sent.`, true); return; }
+        if (!files.length || files.length !== sent.length) { toast(`Couldn’t get this ${service} post right now, so the link will be sent.`, true); return; }
+        const attached = files.map(file => anonymousFile(new File([file.data], file.name, { type: file.type })));
+        deliver(editor, entry, attached, `${service} post attached. It will be sent instead of the link.`);
     }
     async function preparePhotos(editor, link, entry, post) {
         const { service } = entry;
@@ -277,9 +319,10 @@
         if (count > 10) { toast(`This ${service} post has more than 10 items, so the link will be sent.`, true); return; }
         entry.video = true;
         entry.plural = many && photos;
-        const sent = entry.plural ? "They will be sent as files" : `It will be sent as ${many ? "files" : "a file"}`;
+        entry.count = count;
+        const what = photos ? (many ? `${count} ${service} photos` : `the ${service} photo`) : `the ${service} carousel’s ${count} items`;
         if (entry.announce) entry.announce();
-        else toast(`Getting the ${service} ${entry.kind}. ${sent} instead of the link.`);
+        else entry.status.update(`Getting ${what}…`, `${many ? "They" : "It"} will be sent instead of the link.`);
         let result;
         try { result = await window.__LOWCORD_NATIVE__.socialMedia(link, uploadLimit()); }
         catch { result = { error: "failed" }; }
@@ -292,7 +335,8 @@
             return;
         }
         const attached = files.map(file => anonymousFile(new File([file.data], file.name, { type: file.type })));
-        deliver(editor, entry, attached, `${service} ${entry.kind} attached. ${entry.plural ? "They" : "It"} will be sent instead of the link.`);
+        const done = entry.plural ? `${count} ${service} photos` : `${service} ${entry.kind}`;
+        deliver(editor, entry, attached, `${done} attached. ${entry.plural ? "They" : "It"} will be sent instead of the link.`);
     }
     const composerVideos = text => {
         const channelId = window.Lowcord.store("SelectedChannelStore")?.getChannelId?.();
@@ -329,7 +373,7 @@
             const video = waiting.find(entry => entry.video && !entry.done);
             if (announced || !video) return;
             announced = true;
-            toast(`Sending once the ${video.service} ${video.kind} ${video.plural ? "are" : "is"} ready…`);
+            video.status.update(`Sending once the ${video.service} ${video.kind} ${video.plural ? "are" : "is"} ready…`, "Your message sends right after.");
         };
         waiting.forEach(entry => { entry.held = true; entry.announce = announce; });
         announce();
@@ -810,14 +854,87 @@
     const micPath = "M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Zm7 9a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V20H8a1 1 0 1 0 0 2h8a1 1 0 1 0 0-2h-3v-2.08A7 7 0 0 0 19 11Z";
     const waveformPath = "M3 9a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-3 0v-3A1.5 1.5 0 0 1 3 9Zm4.5-4A1.5 1.5 0 0 1 9 6.5v11a1.5 1.5 0 0 1-3 0v-11A1.5 1.5 0 0 1 7.5 5ZM12 2a1.5 1.5 0 0 1 1.5 1.5v17a1.5 1.5 0 0 1-3 0v-17A1.5 1.5 0 0 1 12 2Zm4.5 4A1.5 1.5 0 0 1 18 7.5v9a1.5 1.5 0 0 1-3 0v-9A1.5 1.5 0 0 1 16.5 6ZM21 9a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-3 0v-3A1.5 1.5 0 0 1 21 9Z";
 
+    // ----- Toasts -------------------------------------------------------------
+    // A headline and, quieter below it, what happens next. A message written
+    // as one string splits at its first sentence, or at ", so ...".
+    function splitMessage(message) {
+        const so = /^(.+?),\s+so\s+(.+?)\.?$/s.exec(message);
+        if (so) return [so[1], `${so[2][0].toUpperCase()}${so[2].slice(1)}.`];
+        const sentence = /^(.+?[.!?])\s+(\S.*)$/s.exec(message);
+        return sentence ? [sentence[1].replace(/\.$/, ""), sentence[2]] : [message, ""];
+    }
+    const svgNs = "http://www.w3.org/2000/svg";
+    const toastIcons = {
+        progress: [["circle", { cx: 12, cy: 12, r: 9, class: "lowcord-toast-track" }], ["path", { d: "M21 12a9 9 0 0 0-9-9", class: "lowcord-toast-arc" }]],
+        success: [["path", { d: "M5.5 12.5 10 17l8.5-9.5", class: "lowcord-toast-check" }]],
+        failure: [["path", { d: "M12 7v6.2M12 17.2v.1" }]],
+    };
+    function toastIcon(tone) {
+        const svg = document.createElementNS(svgNs, "svg");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("class", `lowcord-toast-icon lowcord-toast-icon-${tone}`);
+        for (const [tag, attributes] of toastIcons[tone]) {
+            const part = document.createElementNS(svgNs, tag);
+            for (const [name, value] of Object.entries(attributes)) part.setAttribute(name, value);
+            svg.append(part);
+        }
+        return svg;
+    }
+    function buildToast(tone, title, detail, action) {
+        const copy = ui("span", { className: "lowcord-toast-copy" }, ui("span", { className: "lowcord-toast-title" }, title));
+        if (detail) copy.append(ui("span", { className: "lowcord-toast-detail" }, detail));
+        const button = action && ui("button", { type: "button", className: "lowcord-toast-action",
+            onClick: () => { dismissToast(toast); action.onClick(); } }, action.label);
+        const toast = ui("div", { className: `lowcord-toast lowcord-toast-${tone}`, role: "status" },
+            ui("span", { className: "lowcord-toast-badge", "aria-hidden": "true" }, toastIcon(tone)), copy, button);
+        return toast;
+    }
+    // One toast at a time. A toast that replaces another settles into its
+    // place instead of arriving again.
+    function showToast(toast) {
+        const previous = document.querySelectorAll(".lowcord-toast");
+        previous.forEach(old => old.remove());
+        if (previous.length) toast.classList.add("lowcord-toast-swap");
+        document.body.append(toast);
+    }
+    function dismissToast(toast) {
+        if (!toast?.isConnected) return;
+        if (matchMedia("(prefers-reduced-motion: reduce)").matches) { toast.remove(); return; }
+        toast.classList.add("lowcord-toast-out");
+        // Only the exit counts: the entrance and the check-mark draw end too.
+        toast.addEventListener("animationend", event => { if (event.target === toast && event.animationName === "lowcord-toast-out") toast.remove(); });
+        setTimeout(() => toast.remove(), 400);
+    }
     function toast(message, failure = false, action = null) {
-        const node = ui("div", { className: `lowcord-toast${failure ? " lowcord-toast-failure" : ""}`, role: "status" }, message,
-            action && ui("button", { type: "button", className: "lowcord-toast-action",
-                onClick: () => { node.remove(); action.onClick(); } }, action.label));
-        document.querySelectorAll(".lowcord-toast").forEach(old => old.remove());
-        document.body.append(node);
+        // A message ending in an ellipsis is work still going on.
+        const tone = failure ? "failure" : /…$/.test(message) ? "progress" : "success";
+        const [title, detail] = splitMessage(message);
+        const toast = buildToast(tone, title, detail, action);
+        showToast(toast);
         // Leave time to reach an action button.
-        setTimeout(() => node.remove(), action ? 8000 : 4000);
+        setTimeout(() => dismissToast(toast), action ? 8000 : 4000);
+        return toast;
+    }
+    // A status that stays, with a spinner, while work runs; a toast with the
+    // outcome replaces it. Bounded, so a stuck download can't leave it up.
+    function progress(title, detail = "") {
+        const toast = buildToast("progress", title, detail);
+        let ended = false;
+        const timer = setTimeout(() => { ended = true; dismissToast(toast); }, 120_000);
+        showToast(toast);
+        return {
+            update(nextTitle, nextDetail = "") {
+                if (ended) return;
+                toast.querySelector(".lowcord-toast-title").textContent = nextTitle;
+                let line = toast.querySelector(".lowcord-toast-detail");
+                if (nextDetail && !line) toast.querySelector(".lowcord-toast-copy").append(line = ui("span", { className: "lowcord-toast-detail" }));
+                if (line) { line.textContent = nextDetail; line.hidden = !nextDetail; }
+                // Come back only if no other toast took the place, such as
+                // another download's.
+                if (!toast.isConnected && !document.querySelector(".lowcord-toast:not(.lowcord-toast-out)")) showToast(toast);
+            },
+            end() { ended = true; clearTimeout(timer); dismissToast(toast); },
+        };
     }
 
     async function measure(blob) {

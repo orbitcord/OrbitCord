@@ -43,23 +43,27 @@ export async function prepare(release = false, { platform = process.platform, ar
         await copyFile(join(native, executable), devStaged);
         await rename(devStaged, join(devNative, executable));
     }
-    await buildPreload();
+    await buildPreload({ release });
 }
 
 // Also used by the performance harness to build an exact source snapshot,
 // without rebuilding Rust or modifying the user's installed profile.
-export async function buildPreload({ sourceRoot = root, output = join(sourceRoot, '.lowcord') } = {}) {
+// Release builds are minified: the main-world script is parsed on every
+// launch. The startup diagnostic only reaches stderr, so it is dev-only.
+export async function buildPreload({ sourceRoot = root, output = join(sourceRoot, '.lowcord'), release = false } = {}) {
     await mkdir(output, { recursive: true });
     const read = file => readFile(join(sourceRoot, 'src-tauri', 'injection', file), 'utf8');
-    const [boot, shim, discord, extensions, gif, musicEmbeds, socialEmbeds, appearance, settings, appearanceCSS, uiCSS] = await Promise.all(
-        ['boot.js', 'shim.js', 'discord.js', 'extensions.js', 'gif.js', 'music-embeds.js', 'social-embeds.js', 'chat-appearance.js', 'settings.js', 'chat-appearance.css', 'lowcord-ui.css'].map(read));
+    const [boot, shim, discord, extensions, background, gif, musicEmbeds, socialEmbeds, appearance, settings, appearanceCSS, uiCSS] = await Promise.all(
+        ['boot.js', 'shim.js', 'discord.js', 'extensions.js', 'background.js', 'gif.js', 'music-embeds.js', 'social-embeds.js', 'chat-appearance.js', 'settings.js', 'chat-appearance.css', 'lowcord-ui.css'].map(read));
     // Static function body, serialized by Electron into the page's main world
     // synchronously at document start. No eval, script tag or CSP bypass.
     const socialLinks = await readFile(join(sourceRoot, 'electron', 'social-links.cjs'), 'utf8');
     const musicLinks = await readFile(join(sourceRoot, 'electron', 'music-links.cjs'), 'utf8');
-    const contents = `const { contextBridge, ipcRenderer } = require('electron');
-if (process.isMainFrame) {
+    const contents = `const { contextBridge, ipcRenderer, webFrame } = require('electron');
+// The sleep page (a data: URL) gets no bridge or Discord hooks.
+if (process.isMainFrame && location.protocol !== 'data:') {
     require('./electron/update-notice.cjs').setupUpdateNotice(ipcRenderer);
+    ipcRenderer.on('lowcord:trim-memory', () => webFrame.clearCache());
     contextBridge.exposeInMainWorld('__LOWCORD_NATIVE__', {
         notify: (title, body) => ipcRenderer.invoke('lowcord:notify', title, body),
         setBadge: count => ipcRenderer.invoke('lowcord:badge', count),
@@ -76,6 +80,7 @@ if (process.isMainFrame) {
         },
         appIcon: id => ipcRenderer.invoke('lowcord:app-icon', id),
         setEmbedPreferences: settings => ipcRenderer.invoke('lowcord:embed-preferences', settings),
+        background: settings => ipcRenderer.invoke('lowcord:background', settings),
         resolveSocialLink: (url, provider) => ipcRenderer.invoke('lowcord:resolve-social-link', url, provider),
         socialPost: url => ipcRenderer.invoke('lowcord:social-post', url),
         socialVideo: (url, limit) => ipcRenderer.invoke('lowcord:social-video', url, limit),
@@ -84,14 +89,14 @@ if (process.isMainFrame) {
     contextBridge.executeInMainWorld({ func: function initializeLowcord(chatAppearanceCSS, lowcordUiCSS) {
         if (window.self !== window.top || window.__LOWCORD_INIT__) return;
         window.__LOWCORD_INIT__ = true;
-        ${boot}\n${shim}\n${discord}\n${socialLinks}\n${musicLinks}\n${extensions}\n${gif}\n${musicEmbeds}\n${socialEmbeds}\n${appearance}\n
+        ${boot}\n${shim}\n${discord}\n${socialLinks}\n${musicLinks}\n${extensions}\n${background}\n${gif}\n${musicEmbeds}\n${socialEmbeds}\n${appearance}\n
         setupLowcordChatAppearance();
         ${settings}\nsetupLowcordSettings();
-        window.__LOWCORD_REPORT__();
+        ${release ? '' : 'window.__LOWCORD_REPORT__();'}
     }, args: [${JSON.stringify(appearanceCSS)}, ${JSON.stringify(uiCSS)}] });
 }`;
     await build({ stdin: { contents, resolveDir: sourceRoot, sourcefile: 'lowcord-preload.js' }, bundle: true,
-        platform: 'node', format: 'cjs', external: ['electron'], outfile: join(output, 'preload.cjs') });
+        platform: 'node', format: 'cjs', external: ['electron'], minify: release, outfile: join(output, 'preload.cjs') });
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) await prepare(process.argv.includes('--release'));

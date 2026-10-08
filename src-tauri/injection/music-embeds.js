@@ -100,6 +100,7 @@
         drafts.set(editor, { content, host });
     }
     function flush() {
+        if (frame !== undefined) cancelAnimationFrame(frame);
         frame = undefined;
         if (!extensions.enabled('musicEmbeds')) { rows.clear(); return; }
         for (const row of rows) updateRow(row);
@@ -107,15 +108,28 @@
         for (const [editor, state] of drafts) {
             if (!editor.isConnected) { state.host?.remove(); drafts.delete(editor); }
         }
+        // An observer keeps the nodes it watches alive: drop composers that
+        // left the page by watching only the ones still on it.
+        if ([...watchedEditors].some(editor => !editor.isConnected)) {
+            draftText.disconnect();
+            for (const editor of watchedEditors) {
+                if (editor.isConnected) draftText.observe(editor, { characterData: true, subtree: true });
+                else watchedEditors.delete(editor);
+            }
+        }
         if (discoverDrafts) {
             discoverDrafts = false;
-            document.querySelectorAll('[class*="channelTextArea_"] [contenteditable="true"][role="textbox"], [class*="channelTextArea_"] textarea').forEach(updateDraft);
+            document.querySelectorAll('[class*="channelTextArea_"] [contenteditable="true"][role="textbox"], [class*="channelTextArea_"] textarea').forEach(editor => {
+                if (!watchedEditors.has(editor)) { watchedEditors.add(editor); draftText.observe(editor, { characterData: true, subtree: true }); }
+                updateDraft(editor);
+            });
         }
     }
     function schedule() { frame ??= requestAnimationFrame(flush); }
     function refresh() {
         if (!extensions.enabled('musicEmbeds')) {
             document.querySelectorAll(ownSelector).forEach(host => host.remove());
+            draftText.disconnect(); watchedEditors.clear();
             drafts.clear(); rows.clear(); return;
         }
         // Clear signatures on toggles so enabling after cleanup recreates cards.
@@ -132,30 +146,42 @@
     }
     document.addEventListener('input', input, true);
     window.addEventListener(extensions.changeEvent, refresh);
-    function start() {
-        new MutationObserver(records => {
-            if (!extensions.enabled('musicEmbeds')) return;
-            for (const record of records) {
-                const target = record.target instanceof Element ? record.target : record.target.parentElement;
-                if (!target || target.closest(ownSelector)) continue;
-                const added = [...record.addedNodes].filter(node => node instanceof Element && !node.matches(ownSelector));
-                const removed = [...record.removedNodes].filter(node => !(node instanceof Element && node.matches(ownSelector)));
-                if (record.type === 'childList' && !added.length && !removed.length) continue;
-                const row = target.closest(rowSelector);
-                if (row) rows.add(row);
-                if (target.closest('[class*="channelTextArea_"]')) discoverDrafts = true;
-                for (const node of added) {
-                    if (node.matches(rowSelector)) rows.add(node);
-                    node.querySelectorAll(rowSelector).forEach(row => rows.add(row));
-                    if (node.matches(editorSelector) || node.querySelector(editorSelector)) discoverDrafts = true;
-                }
-                if (removed.length && drafts.size) discoverDrafts = true;
+    // Slate can rewrite a draft's text nodes without an input event (send,
+    // draft restore). Watch text only inside known composers, not the page.
+    const draftText = new MutationObserver(() => { discoverDrafts = true; schedule(); });
+    const watchedEditors = new Set();
+    function domChanged(records) {
+        if (!Array.isArray(records)) {
+            document.querySelectorAll(rowSelector).forEach(row => rows.add(row));
+            discoverDrafts = true; flush(); return;
+        }
+        for (const record of records) {
+            const target = record.target instanceof Element ? record.target : record.target.parentElement;
+            if (!target || target.closest(ownSelector)) continue;
+            const added = [...record.addedNodes].filter(node => node instanceof Element && !node.matches(ownSelector));
+            const removed = [...record.removedNodes].filter(node => !(node instanceof Element && node.matches(ownSelector)));
+            if (record.type === 'childList' && !added.length && !removed.length) continue;
+            const row = target.closest(rowSelector);
+            if (row) rows.add(row);
+            if (target.closest('[class*="channelTextArea_"]')) discoverDrafts = true;
+            for (const node of added) {
+                if (node.matches(rowSelector)) rows.add(node);
+                node.querySelectorAll(rowSelector).forEach(row => rows.add(row));
+                if (node.matches(editorSelector) || node.querySelector(editorSelector)) discoverDrafts = true;
             }
-            if (rows.size || discoverDrafts) schedule();
-        }).observe(document.body, { childList: true, subtree: true, characterData: true,
-            attributes: true, attributeFilter: ['src'] });
-        refresh();
+            if (removed.length && drafts.size) discoverDrafts = true;
+        }
+        // Already inside the shared frame callback: render in this frame.
+        if (rows.size || discoverDrafts) flush();
     }
+    let stopObserving;
+    function observe() {
+        const on = extensions.enabled('musicEmbeds');
+        if (on && !stopObserving) stopObserving = window.Lowcord.onDomChange(domChanged);
+        else if (!on && stopObserving) { stopObserving(); stopObserving = undefined; }
+    }
+    window.addEventListener(extensions.changeEvent, observe);
+    function start() { observe(); refresh(); }
     if (document.body) start(); else document.addEventListener('DOMContentLoaded', start, { once: true });
     window.Lowcord.waitForStore('MessageStore', store => {
         // Store changes cover edits and suppression flags with no DOM change.

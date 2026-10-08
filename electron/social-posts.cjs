@@ -15,20 +15,23 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
     const posts = new Map(), pending = new Map(), media = new Map(), muxed = new Map();
     const playbackCache = createMediaCache(cacheOptions);
 
-    async function request(url, { headers = {}, timeout = 6000, method = 'GET', redirect = 'follow', signal } = {}) {
-        const response = await fetchPage(url, { method, redirect, credentials: 'omit',
+    async function request(url, { headers = {}, timeout = 6000, method = 'GET', redirect = 'follow', body, signal } = {}) {
+        const response = await fetchPage(url, { method, redirect, credentials: 'omit', body,
             headers: { 'user-agent': bot, ...headers }, signal: signal ?? AbortSignal.timeout(timeout) });
         return response;
     }
-    async function read(response, limit) {
+    const failed = response => Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
+    // With `head`, a longer body is cut at `limit` instead of refused.
+    async function read(response, limit, head = false) {
         const declared = Number(response.headers.get('content-length'));
-        if (declared > limit) { await response.body?.cancel().catch(() => {}); throw Object.assign(new Error('Too large'), { code: 'too-large' }); }
+        if (declared > limit && !head) { await response.body?.cancel().catch(() => {}); throw Object.assign(new Error('Too large'), { code: 'too-large' }); }
         const reader = response.body.getReader(), parts = [];
         let size = 0;
         for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
             size += value.byteLength;
+            if (size > limit && head) { parts.push(value); await reader.cancel().catch(() => {}); break; }
             if (size > limit) { await reader.cancel().catch(() => {}); throw Object.assign(new Error('Too large'), { code: 'too-large' }); }
             parts.push(value);
         }
@@ -36,11 +39,11 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
     }
     async function json(url, options) {
         const response = await request(url, { ...options, headers: { accept: 'application/json', ...options?.headers } });
-        if (!response.ok) { await response.body?.cancel().catch(() => {}); throw new Error(`HTTP ${response.status}`); }
+        if (!response.ok) { await response.body?.cancel().catch(() => {}); throw failed(response); }
         return JSON.parse((await read(response, 4 * 1024 * 1024)).toString('utf8'));
     }
     // With `redirect: 'manual'`, a redirect answers `{ location }` instead.
-    async function page(url, { redirect = 'follow' } = {}) {
+    async function page(url, { redirect = 'follow', head = false } = {}) {
         const response = await request(url, { redirect, headers: { accept: 'text/html' } });
         if (redirect === 'manual' && response.status >= 300 && response.status < 400) {
             await response.body?.cancel().catch(() => {});
@@ -48,9 +51,9 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         }
         if (!response.ok || !response.headers.get('content-type')?.includes('text/html')) {
             await response.body?.cancel().catch(() => {});
-            throw new Error(`HTTP ${response.status}`);
+            throw failed(response);
         }
-        return { html: (await read(response, 768 * 1024)).toString('utf8'), url: response.url || url };
+        return { html: (await read(response, head ? 256 * 1024 : 768 * 1024, head)).toString('utf8'), url: response.url || url };
     }
 
     const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
@@ -75,13 +78,18 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         return { get: key => values.get(key)?.find(value => value.trim()) ?? values.get(key)?.[0] ?? null, all: key => values.get(key) ?? [] };
     }
 
+    const secure = value => {
+        let url;
+        try { url = new URL(value); } catch { return null; }
+        return url.protocol === 'https:' && !url.username && !url.password ? url.href : null;
+    };
     function proxy(source) {
         if (!source) return null;
-        if (typeof source === 'string') {
-            let url;
-            try { url = new URL(source); } catch { return null; }
-            if (url.protocol !== 'https:' || url.username || url.password) return null;
-            source = { url: url.href };
+        if (typeof source === 'string') source = { url: source };
+        if ('url' in source) {
+            const url = secure(source.url);
+            if (!url) return null;
+            source = { ...source, url, ...(source.variants ? { variants: source.variants.map(secure).filter(Boolean) } : {}) };
         }
         const token = randomBytes(12).toString('hex');
         if (media.size >= 4000) media.delete(media.keys().next().value);
@@ -96,12 +104,85 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
     const number = value => Number.isFinite(Number(value)) && value !== null && value !== '' ? Number(value) : null;
     const image = (url, extra = {}) => { const src = proxy(url); return src ? { type: 'image', src, ...extra } : null; };
     const video = (url, poster, extra = {}) => { const src = proxy(url); return src ? { type: 'video', src, poster: proxy(poster), ...extra } : null; };
+    // A source that refuses with 401, 403 or 429 rests for a few minutes, so
+    // lookups go straight to the next source instead of waiting on it.
+    const resting = new Map();
+    // A carousel is one request per slide, and one failed slide fails the
+    // post: retry brief failures, and keep few in flight at once, since
+    // chat cards and a paste can ask for many posts together.
+    async function patiently(work, tries = 3) {
+        for (let attempt = 1; ; attempt++) {
+            try { return await work(); } catch (error) {
+                if (attempt >= tries || (error.status && error.status !== 429 && error.status < 500)) throw error;
+                await new Promise(resolve => setTimeout(resolve, 500 * 2 ** (attempt - 1)));
+            }
+        }
+    }
+    function limiter(count) {
+        let active = 0;
+        const queue = [];
+        const next = () => {
+            if (active >= count || !queue.length) return;
+            active++;
+            const { work, resolve, reject } = queue.shift();
+            work().then(resolve, reject).finally(() => { active--; next(); });
+        };
+        return work => new Promise((resolve, reject) => { queue.push({ work, resolve, reject }); next(); });
+    }
+    const slide = limiter(6);
+    // Photos download side by side; videos, which can be large, one at a time.
+    const photoDownloads = limiter(4), videoDownloads = limiter(1);
+    async function attempt(sources, ...args) {
+        const failures = [];
+        for (const [name, read, rests = true] of sources) {
+            if (resting.get(name) > Date.now()) { failures.push(`${name}: resting`); continue; }
+            try { return await read(...args); } catch (error) {
+                if (rests && [401, 403, 429].includes(error.status)) resting.set(name, Date.now() + 5 * 60_000);
+                failures.push(`${name}: ${error.message}`);
+            }
+        }
+        throw new Error(failures.join('; ') || 'No source available');
+    }
+    // Every item must resolve, so a source that lost a slide or a video's
+    // stream gives way to the next one instead of a partial post.
+    const complete = items => {
+        if (!items.length || items.some(item => !item)) throw new Error('Missing media');
+        return items;
+    };
+    const largest = list => [...(list ?? [])].filter(item => item?.url).sort((a, b) => (b.width * b.height || 0) - (a.width * a.height || 0))[0]?.url;
     const base = (target, fields) => ({ site: target.site, service: links.sites[target.site].name, color: links.sites[target.site].color,
         url: target.canonical, author: {}, text: '', stats: {}, media: [], sensitive: false, ...fields,
         media: (fields.media ?? []).filter(Boolean).slice(0, 20) });
 
-    async function twitter(target) {
-        const id = /\/status\/(\d+)/.exec(target.path)?.[1];
+    // X's own embed API, the one behind its embedded posts; no sign-in.
+    async function xSyndication(target, id) {
+        const token = ((Number(id) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, '');
+        const tweet = await json(`https://cdn.syndication.twimg.com/tweet-result?id=${id}&token=${token}&lang=en`);
+        if (!tweet?.id_str || tweet.__typename === 'TweetTombstone') throw new Error('Post not found');
+        let body = tweet.text ?? '';
+        for (const link of tweet.entities?.media ?? []) body = body.replaceAll(link.url, '');
+        for (const link of tweet.entities?.urls ?? []) if (link.expanded_url) body = body.replaceAll(link.url, link.expanded_url);
+        const items = (tweet.mediaDetails ?? []).map(item => {
+            const size = { width: number(item.original_info?.width), height: number(item.original_info?.height) };
+            if (item.type === 'photo') return image(item.media_url_https && `${item.media_url_https}?name=large`, { ...size, alt: item.ext_alt_text ?? undefined });
+            // Highest bitrate first; uploads step down to one that fits.
+            const variants = (item.video_info?.variants ?? []).filter(variant => variant.content_type === 'video/mp4' && variant.url)
+                .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0)).map(variant => variant.url);
+            const src = variants.length ? proxy({ url: variants[0], variants }) : null;
+            return src && { type: 'video', src, poster: proxy(item.media_url_https), ...size, ...(item.type === 'animated_gif' ? { loop: true, gif: true } : {}) };
+        });
+        if (items.some(item => !item)) throw new Error('Missing media');
+        const user = tweet.user ?? {};
+        return base(target, {
+            url: user.screen_name ? `https://x.com/${user.screen_name}/status/${id}` : target.canonical, text: text(decode(body)),
+            author: { name: user.name, handle: user.screen_name && `@${user.screen_name}`, url: user.screen_name && `https://x.com/${user.screen_name}`,
+                avatar: proxy(user.profile_image_url_https?.replace(/_normal(\.\w+)$/, '_200x200$1')) },
+            created: Date.parse(tweet.created_at) || null,
+            stats: { replies: number(tweet.conversation_count), likes: number(tweet.favorite_count) },
+            sensitive: Boolean(tweet.possibly_sensitive), media: items,
+        });
+    }
+    async function fxTwitter(target, id) {
         const { tweet } = await json(`https://api.fxtwitter.com/status/${id}`);
         if (!tweet) throw new Error('Post not found');
         const items = tweet.media?.all ?? [...(tweet.media?.photos ?? []), ...(tweet.media?.videos ?? [])];
@@ -116,6 +197,25 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
                 ? image(item.url, { width: item.width, height: item.height, alt: item.altText })
                 : video(item.url, item.thumbnail_url, { width: item.width, height: item.height, ...(item.type === 'gif' ? { loop: true, gif: true } : {}) })),
         });
+    }
+    async function vxTwitter(target, id) {
+        const tweet = await json(`https://api.vxtwitter.com/Twitter/status/${id}`);
+        if (!tweet?.tweetID) throw new Error('Post not found');
+        return base(target, {
+            url: tweet.tweetURL ?? target.canonical, text: text(tweet.text),
+            author: { name: tweet.user_name, handle: tweet.user_screen_name && `@${tweet.user_screen_name}`,
+                url: tweet.user_screen_name && `https://x.com/${tweet.user_screen_name}`, avatar: proxy(tweet.user_profile_image_url) },
+            created: tweet.date_epoch ? tweet.date_epoch * 1000 : null,
+            stats: { replies: number(tweet.replies), reposts: number(tweet.retweets), likes: number(tweet.likes) },
+            sensitive: Boolean(tweet.possibly_sensitive),
+            media: (tweet.media_extended ?? []).map(item => item.type === 'image'
+                ? image(item.url, { width: item.size?.width, height: item.size?.height, alt: item.altText ?? undefined })
+                : video(item.url, item.thumbnail_url, { width: item.size?.width, height: item.size?.height, ...(item.type === 'gif' ? { loop: true, gif: true } : {}) })),
+        });
+    }
+    const xSources = [['x', xSyndication], ['fxtwitter', fxTwitter], ['vxtwitter', vxTwitter]];
+    async function twitter(target) {
+        return attempt(xSources, target, /\/status\/(\d+)/.exec(target.path)?.[1]);
     }
 
     async function blueskyBlob(did, cid) {
@@ -238,68 +338,164 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         throw last ?? new Error('No preview available');
     }
 
-    // InstaFix-style descriptions start with a stats line, e.g.
-    // "❤️ 54.0K · 💬 143 · 🖼️ 1/12", then the caption.
+    // Counts as Instagram and OGInstagram write them: "16K", "51,581".
     const amount = value => {
         const match = /^([\d.,]+)\s*([KMB])?$/i.exec(value?.trim() ?? '');
         if (!match) return null;
         const base = Number(match[2] ? match[1].replace(/,/g, '.') : match[1].replace(/[.,]/g, ''));
         return Number.isFinite(base) ? Math.round(base * ({ k: 1e3, m: 1e6, b: 1e9 }[match[2]?.toLowerCase()] ?? 1)) : null;
     };
-    function instagramMeta(meta) {
-        const description = meta.get('og:description') ?? meta.get('description') ?? '';
-        const [first, ...rest] = description.split('\n');
-        const stats = /❤|💬|🖼/.test(first ?? '') ? first : null;
-        const caption = (stats ? rest.join('\n') : description).trim() || meta.get('og:image:alt') || '';
-        return { text: text(caption), count: Number(/🖼️?\s*\d+\s*\/\s*(\d+)/u.exec(stats ?? '')?.[1]) || 1,
-            stats: { likes: amount(/❤️?\s*([\d.,]+[KMB]?)/iu.exec(stats ?? '')?.[1]), comments: amount(/💬\s*([\d.,]+[KMB]?)/iu.exec(stats ?? '')?.[1]) } };
-    }
-    // OGInstagram (zzinstagram) answers a past-the-end img_index with the
-    // last item, and gives video slides as og:video. Photo slides redirect
-    // straight to the image instead. InstaFix (hhinstagram) has the caption,
-    // stats and slide count, and serves each photo slide by index.
     const instagramImage = location => { try { return /(?:^|\.)(?:cdninstagram\.com|fbcdn\.net)$/.test(new URL(location).hostname) && location; } catch { return null; } };
+
+    // An Instagram post is complete or it fails: every item, full size. A
+    // source that can't account for every item fails over to the next one,
+    // never to a cropped preview standing in for the post.
+    //
+    // 1. Instagram's own web API, as its logged-out post page asks it.
+    function instagramItem(item) {
+        const size = { width: number(item.original_width), height: number(item.original_height) };
+        const poster = largest(item.image_versions2?.candidates);
+        if (item.media_type === 2) return video(largest(item.video_versions), poster, size);
+        return image(poster, { ...size, alt: item.accessibility_caption ?? undefined });
+    }
+    async function instagramApi(target, code, lookup) {
+        const { data } = await json('https://www.instagram.com/graphql/query', { method: 'POST',
+            body: new URLSearchParams({ variables: JSON.stringify({ shortcode: code }), doc_id: '24368985919464652' }),
+            headers: { 'user-agent': browser, 'content-type': 'application/x-www-form-urlencoded', 'x-ig-app-id': '936619743392459',
+                'x-asbd-id': '359341', 'x-csrftoken': 'missing', 'sec-fetch-site': 'same-origin' } });
+        const item = data?.xdt_api__v1__media__shortcode__web_info?.items?.[0];
+        // Age-restricted accounts, among others, answer only signed-in users;
+        // the embed page then refuses too, so the lookup skips it.
+        if (!item) { lookup.signedInOnly = true; throw new Error('Not served logged out'); }
+        const user = item.user ?? item.owner ?? {}, hidden = Boolean(item.like_and_view_counts_disabled);
+        return base(target, {
+            url: `https://www.instagram.com/p/${code}/`, text: text(item.caption?.text),
+            author: { name: user.full_name || user.username, handle: user.username && `@${user.username}`,
+                url: user.username && `https://www.instagram.com/${user.username}/`, avatar: proxy(user.profile_pic_url) },
+            created: item.taken_at ? item.taken_at * 1000 : null,
+            stats: { likes: hidden ? null : number(item.like_count), comments: number(item.comment_count), views: hidden ? null : number(item.view_count ?? item.play_count) },
+            media: complete((item.carousel_media?.length ? item.carousel_media : [item]).map(instagramItem)),
+        });
+    }
+    // 2. The page behind Instagram's embed iframe. Carousels and videos carry
+    // their data as JSON; a single photo only as rendered markup.
+    async function instagramEmbed(target, code, lookup) {
+        if (lookup.signedInOnly) throw new Error('Skipped: not served logged out');
+        const { html } = await page(`https://www.instagram.com/p/${code}/embed/captioned/`);
+        const literal = /"contextJSON":("(?:[^"\\]|\\.)*")/.exec(html)?.[1];
+        const shared = literal ? JSON.parse(JSON.parse(literal))?.gql_data?.shortcode_media : null;
+        const url = `https://www.instagram.com/p/${code}/`;
+        if (shared) {
+            const owner = shared.owner ?? {};
+            const size = node => ({ width: number(node.dimensions?.width), height: number(node.dimensions?.height) });
+            const nodes = shared.edge_sidecar_to_children?.edges?.map(edge => edge.node) ?? [shared];
+            return base(target, {
+                url, text: text(shared.edge_media_to_caption?.edges?.[0]?.node?.text),
+                author: { name: owner.full_name || owner.username, handle: owner.username && `@${owner.username}`,
+                    url: owner.username && `https://www.instagram.com/${owner.username}/`, avatar: proxy(owner.profile_pic_url) },
+                created: shared.taken_at_timestamp ? shared.taken_at_timestamp * 1000 : null,
+                stats: { likes: number(shared.edge_liked_by?.count ?? shared.edge_media_preview_like?.count),
+                    comments: number(shared.edge_media_to_comment?.count), views: number(shared.video_view_count) },
+                media: complete(nodes.map(node => node.is_video ? video(node.video_url, node.display_url, size(node))
+                    : image(node.display_url, { ...size(node), alt: node.accessibility_caption ?? undefined }))),
+            });
+        }
+        if (!/data-media-type="GraphImage"/.test(html)) throw new Error('Not served logged out');
+        const tag = /<img\b[^>]*class="EmbeddedMediaImage"[^>]*>/.exec(html)?.[0] ?? '';
+        const source = /\bsrc="([^"]+)"/.exec(tag)?.[1];
+        const username = /class="UsernameText">([^<]+)</.exec(html)?.[1];
+        const avatar = /<a class="Avatar"[^>]*>\s*<img\b[^>]*\bsrc="([^"]+)"/.exec(html)?.[1];
+        const caption = /<div class="Caption">([\s\S]*?)(?:<div class="CaptionComments"|<\/div>)/.exec(html)?.[1] ?? '';
+        return base(target, {
+            url, text: text(decode(caption.replace(/<a class="CaptionUsername"[\s\S]*?<\/a>/, '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''))),
+            author: { name: username && decode(username), handle: username && `@${decode(username)}`,
+                url: username && `https://www.instagram.com/${decode(username)}/`, avatar: proxy(avatar && decode(avatar)) },
+            stats: { likes: amount(/>([\d,.]+) likes</.exec(html)?.[1]), comments: amount(/View all ([\d,.]+) comments/.exec(html)?.[1]) },
+            media: complete([image(source && decode(source))]),
+        });
+    }
+    // 3. OGInstagram (zzinstagram), which also reads posts Instagram serves
+    // only to signed-in users, one slide per request: a photo slide
+    // redirects to the photo on Instagram's CDN, at full size; a video slide
+    // is a page whose og:video is the clip and whose og:url names the slide
+    // it served. An index past the end serves the last slide again. Any
+    // other answer is a hiccup and is retried, so no slide is ever dropped.
+    async function instagramSlide(code, index) {
+        const { html, location } = await page(`https://zzinstagram.com/p/${code}/?img_index=${index}`, { redirect: 'manual' });
+        if (html == null) {
+            const photo = instagramImage(location);
+            if (!photo) throw new Error(`Slide ${index} not served`);
+            // The same photo comes back from different CDN hosts and signatures.
+            return { type: 'image', url: photo, key: new URL(photo).pathname.split('/').pop() };
+        }
+        const meta = metadata(html);
+        const clip = absolute(meta.get('og:video:secure_url') ?? meta.get('og:video'), 'https://zzinstagram.com/');
+        let served;
+        try { served = Number(new URL(meta.get('og:url')).searchParams.get('img_index')); } catch {}
+        served ||= Number(/\/offload\/[\w-]+\/(\d+)/.exec(clip ?? '')?.[1]);
+        // Its error page says why, e.g. "Embed failed: Post not found".
+        if (!clip || !served) throw new Error(`Slide ${index} not served${meta.get('og:title') ? `: ${meta.get('og:title')}: ${meta.get('og:description')}` : ''}`);
+        return { type: 'video', url: clip, poster: absolute(meta.get('og:image'), 'https://zzinstagram.com/'), key: `video ${served}`, served, meta };
+    }
+    async function instagramSlides(target, code, lookup) {
+        const known = lookup.details().catch(() => null);
+        const slides = new Map();
+        const slideAt = index => {
+            if (!slides.has(index)) slides.set(index, slide(() => patiently(() => instagramSlide(code, index))));
+            return slides.get(index);
+        };
+        // The last slide is the first index that serves what 20 does. Asked
+        // in waves, so most carousels are counted in one round trip.
+        const waves = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12, 13, 14], [15, 16, 17, 18, 19]];
+        const [end] = await Promise.all([slideAt(20), ...waves[0].map(slideAt)]);
+        let count = end.served;
+        for (const wave of waves) {
+            if (count) break;
+            const found = (await Promise.all(wave.map(slideAt))).findIndex(item => item.key === end.key);
+            if (found >= 0) count = wave[found];
+        }
+        count ||= 20;
+        const items = await Promise.all(Array.from({ length: count }, (_, index) => slideAt(index + 1)));
+        if (new Set(items.map(item => item.key)).size !== items.length) throw new Error('Slides repeat');
+        // The caption, author and counts, from Instagram's post page or else
+        // from OGInstagram's page for a video slide.
+        const details = await known;
+        const page = items.find(item => item.meta)?.meta;
+        const title = /^(.*) \(@([\w.]+)\)$/.exec(page?.get('og:title') ?? '');
+        const description = page?.get('og:description') ?? '';
+        return base(target, {
+            url: `https://www.instagram.com/p/${code}/`,
+            author: details?.author ?? (title ? { name: title[1], handle: `@${title[2]}`, url: `https://www.instagram.com/${title[2]}/` } : {}),
+            text: details?.text || text(description.replace(/^[^\n]*[❤💬][^\n]*\n*/u, '')),
+            stats: details?.stats ?? { likes: amount(/❤️?\s*([\d.,]+)/u.exec(description)?.[1]), comments: amount(/💬\s*([\d.,]+)/u.exec(description)?.[1]) },
+            created: details?.created ?? (Date.parse(page?.get('article:published_time')) || null),
+            media: complete(items.map(item => item.type === 'video' ? video(item.url, item.poster) : image(item.url))),
+        });
+    }
+    // Instagram's public post page answers even for posts its API refuses
+    // logged out. Its Open Graph tags name the author and carry the caption
+    // and counts: "16K likes, 331 comments - handle on March 18, 2026: "…"."
+    // Its image is a cropped preview, so it is never used as the media.
+    async function instagramPage(code) {
+        const { html } = await page(`https://www.instagram.com/p/${code}/`, { head: true });
+        const meta = metadata(html);
+        const description = meta.get('og:description') ?? '';
+        const handle = /\s-\s([\w.]+) on [^:]+:/.exec(description)?.[1];
+        if (!handle) throw new Error('No post data');
+        return {
+            author: { name: /^(.*?) on Instagram\b/.exec(meta.get('og:title') ?? '')?.[1] || handle, handle: `@${handle}`, url: `https://www.instagram.com/${handle}/` },
+            text: text(/:\s"([\s\S]*)"\.?\s*$/.exec(description)?.[1] ?? ''),
+            stats: { likes: amount(/([\d.,]+[KMB]?) likes?\b/i.exec(description)?.[1]), comments: amount(/([\d.,]+[KMB]?) comments?\b/i.exec(description)?.[1]) },
+            created: Date.parse(/\son ([A-Z][a-z]+ \d{1,2}, \d{4}):/.exec(description)?.[1] ?? '') || null,
+        };
+    }
+    // OGInstagram is the only source for some posts: retried, never rested.
+    const instagramSources = [['instagram', instagramApi], ['instagram-embed', instagramEmbed], ['oginstagram', instagramSlides, false]];
     async function instagram(target) {
         const code = /\/(?:p|reel|reels|tv)\/([\w-]+)/.exec(target.path)?.[1];
         if (!code) return generic(target);
-        const fixed = page(`https://hhinstagram.com/p/${code}/`).then(({ html, url }) => ({ meta: metadata(html), url })).catch(() => null);
-        const finish = (post, meta) => {
-            const info = instagramMeta(meta);
-            return { ...post, text: info.text, stats: info.stats, url: `https://www.instagram.com/p/${code}/` };
-        };
-        try {
-            const entry = async index => {
-                const { html, url, location } = await page(`https://zzinstagram.com/p/${code}/?img_index=${index}`, { redirect: 'manual' });
-                if (html == null && !instagramImage(location)) throw new Error('No media');
-                return html == null ? { image: location } : { meta: metadata(html), url };
-            };
-            const [first, last, info] = await Promise.all([entry(1), entry(20), fixed]);
-            const count = Math.min(20, Number(/\/offload\/[\w-]+\/(\d+)/.exec(last.meta?.get('og:image') ?? '')?.[1])
-                || (info ? instagramMeta(info.meta).count : 1));
-            const rest = await Promise.all(Array.from({ length: Math.max(0, count - 2) }, (_, index) => entry(index + 2)));
-            const entries = count > 1 ? [first, ...rest, last] : [first];
-            const head = first.meta ?? info?.meta ?? metadata('');
-            const post = finish(fromMeta(target, head, first.url ?? info?.url), info?.meta ?? head);
-            const size = info ? { width: number(info.meta.get('og:image:width')), height: number(info.meta.get('og:image:height')) } : {};
-            post.media = entries.map((item, index) => item.image ? image(item.image, index ? {} : size)
-                : fromMeta(target, item.meta, item.url).media[0]).filter(Boolean);
-            if (!post.media.length) throw new Error('No media');
-            return post;
-        } catch {}
-        try {
-            const info = await fixed;
-            if (!info) throw new Error('No preview');
-            const { meta, url } = info;
-            const post = finish(fromMeta(target, meta, url), meta);
-            const count = Math.min(20, instagramMeta(meta).count);
-            if (count > 1 && !post.media.some(item => item.type === 'video')) {
-                const size = { width: number(meta.get('og:image:width')), height: number(meta.get('og:image:height')) };
-                post.media = Array.from({ length: count }, (_, index) =>
-                    image(`https://hhinstagram.com/proxy/image/${code}?type=p&s=${index + 1}`, index ? {} : size));
-            }
-            if (post.media.length) return post;
-        } catch {}
-        return generic(target);
+        let details;
+        return attempt(instagramSources, target, code, { details: () => (details ??= instagramPage(code)) });
     }
 
     async function pixiv(target) {
@@ -329,7 +525,9 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         if (pending.has(target.key)) return pending.get(target.key);
         const work = (async () => {
             let value = null;
-            try { value = await (fetchers[target.site] ?? generic)(target); } catch {}
+            // Names only the post, and what each source answered.
+            try { value = await (fetchers[target.site] ?? generic)(target); }
+            catch (error) { console.warn(`[lowcord] No ${target.site} post for ${target.path}: ${error.message}`); }
             if (posts.size >= 200) posts.delete(posts.keys().next().value);
             posts.set(target.key, { value, until: Date.now() + (value ? 15 * 60_000 : 60_000) });
             return value;
@@ -391,17 +589,44 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         return { name: `reddit-${id}.mp4`, type: 'video/mp4', data, gif: Boolean(clip.is_gif) };
     }
 
+    // Media URLs are signed and expire, and a lookup can fail on a bad
+    // moment: when a download fails, read the post again once and retry.
+    async function withPost(target, work) {
+        try {
+            const post = await get(target.canonical);
+            if (!post) throw new Error('Post unavailable');
+            return await work(post);
+        } catch (error) {
+            if (error.code) throw error;
+            posts.delete(target.key);
+            return work(await get(target.canonical));
+        }
+    }
+    const sourceOf = item => media.get(/^lowcord-media:\/\/media\/([\da-f]+)$/.exec(item?.src ?? '')?.[1]);
+    // Fetches the best quality that fits in `limit`, where X offers several.
+    // A variant of unknown size is tried, and a smaller one follows if it
+    // turns out too large.
+    async function fitting(source, limit, fetchOne) {
+        const urls = source.variants?.length ? source.variants : [source.url];
+        for (const [index, url] of urls.entries()) {
+            const declared = await size(url).catch(() => null);
+            if (declared > limit) continue;
+            try { return await fetchOne(url); }
+            catch (error) { if (declared || error.code !== 'too-large' || index === urls.length - 1) throw error; }
+        }
+        throw Object.assign(new Error('Too large'), { code: 'too-large' });
+    }
     // Instagram Reels and X videos are one progressive MP4, taken from the
     // post's own data. X serves GIFs as MP4 too, which the page re-encodes.
-    async function singleVideo(target, limit) {
-        const post = await get(target.canonical);
-        const item = post?.media?.length === 1 && post.media[0].type === 'video' ? post.media[0] : null;
-        const source = item && media.get(/^lowcord-media:\/\/media\/([\da-f]+)$/.exec(item.src)?.[1]);
-        if (!source?.url) throw Object.assign(new Error('Not a video post'), { code: 'not-video' });
-        const declared = await size(source.url).catch(() => null);
-        if (declared > limit) throw Object.assign(new Error('Too large'), { code: 'too-large' });
-        const id = target.site === 'twitter' ? /\/status\/(\d+)/.exec(target.path)?.[1] : /\/(?:p|reel|reels|tv)\/([\w-]+)/.exec(target.path)?.[1];
-        return { name: `${target.site === 'twitter' ? 'x' : target.site}-${id ?? 'video'}.mp4`, type: 'video/mp4', data: await download(source.url, limit), gif: Boolean(item.gif) };
+    function singleVideo(target, limit) {
+        return withPost(target, async post => {
+            const item = post?.media?.length === 1 && post.media[0].type === 'video' ? post.media[0] : null;
+            const source = item && sourceOf(item);
+            if (!source?.url) throw Object.assign(new Error('Not a video post'), { code: 'not-video' });
+            const data = await fitting(source, limit, url => download(url, limit));
+            const id = target.site === 'twitter' ? /\/status\/(\d+)/.exec(target.path)?.[1] : /\/(?:p|reel|reels|tv)\/([\w-]+)/.exec(target.path)?.[1];
+            return { name: `${target.site === 'twitter' ? 'x' : target.site}-${id ?? 'video'}.mp4`, type: 'video/mp4', data, gif: Boolean(item.gif) };
+        });
     }
     async function socialVideo(value, limit) {
         const target = links.parse(value);
@@ -410,7 +635,6 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         if (target?.site === 'instagram' || target?.site === 'twitter') return singleVideo(target, limit);
         throw Object.assign(new Error('Unsupported link'), { code: 'not-video' });
     }
-
     // A photo post or carousel as files: every item, in order, each within
     // Discord's per-file upload limit. Discord takes at most 10 attachments.
     const fileTypes = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'video/mp4': 'mp4' };
@@ -427,28 +651,34 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         const target = links.parse(value);
         if (!Number.isSafeInteger(limit) || limit < 1024 * 1024 || limit > 1024 ** 3) throw new Error('Invalid limit');
         if (!['reddit', 'instagram', 'twitter'].includes(target?.site)) throw Object.assign(new Error('Unsupported link'), { code: 'not-media' });
-        const post = await get(target.canonical);
-        const sources = (post?.media ?? []).map(item => media.get(/^lowcord-media:\/\/media\/([\da-f]+)$/.exec(item.src)?.[1]));
-        // Reddit's own videos are separate DASH streams; those posts go through socialVideo.
-        if (!sources.length || sources.some(source => !source?.url)) throw Object.assign(new Error('Not a media post'), { code: 'not-media' });
-        if (sources.length > 10) throw Object.assign(new Error('Too many files'), { code: 'too-many' });
-        const id = target.site === 'twitter' ? /\/status\/(\d+)/.exec(target.path)?.[1]
-            : target.site === 'instagram' ? /\/(?:p|reel|reels|tv)\/([\w-]+)/.exec(target.path)?.[1]
-            : /\/comments\/(\w+)/.exec(post.url ?? '')?.[1];
-        const prefix = `${target.site === 'twitter' ? 'x' : target.site}-${id ?? 'post'}`;
-        const files = [];
-        // One at a time, so memory holds one download in flight.
-        for (const [index, source] of sources.entries()) {
-            const response = await fetchPage(source.url, { credentials: 'omit', redirect: 'follow',
-                headers: { 'user-agent': browser, ...source.headers }, signal: AbortSignal.timeout(120_000) });
-            const declared = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? '';
-            if (!response.ok || !(response.url || source.url).startsWith('https:') || /html|xml|javascript/.test(declared)) { await response.body?.cancel().catch(() => {}); throw new Error(`HTTP ${response.status}`); }
-            const data = await read(response, limit);
-            const type = sniff(data, declared);
-            if (!type) throw new Error('Unknown file type');
-            files.push({ name: `${prefix}${sources.length > 1 ? `-${index + 1}` : ''}.${fileTypes[type]}`, type, data });
-        }
-        return { files };
+        return withPost(target, async post => {
+            const sources = (post?.media ?? []).map(sourceOf);
+            // Reddit's own videos are separate DASH streams; those posts go through socialVideo.
+            if (!sources.length || sources.some(source => !source?.url)) throw Object.assign(new Error('Not a media post'), { code: 'not-media' });
+            if (sources.length > 10) throw Object.assign(new Error('Too many files'), { code: 'too-many' });
+            const id = target.site === 'twitter' ? /\/status\/(\d+)/.exec(target.path)?.[1]
+                : target.site === 'instagram' ? /\/(?:p|reel|reels|tv)\/([\w-]+)/.exec(target.path)?.[1]
+                : /\/comments\/(\w+)/.exec(post.url ?? '')?.[1];
+            const prefix = `${target.site === 'twitter' ? 'x' : target.site}-${id ?? 'post'}`;
+            const fetchUrl = async (source, url) => {
+                const response = await fetchPage(url, { credentials: 'omit', redirect: 'follow',
+                    headers: { 'user-agent': browser, ...source.headers }, signal: AbortSignal.timeout(120_000) });
+                const declared = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? '';
+                if (!response.ok || !(response.url || url).startsWith('https:') || /html|xml|javascript/.test(declared)) { await response.body?.cancel().catch(() => {}); throw failed(response); }
+                const data = await read(response, limit);
+                const type = sniff(data, declared);
+                if (!type) throw new Error('Unknown file type');
+                return { data, type };
+            };
+            const fetchFile = async (source, index) => {
+                const { data, type } = source.variants?.length > 1
+                    ? await fitting(source, limit, url => fetchUrl(source, url)) : await fetchUrl(source, source.url);
+                return { name: `${prefix}${sources.length > 1 ? `-${index + 1}` : ''}.${fileTypes[type]}`, type, data };
+            };
+            const files = await Promise.all(sources.map((source, index) =>
+                (post.media[index].type === 'video' ? videoDownloads : photoDownloads)(() => fetchFile(source, index))));
+            return { files };
+        });
     }
 
     // ----- lowcord-media:// handler ------------------------------------------

@@ -59,9 +59,10 @@ test('Reddit, Instagram and Bluesky posts expose every carousel item through min
         } }] } }]);
         if (url.includes('/about')) return jsonResponse({ data: { community_icon: 'https://styles.redditmedia.com/icon.png' } });
         if (url.startsWith('https://zzinstagram.com/')) {
-            const index = Number(new URL(url).searchParams.get('img_index'));
-            const shown = Math.min(index, 3);
-            return htmlResponse(`<meta property="og:title" content="Name (@handle)"><meta property="og:image" content="https://g.oginstagram.com/offload/CODE/${shown}?thumbnail=1">${shown === 2 ? `<meta property="og:video" content="https://g.oginstagram.com/offload/CODE/${shown}">` : ''}`);
+            const shown = Math.min(3, Number(new URL(url).searchParams.get('img_index')));
+            if (shown === 2) return htmlResponse(`<meta property="og:title" content="Name (@handle)"><meta property="og:url" content="https://www.instagram.com/p/CODE/?img_index=2">`
+                + '<meta property="og:image" content="https://g.oginstagram.com/offload/CODE/2?thumbnail=1"><meta property="og:video" content="https://g.oginstagram.com/offload/CODE/2">');
+            return new Response(null, { status: 302, headers: { location: `https://scontent.cdninstagram.com/v/${shown}.jpg` } });
         }
         if (url.startsWith('https://public.api.bsky.app/')) return jsonResponse({ thread: { post: {
             author: { did: 'did:plc:abc', handle: 'a.bsky.social', displayName: 'A' }, record: { text: 'hi', createdAt: '2026-01-01T00:00:00Z' },
@@ -87,21 +88,179 @@ test('Reddit, Instagram and Bluesky posts expose every carousel item through min
     expect((await posts.serve(new Request('http://media/0123456789abcdef01234567'))).status).toBe(404);
 });
 
-test('Instagram photo slides that redirect to the image keep the carousel, its videos and caption', async () => {
+test('OGInstagram slides keep a carousel’s videos and photos in order, with the post page’s caption', async () => {
     const photo = n => `https://scontent.cdninstagram.com/v/${n}.jpg`;
     const posts = createSocialPosts(async (url, init) => {
         if (url.startsWith('https://zzinstagram.com/')) {
             const index = Math.min(4, Number(new URL(url).searchParams.get('img_index')));
             expect(init.redirect).toBe('manual');
-            if (index % 2) return htmlResponse(`<meta property="og:title" content="Name (@handle)"><meta property="og:image" content="https://g.oginstagram.com/offload/CODE/${index}?thumbnail=1"><meta property="og:video" content="https://g.oginstagram.com/offload/CODE/${index}">`);
+            // A video slide is a page naming the slide it served.
+            if (index % 2) return htmlResponse(`<meta property="og:url" content="https://www.instagram.com/p/CODE/?img_index=${index}"><meta property="og:image" content="https://g.oginstagram.com/offload/CODE/${index}?thumbnail=1"><meta property="og:video" content="https://g.oginstagram.com/offload/CODE/${index}">`);
             return new Response(null, { status: 302, headers: { location: photo(index) } });
         }
-        if (url.startsWith('https://hhinstagram.com/p/')) return htmlResponse('<meta property="og:description" content="❤️ 1.5K · 💬 3 · 🖼️ 1/4\nCaption">');
+        if (url === 'https://www.instagram.com/p/CODE/') return htmlResponse('<meta property="og:title" content="Name on Instagram: &quot;Caption&quot;">'
+            + '<meta property="og:description" content="1.5K likes, 3 comments - handle on March 18, 2026: &quot;Caption&quot;. ">');
         return new Response('missing', { status: 404 });
     });
     const post = await posts.get('https://www.instagram.com/p/CODE/');
     expect(post.media.map(item => item.type)).toEqual(['video', 'image', 'video', 'image']);
-    expect(post).toMatchObject({ text: 'Caption', stats: { likes: 1500, comments: 3 }, author: { handle: '@handle' } });
+    expect(post).toMatchObject({ text: 'Caption', stats: { likes: 1500, comments: 3 }, author: { name: 'Name', handle: '@handle' } });
+});
+
+test('an Instagram photo carousel keeps every slide, whichever CDN host serves it', async () => {
+    let requests = 0;
+    const posts = createSocialPosts(async url => {
+        if (url.startsWith('https://zzinstagram.com/')) {
+            requests++;
+            // Past-the-end indexes repeat the last slide, from another CDN host.
+            const index = Math.min(5, Number(new URL(url).searchParams.get('img_index')));
+            const host = index === 5 && requests % 2 ? 'scontent-dfw5-2' : 'scontent';
+            return new Response(null, { status: 302, headers: { location: `https://${host}.cdninstagram.com/v/${index}.jpg?oh=${requests}` } });
+        }
+        return new Response('missing', { status: 404 });
+    });
+    const post = await posts.get('https://www.instagram.com/p/CAROUSEL/');
+    expect(post.media.map(item => item.type)).toEqual(['image', 'image', 'image', 'image', 'image']);
+    expect(requests).toBeLessThan(12);
+    const single = createSocialPosts(async url => url.startsWith('https://zzinstagram.com/')
+        ? new Response(null, { status: 302, headers: { location: 'https://scontent.cdninstagram.com/v/only.jpg' } })
+        : new Response('Too Many Requests', { status: 429 }));
+    expect((await single.get('https://www.instagram.com/p/SINGLE/')).media).toHaveLength(1);
+});
+
+test('Instagram is read from its own API first, then its embed page, and a rate-limited source rests', async () => {
+    const calls = [];
+    const instagram = async (url, init) => {
+        calls.push(url);
+        if (url === 'https://www.instagram.com/graphql/query') {
+            const code = new URLSearchParams(init.body).get('variables').includes('REEL') ? 'REEL' : 'CODE';
+            const photo = n => ({ media_type: 1, original_width: 4, original_height: 3, image_versions2: { candidates: [{ url: `https://scontent.cdninstagram.com/s${n}.jpg`, width: 2, height: 1 }, { url: `https://scontent.cdninstagram.com/${n}.jpg`, width: 4, height: 3 }] } });
+            const clip = { media_type: 2, original_width: 9, original_height: 16, image_versions2: { candidates: [{ url: 'https://scontent.cdninstagram.com/poster.jpg' }] },
+                video_versions: [{ url: 'https://scontent.cdninstagram.com/clip.mp4', width: 9, height: 16 }] };
+            return jsonResponse({ data: { xdt_api__v1__media__shortcode__web_info: { items: [{ code, taken_at: 1700000000, like_count: 7, comment_count: 2,
+                caption: { text: 'Caption' }, user: { username: 'handle', full_name: 'Name', profile_pic_url: 'https://scontent.cdninstagram.com/me.jpg' },
+                ...(code === 'REEL' ? clip : { media_type: 8, carousel_media: [photo(1), clip, photo(2)] }) }] } } });
+        }
+        if (url === 'https://www.instagram.com/p/CODE/embed/captioned/') {
+            const context = JSON.stringify({ gql_data: { shortcode_media: { owner: { username: 'handle' }, edge_media_to_caption: { edges: [{ node: { text: 'Embedded' } }] },
+                edge_liked_by: { count: 5 }, edge_sidecar_to_children: { edges: [
+                    { node: { is_video: false, display_url: 'https://scontent.cdninstagram.com/1.jpg', dimensions: { width: 4, height: 3 } } },
+                    { node: { is_video: true, video_url: 'https://scontent.cdninstagram.com/clip.mp4', display_url: 'https://scontent.cdninstagram.com/poster.jpg' } }] } } } });
+            return htmlResponse(`<script>s.handle({"require":[["Embed",{"contextJSON":${JSON.stringify(context)}}]]})</script>`);
+        }
+        if (url === 'https://www.instagram.com/p/PHOTO/embed/captioned/') return htmlResponse(`<div data-media-type="GraphImage"><a class="Avatar" href="#"><img src="https://scontent.cdninstagram.com/me.jpg" /></a>
+            <span class="UsernameText">handle</span><img class="EmbeddedMediaImage" alt="x" src="https://scontent.cdninstagram.com/photo.jpg?a=1&amp;b=2" />
+            <a>1,204 likes</a><div class="Caption"><a class="CaptionUsername" href="#">handle</a><br /><br />Line one<br />Line &amp; two <a href="/explore/tags/tag/">#tag</a><div class="CaptionComments">View all 3 comments</div></div></div>`);
+        return new Response('missing', { status: 404 });
+    };
+    const posts = createSocialPosts(instagram);
+    const carousel = await posts.get('https://www.instagram.com/p/CODE/');
+    expect(carousel).toMatchObject({ text: 'Caption', author: { name: 'Name', handle: '@handle' }, stats: { likes: 7, comments: 2 }, created: 1700000000000 });
+    expect(carousel.media.map(item => [item.type, item.width])).toEqual([['image', 4], ['video', 9], ['image', 4]]);
+    expect((await posts.get('https://www.instagram.com/reel/REEL/')).media.map(item => item.type)).toEqual(['video']);
+    expect(calls.some(url => /hhinstagram|zzinstagram/.test(url))).toBe(false);
+
+    // Rate limited: the embed page, and the API is not asked again for a while.
+    calls.length = 0;
+    const limited = createSocialPosts(async (url, init) => url.includes('/graphql/')
+        ? (calls.push(url), new Response('{"message":"Please wait a few minutes before you try again."}', { status: 401 })) : instagram(url, init));
+    const embedded = await limited.get('https://www.instagram.com/p/CODE/');
+    expect(embedded).toMatchObject({ text: 'Embedded', author: { handle: '@handle' }, stats: { likes: 5 } });
+    expect(embedded.media.map(item => item.type)).toEqual(['image', 'video']);
+    const photo = await limited.get('https://www.instagram.com/p/PHOTO/');
+    expect(photo).toMatchObject({ text: 'Line one\nLine & two #tag', author: { handle: '@handle' }, stats: { likes: 1204, comments: 3 } });
+    expect(photo.media).toHaveLength(1);
+    expect(calls.filter(url => url.includes('/graphql/'))).toHaveLength(1);
+});
+
+test('a post Instagram serves only signed in comes whole from OGInstagram, through its hiccups, or not at all', async () => {
+    const photo = name => `https://scontent.cdninstagram.com/v/${name}.jpg`;
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2]);
+    const hiccups = { empty: false, error: false };
+    const restricted = slides => async url => {
+        if (url.includes('/graphql/')) return jsonResponse({ errors: [{ message: 'execution error' }], data: null });
+        if (url.endsWith('/embed/captioned/')) return htmlResponse('<div class="EmbedIsBroken">unavailable</div>');
+        if (url.startsWith('https://www.instagram.com/p/')) return htmlResponse('<meta property="og:title" content="Vega on Instagram: &quot;Phases&quot;">'
+            + '<meta property="og:description" content="16K likes, 331 comments - vega on March 18, 2026: &quot;Phases of me&quot;. ">'
+            // A cropped preview, which must never stand in for the post.
+            + `<meta property="og:image" content="${photo('cropped')}?stp=c258.0.774.774a_s640x640">`);
+        if (url.startsWith('https://zzinstagram.com/')) return slides(Number(new URL(url).searchParams.get('img_index')));
+        if (url.startsWith('https://scontent.cdninstagram.com/')) return new Response(jpeg, { headers: { 'content-type': 'image/jpeg' } });
+        // A fix service answering with a caption page but no media.
+        if (url.startsWith('https://eeinstagram.com/')) return htmlResponse('<meta property="og:description" content="Caption only">');
+        return new Response('Too Many Requests', { status: 429 });
+    };
+    const redirect = name => new Response(null, { status: 302, headers: { location: photo(name) } });
+    const posts = createSocialPosts(restricted(index => {
+        const shown = Math.min(3, index);
+        // Each kind of hiccup once: an empty page, then a server error.
+        if (shown === 2 && !hiccups.empty) { hiccups.empty = true; return htmlResponse('<html></html>'); }
+        if (shown === 3 && index === 3 && !hiccups.error) { hiccups.error = true; return new Response('', { status: 503 }); }
+        return redirect(shown);
+    }));
+    const full = await posts.get('https://www.instagram.com/p/LOCKED/?stkn=abc');
+    expect(full).toMatchObject({ text: 'Phases of me', author: { name: 'Vega', handle: '@vega' }, stats: { likes: 16000, comments: 331 } });
+    expect(full.media).toHaveLength(3);
+    expect(hiccups).toEqual({ empty: true, error: true });
+    expect((await posts.socialMedia('https://www.instagram.com/p/LOCKED/', 1024 * 1024)).files).toHaveLength(3);
+
+    // OGInstagram down: no post at all rather than a cropped first photo
+    // or a caption-only page, and no files.
+    const down = createSocialPosts(restricted(() => new Response('Too Many Requests', { status: 429 })));
+    expect(await down.get('https://www.instagram.com/p/LOCKED/')).toBeNull();
+    await expect(down.socialMedia('https://www.instagram.com/p/LOCKED/', 1024 * 1024)).rejects.toMatchObject({ code: 'not-media' });
+
+    // Slides that repeat mean the count can't be trusted: no post.
+    const repeating = createSocialPosts(restricted(index => redirect(index === 1 ? 'a' : index <= 3 ? 'b' : 'c')));
+    expect(await repeating.get('https://www.instagram.com/p/LOCKED/')).toBeNull();
+});
+
+test('X is read from its own embed API, and uploads step down to a video quality that fits', async () => {
+    const calls = [];
+    const posts = createSocialPosts(async (url, init) => {
+        calls.push(`${init.method ?? 'GET'} ${url}`);
+        if (url.startsWith('https://cdn.syndication.twimg.com/tweet-result?id=1&')) return jsonResponse({ __typename: 'Tweet', id_str: '1',
+            text: 'Hello &amp; see https://t.co/link https://t.co/media', created_at: '2026-01-01T00:00:00.000Z', favorite_count: 4, conversation_count: 1,
+            entities: { urls: [{ url: 'https://t.co/link', expanded_url: 'https://example.com/page' }], media: [{ url: 'https://t.co/media' }] },
+            user: { name: 'N', screen_name: 's', profile_image_url_https: 'https://pbs.twimg.com/profile_images/1/a_normal.jpg' },
+            mediaDetails: [{ type: 'video', media_url_https: 'https://pbs.twimg.com/thumb.jpg', original_info: { width: 16, height: 9 },
+                video_info: { variants: [{ content_type: 'application/x-mpegURL', url: 'https://video.twimg.com/a.m3u8' },
+                    { content_type: 'video/mp4', bitrate: 256000, url: 'https://video.twimg.com/low.mp4' },
+                    { content_type: 'video/mp4', bitrate: 2176000, url: 'https://video.twimg.com/high.mp4' }] } }] });
+        if (url.startsWith('https://cdn.syndication.twimg.com/')) return jsonResponse({ __typename: 'TweetTombstone' });
+        if (url.startsWith('https://api.fxtwitter.com/status/2')) return jsonResponse({ tweet: { text: 'fx', author: { name: 'n', screen_name: 's' },
+            media: { all: [{ type: 'photo', url: 'https://pbs.twimg.com/a.jpg' }] } } });
+        const sizes = { 'https://video.twimg.com/high.mp4': 3 * 1024 * 1024, 'https://video.twimg.com/low.mp4': 12 };
+        if (url in sizes) return new Response(init.method === 'HEAD' ? null : url.slice(-8), { headers: { 'content-length': String(init.method === 'HEAD' ? sizes[url] : 8) } });
+        return new Response('missing', { status: 404 });
+    });
+    const post = await posts.get('https://x.com/s/status/1');
+    expect(post).toMatchObject({ text: 'Hello & see https://example.com/page', author: { handle: '@s', url: 'https://x.com/s' }, stats: { likes: 4, replies: 1 } });
+    expect(post.media).toEqual([expect.objectContaining({ type: 'video', width: 16, height: 9 })]);
+    expect(calls.some(call => call.includes('fxtwitter'))).toBe(false);
+    const file = await posts.socialVideo('https://x.com/s/status/1', 2 * 1024 * 1024);
+    expect(Buffer.from(file.data).toString()).toBe('/low.mp4');
+    // A post X's API refuses comes from the next source.
+    expect((await posts.get('https://x.com/s/status/2')).text).toBe('fx');
+});
+
+test('a download that fails reads the post again once, for fresh media URLs', async () => {
+    let lookups = 0;
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2]);
+    const posts = createSocialPosts(async url => {
+        if (url.startsWith('https://cdn.syndication.twimg.com/')) {
+            lookups++;
+            return jsonResponse({ __typename: 'Tweet', id_str: '1', text: 't', user: { screen_name: 's' },
+                mediaDetails: [{ type: 'photo', media_url_https: `https://pbs.twimg.com/media/${lookups}.jpg` }] });
+        }
+        // The first lookup's signed URL has expired.
+        if (url === 'https://pbs.twimg.com/media/1.jpg?name=large') return new Response('gone', { status: 403 });
+        if (url === 'https://pbs.twimg.com/media/2.jpg?name=large') return new Response(jpeg, { headers: { 'content-type': 'image/jpeg' } });
+        return new Response('missing', { status: 404 });
+    });
+    await posts.get('https://x.com/s/status/1');
+    const { files } = await posts.socialMedia('https://x.com/s/status/1', 1024 * 1024);
+    expect([lookups, files.map(file => file.name)]).toEqual([2, ['x-1.jpg']]);
 });
 
 test('X and Reddit GIFs loop in the card and download flagged as GIFs', async () => {
@@ -313,6 +472,14 @@ test.describe('Videos as files', () => {
             // Discord's composer takes pasted files as attachments.
             window.attached = [];
             editor.addEventListener('paste', event => { for (const file of event.clipboardData.files) attached.push(file.name); });
+            // Like Discord's editor, pasted text goes in even when the paste
+            // was default-prevented; only a stopped event never reaches it.
+            editor.addEventListener('paste', event => {
+                const text = event.clipboardData.getData('text/plain');
+                if (!text || event.clipboardData.files.length) return;
+                event.preventDefault();
+                editor.textContent += text;
+            });
             // Switching channels swaps the composer's draft, as in Discord.
             const channelListeners = new Set();
             window.drafts = {};
@@ -323,7 +490,8 @@ test.describe('Videos as files', () => {
                 attached = drafts[id]?.attached ?? [];
                 channelListeners.forEach(listener => listener());
             };
-            const stores = { SelectedChannelStore: { getChannelId: () => channel, addChangeListener: fn => channelListeners.add(fn) } };
+            const stores = { SelectedChannelStore: { getChannelId: () => channel, addChangeListener: fn => channelListeners.add(fn) },
+                UploadAttachmentStore: { getUploads: id => id === channel ? attached.map(filename => ({ filename })) : [] } };
             Object.defineProperty(Lowcord, 'store', { configurable: true, value: name => stores[name] });
             window.pasteText = text => {
                 editor.focus();
@@ -358,10 +526,30 @@ test.describe('Videos as files', () => {
             return new Promise(resolve => { window.finishDownload = () => resolve({ name: 'reddit-1wxyc04.mp4', type: 'video/mp4', data: new Uint8Array(8) }); });
         } }; });
         await page.evaluate(link => pasteText(link), link);
-        await expect(page.locator('#composer')).toHaveText(fixed);
+        // Becoming a file, so not rewritten to a fix service, and inserted once.
+        await expect(page.locator('#composer')).toHaveText(link);
         expect(await page.evaluate(() => window.videoRequest)).toEqual({ url: link, limit: 10 * 1024 * 1024 });
         await page.evaluate(() => finishDownload());
         await expect.poll(() => page.evaluate(() => attached)).toEqual([expect.stringMatching(/^[a-z]{7}\.mp4$/)]);
+        await page.evaluate(() => sendMessage());
+        const body = await lastMessage(page);
+        expect(body.content).toBe('');
+        expect(body.attachments).toHaveLength(1);
+    });
+
+    test('pasting a post again after its files were removed downloads it again', async ({ page }) => {
+        await page.evaluate(() => { window.downloads = 0; window.__LOWCORD_NATIVE__ = {
+            socialVideo: async () => { downloads++; return { name: 'reddit-1wxyc04.mp4', type: 'video/mp4', data: new Uint8Array(8) }; } }; });
+        await page.evaluate(link => pasteText(link), link);
+        await expect.poll(() => page.evaluate(() => attached.length)).toBe(1);
+        // Still in the draft: a second paste reuses the attached file.
+        await page.evaluate(link => pasteText(link), link);
+        await page.waitForTimeout(200);
+        expect(await page.evaluate(() => downloads)).toBe(1);
+        await page.evaluate(() => { attached = []; document.querySelector('#composer').textContent = ''; });
+        await page.evaluate(link => pasteText(link), link);
+        await expect.poll(() => page.evaluate(() => attached.length)).toBe(1);
+        expect(await page.evaluate(() => downloads)).toBe(2);
         await page.evaluate(() => sendMessage());
         const body = await lastMessage(page);
         expect(body.content).toBe('');
@@ -375,11 +563,14 @@ test.describe('Videos as files', () => {
         }; });
         await page.evaluate(tweet => pasteText(`${tweet} lol`), tweet);
         await page.evaluate(tweet => pasteText(tweet), tweet);
-        await expect(page.locator('.lowcord-toast')).toContainText('It will be sent as a video');
+        await expect(page.locator('.lowcord-toast-progress')).toContainText('Getting the X video');
         await page.locator('#composer').press('Enter');
         await page.locator('#composer').press('Enter');
         expect(await page.evaluate(() => sends)).toBe(0);
+        // The same status says the send is waiting, then turns into the outcome.
+        await expect(page.locator('.lowcord-toast-progress')).toContainText('Sending once the X video is ready');
         await page.evaluate(() => finishDownload());
+        await expect(page.locator('.lowcord-toast-success')).toContainText('X video attached');
         await expect.poll(() => page.evaluate(() => sends)).toBe(1);
         await expect.poll(() => lastMessage(page)).toMatchObject({ content: 'lol', attachments: [{ id: '0' }] });
         // The link left the composer first, so Discord's upload row shows only the video.
@@ -408,9 +599,12 @@ test.describe('Videos as files', () => {
             socialVideo: () => Promise.reject(new Error('must not download')),
         }; });
         await page.evaluate(link => pasteText(link), link);
+        // Shown at once, before the post has been found.
+        await expect(page.locator('.lowcord-toast-progress')).toContainText('Checking the Reddit post');
         await page.locator('#composer').press('Enter');
         await page.evaluate(() => finishPost());
         await expect.poll(() => page.evaluate(() => sends)).toBe(1);
+        // Nothing to send as files: the status just goes.
         await expect(page.locator('.lowcord-toast')).toHaveCount(0);
     });
 
@@ -433,11 +627,34 @@ test.describe('Videos as files', () => {
         await expect.poll(() => page.evaluate(() => attached)).toEqual(Array(3).fill(expect.stringMatching(/^[a-z]{7}\.jpg$/)));
         expect(await page.evaluate(() => pasteSizes)).toEqual([1, 1, 1]);
         expect(await page.evaluate(() => window.mediaRequest)).toEqual({ url: tweet, limit: 10 * 1024 * 1024 });
-        await expect(page.locator('.lowcord-toast')).toContainText('X photos attached');
+        await expect(page.locator('.lowcord-toast-success')).toContainText('3 X photos attached');
         await page.evaluate(() => sendMessage());
         const body = await lastMessage(page);
         expect(body.content).toBe('');
         expect(body.attachments).toHaveLength(3);
+    });
+
+    test('a post whose lookup failed is read again for the download, or its link is sent', async ({ page }) => {
+        await page.evaluate(() => Lowcord.extensions.set('socialPhotoUpload', true));
+        const post = 'https://www.instagram.com/p/LOCKED/';
+        await page.evaluate(() => { window.__LOWCORD_NATIVE__ = {
+            socialPost: async () => null,
+            socialVideo: () => Promise.reject(new Error('must not download a video')),
+            // The download reads the post again, and the whole post came back.
+            socialMedia: async () => ({ files: [1, 2, 3].map(index => ({ name: `instagram-LOCKED-${index}.jpg`, type: 'image/jpeg', data: new Uint8Array(4) })) }),
+        }; });
+        await page.evaluate(post => pasteText(post), post);
+        await expect.poll(() => page.evaluate(() => attached)).toHaveLength(3);
+        await expect(page.locator('.lowcord-toast')).toContainText('Instagram post attached');
+        await page.evaluate(() => sendMessage());
+        expect(await lastMessage(page)).toMatchObject({ content: '', attachments: [{}, {}, {}] });
+
+        await page.evaluate(() => { document.getElementById('composer').textContent = ''; attached = [];
+            window.__LOWCORD_NATIVE__.socialMedia = async () => ({ error: 'failed' }); });
+        const other = post.replace('LOCKED', 'LOCKED2');
+        await page.evaluate(other => pasteText(other), other);
+        await expect(page.locator('.lowcord-toast-failure')).toContainText('Couldn’t get this Instagram post');
+        expect(await page.evaluate(() => attached)).toEqual([]);
     });
 
     test('the same link waits unsent in two DMs, and a DM left mid-download gets its files on return', async ({ page }) => {
@@ -499,6 +716,8 @@ test.describe('Videos as files', () => {
         expect((await lastMessage(page)).content).toContain('/comments/big1/');
         await page.evaluate(() => { document.getElementById('composer').textContent = ''; Lowcord.extensions.set('redditVideoUpload', false); window.__LOWCORD_NATIVE__.socialVideo = () => { throw new Error('must not download'); }; });
         await page.evaluate(link => pasteText(link), link);
+        // The rewritten link replaces the pasted one rather than joining it.
+        await expect(page.locator('#composer')).toHaveText(fixed);
         await page.evaluate(() => sendMessage());
         expect((await lastMessage(page)).content).toBe(fixed);
         expect(await page.evaluate(() => attached)).toEqual([]);

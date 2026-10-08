@@ -51,6 +51,18 @@ test('multiline Slate drafts preserve separate music links and reuse their playe
     await expect(page.locator('.lowcord-music-draft')).toHaveCount(0);
 });
 
+test('a draft rewritten without an input event (send, draft restore) updates its players', async ({ page }) => {
+    await page.evaluate(spotify => {
+        const editor = document.createElement('div'); editor.id = 'composer';
+        editor.contentEditable = 'true'; editor.setAttribute('role', 'textbox');
+        editor.innerHTML = `<p><span>${spotify}</span></p>`;
+        document.querySelector('.channelTextArea_test').append(editor);
+    }, spotify);
+    await expect(page.locator('.lowcord-music-draft iframe')).toHaveCount(1);
+    await page.evaluate(() => { document.querySelector('#composer span').firstChild.data = ''; });
+    await expect(page.locator('.lowcord-music-draft')).toHaveCount(0);
+});
+
 for (const width of [1000, 520, 320]) {
     test(`music drafts stay above the native composer without stretching it at ${width}px`, async ({ page }) => {
         await page.setViewportSize({ width, height: 700 });

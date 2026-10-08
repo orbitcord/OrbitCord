@@ -91,6 +91,37 @@
 .lowcord-volume-control input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.15); }
 .lowcord-volume-control input[type="range"]:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 4px; }
 @media (max-width: 720px) { .lowcord-volume-card { flex-direction: column; align-items: stretch; } }
+.lowcord-sleep-card { border-radius: 8px; background: var(--background-base-lower, var(--background-secondary, #2b2d31)); }
+.lowcord-sleep-card .lowcord-chat-toggle { align-items: flex-start; gap: 16px; padding: 16px; }
+.lowcord-sleep-card .lowcord-chat-toggle strong, .lowcord-sleep-label strong { font-size: 15px; }
+.lowcord-sleep-card .lowcord-chat-description { margin-top: 4px; font-size: 13px; line-height: 1.4; }
+.lowcord-sleep-card .lowcord-chat-toggle input { flex: none; }
+.lowcord-sleep-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 24px;
+    padding: 16px; border-top: 1px solid var(--background-modifier-accent, rgb(78 80 88 / .48));
+    transition: opacity .15s;
+}
+.lowcord-sleep-row[data-off="true"] { opacity: .45; }
+.lowcord-segmented {
+    display: flex; flex: none; gap: 2px; padding: 3px; border-radius: 8px;
+    background: var(--background-base-lowest, var(--background-tertiary, #1e1f22));
+}
+.lowcord-segmented button {
+    min-width: 62px; padding: 7px 12px; border: 0; border-radius: 6px; cursor: pointer;
+    background: transparent; color: var(--text-muted, #949ba4);
+    font: inherit; font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums;
+    transition: background-color .15s, color .15s;
+}
+.lowcord-segmented button:hover:not(:disabled):not([aria-checked="true"]) { color: var(--text-normal, #f2f3f5); background: var(--background-modifier-hover, rgb(148 155 164 / .08)); }
+.lowcord-segmented button[aria-checked="true"] { background: var(--brand-500, #5865f2); color: #fff; }
+.lowcord-segmented button:disabled { cursor: default; }
+.lowcord-segmented button:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px; }
+.lowcord-sleep-note {
+    margin: 0; padding: 12px 16px 14px; border-top: 1px solid var(--background-modifier-accent, rgb(78 80 88 / .48));
+    color: var(--text-muted, #949ba4); font-size: 13px; line-height: 1.4;
+}
+@media (max-width: 720px) { .lowcord-sleep-row { flex-direction: column; align-items: stretch; } .lowcord-segmented button { flex: 1; } }
+@media (prefers-reduced-motion: reduce) { .lowcord-sleep-row, .lowcord-segmented button { transition: none; } }
 .lowcord-embed-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 32px; }
 .lowcord-embed-options > * { margin: 0; }
 .lowcord-embed-options .lowcord-embed-heading, .lowcord-embed-options > p { grid-column: 1 / -1; }
@@ -161,19 +192,57 @@
     box-shadow: inset 0 0 0 2px var(--brand-500, #5865f2);
 }
 
+/* Status toasts: a frosted card with a tinted icon badge, a headline and a
+   quieter line below it. One at a time; a toast that replaces another settles
+   into its place. */
 .lowcord-toast {
+    /* A dark card in every theme, so its colours are its own rather than
+       Discord's theme variables. */
+    --lowcord-tone: #949cf7; --lowcord-ink: #f2f3f5; --lowcord-ink-muted: #b5bac1;
     position: fixed; left: 50%; bottom: 96px; z-index: 10001; transform: translateX(-50%);
-    padding: 10px 16px; border-radius: 8px; max-width: min(480px, calc(100vw - 32px));
-    background: var(--background-floating, #111214); color: var(--text-normal, #f2f3f5);
-    box-shadow: 0 8px 24px rgb(0 0 0 / .35); font-size: 14px;
+    display: flex; align-items: center; gap: 12px; box-sizing: border-box;
+    max-width: min(420px, calc(100vw - 32px)); padding: 9px 18px 9px 10px; border-radius: 18px;
+    background: rgb(24 25 28 / .86);
+    -webkit-backdrop-filter: blur(18px) saturate(1.5); backdrop-filter: blur(18px) saturate(1.5);
+    border: 1px solid rgb(255 255 255 / .1);
+    box-shadow: 0 14px 36px rgb(0 0 0 / .34), 0 2px 8px rgb(0 0 0 / .2);
+    color: var(--lowcord-ink);
+    animation: lowcord-toast-in 260ms cubic-bezier(.22, 1, .36, 1);
 }
-.lowcord-toast:has(.lowcord-toast-action) { display: flex; align-items: center; gap: 12px; padding-block: 6px; }
+.lowcord-toast-success { --lowcord-tone: #3ecf7e; }
+.lowcord-toast-failure { --lowcord-tone: #fa777c; }
+.lowcord-toast-swap { animation: lowcord-toast-swap 150ms ease-out; }
+.lowcord-toast-out { animation: lowcord-toast-out 170ms ease-in forwards; pointer-events: none; }
+@keyframes lowcord-toast-in { from { opacity: 0; transform: translate(-50%, 12px) scale(.95); } }
+@keyframes lowcord-toast-swap { from { opacity: .35; transform: translate(-50%, 0) scale(.985); } }
+@keyframes lowcord-toast-out { to { opacity: 0; transform: translate(-50%, 6px) scale(.97); } }
+.lowcord-toast-badge {
+    flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%;
+    background: color-mix(in srgb, var(--lowcord-tone) 17%, transparent); color: var(--lowcord-tone);
+}
+.lowcord-toast-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.lowcord-toast-track { opacity: .22; }
+.lowcord-toast-icon-progress { animation: lowcord-toast-spin .85s linear infinite; }
+.lowcord-toast-check { stroke-dasharray: 22; stroke-dashoffset: 22; animation: lowcord-toast-draw 320ms 90ms cubic-bezier(.4, 0, .2, 1) forwards; }
+@keyframes lowcord-toast-spin { to { transform: rotate(360deg); } }
+@keyframes lowcord-toast-draw { to { stroke-dashoffset: 0; } }
+.lowcord-toast-copy { display: grid; gap: 1px; min-width: 0; }
+.lowcord-toast-title { font-size: 14px; line-height: 18px; font-weight: 600; color: #fff; text-wrap: balance; }
+.lowcord-toast-detail { font-size: 12.5px; line-height: 16px; color: var(--lowcord-ink-muted); text-wrap: pretty; }
+.lowcord-toast-detail[hidden] { display: none; }
 .lowcord-toast-action {
-    flex: none; padding: 4px 10px; border: 0; border-radius: 4px; cursor: pointer;
-    background: var(--button-secondary-background, #4e5058); color: var(--white-500, #fff); font: inherit; font-size: 13px; font-weight: 500;
+    flex: none; margin-left: 6px; padding: 5px 12px; border: 0; border-radius: 10px; cursor: pointer;
+    background: rgb(255 255 255 / .12); color: inherit; font: inherit; font-size: 13px; font-weight: 600;
+    transition: background-color 120ms;
 }
-.lowcord-toast-action:hover { background: var(--button-secondary-background-hover, #6d6f78); }
-.lowcord-toast-failure { box-shadow: inset 3px 0 var(--status-danger, #da373c), 0 8px 24px rgb(0 0 0 / .35); }
+.lowcord-toast-action:hover { background: rgb(255 255 255 / .2); }
+.lowcord-toast-action:focus-visible { outline: 2px solid var(--lowcord-tone); outline-offset: 2px; }
+/* Progress and the arrival still read, without the motion. */
+@media (prefers-reduced-motion: reduce) {
+    .lowcord-toast, .lowcord-toast-swap, .lowcord-toast-out { animation: none; }
+    .lowcord-toast-check { animation: none; stroke-dashoffset: 0; }
+    .lowcord-toast-icon-progress { animation-duration: 2.6s; }
+}
 
 /* Only Lowcord's music cards; Discord's attachment grid keeps its own sizing. */
 .lowcord-music-embeds, .lowcord-music-draft { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; min-width: 0; margin-top: 8px; }

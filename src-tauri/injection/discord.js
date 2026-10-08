@@ -38,9 +38,14 @@
     };
 
     // Modules load as Discord needs them, so pending lookups retry until found.
+    // A full export scan runs only when the module cache grew, a lookup was
+    // added, or 5 s passed (a cached module can still be filling its exports).
     const pending = new Set(), pendingStores = new Map();
-    let timer;
+    let timer, scannedModules = -1, scannedAt = 0;
     function poll() {
+        const modules = wreq?.c ? Object.keys(wreq.c).length : 0;
+        if (modules === scannedModules && Date.now() - scannedAt < 5000) return;
+        scannedModules = modules; scannedAt = Date.now();
         const unresolved = new Set(pending), resolved = [];
         // Enumerate exports once, rather than once for every pending feature.
         for (const value of exportsOf()) {
@@ -64,7 +69,7 @@
         const value = find(filter);
         if (value) { callback(value); return; }
         pending.add({ filter, callbacks: new Set([callback]) });
-        timer ??= setInterval(poll, 250);
+        scannedModules = -1; timer ??= setInterval(poll, 250);
     }
     function waitForStore(name, callback) {
         const waiting = pendingStores.get(name);
@@ -73,7 +78,7 @@
         if (value) { callback(value); return; }
         const entry = { name, filter: filters.byStoreName(name), callbacks: new Set([callback]) };
         pendingStores.set(name, entry); pending.add(entry);
-        timer ??= setInterval(poll, 250);
+        scannedModules = -1; timer ??= setInterval(poll, 250);
     }
     const cache = new Map();
     function cached(key, filter) {
@@ -85,9 +90,12 @@
         return cache.get(key);
     }
 
-    // One batched observer for Lowcord features that need to notice new UI.
-    const domListeners = new Set();
-    let domFrame, domObserver, domRecords = [];
+    // One observer for every Lowcord feature. onDomMutation listeners get raw
+    // records before paint; onDomChange listeners get one batch per frame of
+    // structure and src changes. id/class records are only requested while a
+    // before-paint listener needs them.
+    const mutationListeners = new Set(), domListeners = new Set();
+    let domFrame, domObserver, domRecords = [], observedAttributes = "";
     function domChanged(records, selector) {
         if (!Array.isArray(records)) return true;
         return records.some(record => {
@@ -97,42 +105,61 @@
                 (node.matches(selector) || node.querySelector(selector)));
         });
     }
-    function startDomObserver() {
-        if (!domListeners.size || domObserver || !document.body) return;
-        domObserver = new MutationObserver(records => {
-            // A hidden window may not run rAF. Bound retained mutation records;
-            // null requests a complete reconciliation after a large burst.
-            if (domRecords !== null) domRecords = domRecords.length + records.length > 1000 ? null : domRecords.concat(records);
-            domFrame ??= requestAnimationFrame(() => {
-                domFrame = undefined;
-                const records = domRecords; domRecords = [];
-                for (const fn of domListeners) { try { fn(records); } catch (error) { console.error("[Lowcord]", error); } }
-            });
+    function mutated(records) {
+        for (const fn of mutationListeners) { try { fn(records); } catch (error) { console.error("[Lowcord]", error); } }
+        if (!domListeners.size) return;
+        const batch = mutationListeners.size ? records.filter(record => record.type === "childList" || record.attributeName === "src") : records;
+        if (!batch.length) return;
+        // A hidden window may not run rAF. Bound retained mutation records;
+        // null requests a complete reconciliation after a large burst.
+        if (domRecords !== null) domRecords = domRecords.length + batch.length > 1000 ? null : domRecords.concat(batch);
+        domFrame ??= requestAnimationFrame(() => {
+            domFrame = undefined;
+            const records = domRecords; domRecords = [];
+            for (const fn of domListeners) { try { fn(records); } catch (error) { console.error("[Lowcord]", error); } }
         });
-        domObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["src"] });
+    }
+    function updateDomObserver() {
+        if (!document.body) return;
+        if (!domListeners.size && !mutationListeners.size) {
+            domObserver?.disconnect(); domObserver = undefined; observedAttributes = "";
+            if (domFrame !== undefined) cancelAnimationFrame(domFrame);
+            domFrame = undefined; domRecords = [];
+            return;
+        }
+        const attributes = mutationListeners.size ? ["id", "class", "src"] : ["src"];
+        if (domObserver && observedAttributes === attributes.join()) return;
+        // Pending records belong to the old filter; deliver them first.
+        if (domObserver) { const records = domObserver.takeRecords(); if (records.length) mutated(records); }
+        domObserver ??= new MutationObserver(mutated);
+        domObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: attributes });
+        observedAttributes = attributes.join();
+    }
+    function startDomObserver() {
+        if (domObserver || !document.body) return;
+        updateDomObserver();
         // Registrations made from document-start scripts could not see body.
         for (const fn of domListeners) { try { fn(); } catch (error) { console.error("[Lowcord]", error); } }
     }
-    function onDomChange(listener) {
-        domListeners.add(listener);
+    function listen(listeners, listener, initial) {
+        listeners.add(listener);
         if (document.body) {
-            if (domObserver) listener(); else startDomObserver();
+            updateDomObserver();
+            if (initial) listener();
         } else document.addEventListener("DOMContentLoaded", startDomObserver, { once: true });
         return () => {
-            domListeners.delete(listener);
-            if (!domListeners.size) {
-                domObserver?.disconnect(); domObserver = undefined;
-                if (domFrame !== undefined) cancelAnimationFrame(domFrame);
-                domFrame = undefined; domRecords = [];
-                document.removeEventListener("DOMContentLoaded", startDomObserver);
-            }
+            if (!listeners.delete(listener)) return;
+            updateDomObserver();
+            if (!domListeners.size && !mutationListeners.size) document.removeEventListener("DOMContentLoaded", startDomObserver);
         };
     }
+    const onDomChange = listener => listen(domListeners, listener, true);
+    const onDomMutation = listener => listen(mutationListeners, listener, false);
 
     window.Lowcord = {
         // Discord deletes window.localStorage while it starts; the shim kept it.
         storage: window.__lowcordStorage,
-        filters, find, waitFor, waitForStore, onDomChange, domChanged,
+        filters, find, waitFor, waitForStore, onDomChange, onDomMutation, domChanged,
         store: name => cached(`store:${name}`, filters.byStoreName(name)),
         get React() { return cached("react", value => filters.byProps("createElement", "useState", "useEffect")(value) && typeof value.version === "string"); },
         // 299 is React's invariant code shared by createRoot and createPortal.

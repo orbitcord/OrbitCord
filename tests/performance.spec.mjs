@@ -141,3 +141,50 @@ test('DOM listeners receive records, unsubscribe, and reattach without duplicate
     });
     expect(result).toEqual({ first: 1, stopped: 0, restarted: 1, records: 2 });
 });
+
+test('an unresolved lookup skips export scans until the module cache grows', async () => {
+    const source = await readFile('src-tauri/injection/discord.js', 'utf8');
+    const window = { webpackChunkdiscord_app: [] }, timers = new Set(), modules = {};
+    let now = 0, reads = 0;
+    const track = (id, exports) => Object.defineProperty(modules, id, { enumerable: true, configurable: true, get: () => { reads++; return { exports }; } });
+    for (let i = 0; i < 3; i++) track(String(i), { value: i });
+    runInNewContext(source, { window, document: {}, console, Date: { now: () => now },
+        setInterval: fn => { timers.add(fn); return fn; }, clearInterval: fn => timers.delete(fn) });
+    window.webpackChunkdiscord_app[0][2]({ c: modules });
+    const poll = () => { for (const fn of timers) fn(); };
+    const found = [];
+    window.Lowcord.waitForStore('Late', store => found.push(store));
+    reads = 0; poll(); expect(reads).toBe(3);
+    reads = 0; now += 250; poll(); now += 250; poll(); expect(reads).toBe(0);
+    // A module that is still filling its exports is caught by the periodic scan.
+    now += 5000; poll(); expect(reads).toBe(3);
+    class Late {} Late.displayName = 'Late';
+    track('3', { default: new Late() });
+    reads = 0; now += 250; poll();
+    expect(found).toHaveLength(1); expect(found[0]).toBeInstanceOf(Late); expect(timers.size).toBe(0);
+});
+
+test('one observer serves before-paint and per-frame listeners with only the attributes they need', async ({ page }) => {
+    await page.goto('/electron-child');
+    await page.addScriptTag({ content: await readFile('src-tauri/injection/discord.js', 'utf8') });
+    const result = await page.evaluate(async () => {
+        const wait = async () => { for (let i = 0; i < 3; i++) await new Promise(requestAnimationFrame); };
+        const node = document.createElement('div'); document.body.append(node); await wait();
+        const sync = [], framed = [];
+        const removeFrame = Lowcord.onDomChange(records => { if (Array.isArray(records)) framed.push(...records.map(record => record.attributeName ?? record.type)); });
+        const removeSync = Lowcord.onDomMutation(records => sync.push(...records.map(record => record.attributeName ?? record.type)));
+        node.className = 'hovered'; node.id = 'row'; node.setAttribute('src', 'a'); node.append('text');
+        // Before-paint listeners run in the mutation microtask, ahead of rAF.
+        await Promise.resolve();
+        const beforeFrame = [...sync];
+        await wait();
+        const withSync = { beforeFrame, framed: [...framed] };
+        removeSync(); framed.length = 0;
+        node.className = 'other'; node.setAttribute('src', 'b'); await wait();
+        const frameOnly = [...framed]; removeFrame();
+        return { withSync, frameOnly, syncAfterRemoval: sync.length };
+    });
+    expect(result.withSync).toEqual({ beforeFrame: ['class', 'id', 'src', 'childList'], framed: ['src', 'childList'] });
+    expect(result.frameOnly).toEqual(['src']);
+    expect(result.syncAfterRemoval).toBe(4);
+});
