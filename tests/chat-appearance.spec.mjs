@@ -453,13 +453,8 @@ for (const width of [1000, 520]) for (const position of ["left", "right"]) {
 test("channel modes, virtualized row reuse, missing user and system messages", async ({ page }) => {
     await load(page);
     for (const type of [0, 5, 10, 11, 12]) {
-        await settings(page, {servers:false});
         await page.evaluate(type => {fixture.channel.type=type;fixture.emit();}, type);
-        await expect(bubble(page, 1)).toHaveCount(0);
-        await settings(page, {servers:true});
-        await expect(page.locator("[data-lowcord-bubble]")).toHaveCount(6);
-        await expect(bubble(page, 1)).toHaveAttribute("data-lowcord-show-author", "true");
-        await cleanMedia(page);
+        await expect(page.locator("[data-lowcord-bubble]")).toHaveCount(0);
     }
     await page.evaluate(() => {fixture.channel.type=3;fixture.emit();});
     await expect(bubble(page, 1)).toHaveAttribute("data-lowcord-show-author", "true");
@@ -491,7 +486,7 @@ test("preferences migrate, normalize, synchronize and setup is idempotent", asyn
     await expect(bubble(page, 2)).toHaveAttribute("data-lowcord-style", "bubbles");
     await page.evaluate(() => { const storage=Lowcord.storage; storage.setItem("lowcord.dmChatAppearance",JSON.stringify({outgoingPosition:"left"})); window.dispatchEvent(new StorageEvent("storage",{key:"lowcord.dmChatAppearance",storageArea:storage})); });
     await expect(bubble(page, 2)).toHaveAttribute("data-lowcord-align", "left");
-    await page.goto("/?legacy=" + encodeURIComponent(JSON.stringify({enabled:false, dms:false, servers:true})));
+    await page.goto("/?legacy=" + encodeURIComponent(JSON.stringify({enabled:false, dms:false})));
     await expect(page.getByRole("switch", {name:/Chat bubbles/})).not.toBeChecked();
     await expect(page.locator("[data-lowcord-bubble]")).toHaveCount(0);
     await page.getByRole("switch", {name:/Chat bubbles/}).check();

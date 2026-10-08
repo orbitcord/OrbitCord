@@ -101,6 +101,19 @@
             ariaLabel: items.length > 1 ? `${items.length} media items` : "Media" });
         items.forEach((item, index) => track.append(slide(item, index, items.length)));
         root.append(track);
+        // Without the post's own sizes, the first item sets the frame once
+        // it loads, rather than boxing a tall photo into a square.
+        if (!(first.width > 0 && first.height > 0)) {
+            let media = track.firstElementChild?.querySelector("img, video");
+            // A video with a poster loads nothing until played; its poster
+            // has the same shape.
+            if (media?.tagName === "VIDEO" && media.poster) media = Object.assign(new Image(), { src: media.poster });
+            const fit = () => {
+                const width = media.naturalWidth || media.videoWidth, height = media.naturalHeight || media.videoHeight;
+                if (width > 0 && height > 0) root.style.setProperty("--lowcord-social-ratio", String(Math.min(1.91, Math.max(0.56, width / height))));
+            };
+            media?.addEventListener(media.tagName === "VIDEO" ? "loadedmetadata" : "load", fit, { once: true });
+        }
         if (items.length > 1) {
             const count = el("span", "lowcord-social-count", { ariaLive: "polite" });
             const previous = el("button", "lowcord-social-nav lowcord-social-prev", { type: "button", ariaLabel: "Previous item" });
@@ -243,6 +256,7 @@
         desired.forEach((node, index) => { if (host.children[index] !== node) host.insertBefore(node, host.children[index] ?? null); });
     }
     function flush() {
+        if (frame !== undefined) cancelAnimationFrame(frame);
         frame = undefined;
         if (!extensions.enabled("socialCards")) { rows.clear(); return; }
         for (const row of rows) updateRow(row);
@@ -260,25 +274,31 @@
         schedule();
     }
     window.addEventListener(extensions.changeEvent, refresh);
-    function start() {
-        new MutationObserver(records => {
-            if (!extensions.enabled("socialCards")) return;
-            for (const record of records) {
-                const target = record.target instanceof Element ? record.target : record.target.parentElement;
-                if (!target || target.closest(ownSelector)) continue;
-                const added = [...record.addedNodes].filter(node => node instanceof Element && !node.matches(ownSelector));
-                if (!added.length && ![...record.removedNodes].some(node => !(node instanceof Element && node.matches(ownSelector)))) continue;
-                const row = target.closest(rowSelector);
-                if (row) rows.add(row);
-                for (const node of added) {
-                    if (node.matches(rowSelector)) rows.add(node);
-                    node.querySelectorAll(rowSelector).forEach(item => rows.add(item));
-                }
+    function domChanged(records) {
+        if (!Array.isArray(records)) { document.querySelectorAll(rowSelector).forEach(row => rows.add(row)); flush(); return; }
+        for (const record of records) {
+            const target = record.target instanceof Element ? record.target : record.target.parentElement;
+            if (!target || target.closest(ownSelector)) continue;
+            const added = [...record.addedNodes].filter(node => node instanceof Element && !node.matches(ownSelector));
+            if (!added.length && ![...record.removedNodes].some(node => !(node instanceof Element && node.matches(ownSelector)))) continue;
+            const row = target.closest(rowSelector);
+            if (row) rows.add(row);
+            for (const node of added) {
+                if (node.matches(rowSelector)) rows.add(node);
+                node.querySelectorAll(rowSelector).forEach(item => rows.add(item));
             }
-            if (rows.size) schedule();
-        }).observe(document.body, { childList: true, subtree: true });
-        refresh();
+        }
+        // Already inside the shared frame callback: render in this frame.
+        if (rows.size) flush();
     }
+    let stopObserving;
+    function observe() {
+        const on = extensions.enabled("socialCards");
+        if (on && !stopObserving) stopObserving = window.Lowcord.onDomChange(domChanged);
+        else if (!on && stopObserving) { stopObserving(); stopObserving = undefined; }
+    }
+    window.addEventListener(extensions.changeEvent, observe);
+    function start() { observe(); refresh(); }
     if (document.body) start(); else document.addEventListener("DOMContentLoaded", start, { once: true });
     window.Lowcord.waitForStore("MessageStore", store => {
         // Store changes cover edits and suppression flags with no DOM change.

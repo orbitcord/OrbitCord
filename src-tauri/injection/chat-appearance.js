@@ -8,7 +8,7 @@ function setupLowcordChatAppearance() {
     const storage = Lowcord.storage;
     const optionsKey = "lowcord.dmChatAppearance";
     const defaults = { style: "bubbles", outgoingPosition: "right", timestamps: true, outgoingColor: "#006be6", incomingColor: "#3a3a3c",
-        dms: true, groupDms: true, servers: false };
+        dms: true, groupDms: true };
     // Matches the CSS: 16px gutter, plus a 28px face and 8px gap in avatar style.
     const gutter = 16, face = 36;
     function normalizeOptions(value) {
@@ -18,7 +18,7 @@ function setupLowcordChatAppearance() {
             outgoingPosition: ["left", "right"].includes(value?.outgoingPosition) ? value.outgoingPosition : defaults.outgoingPosition,
             timestamps: typeof value?.timestamps === "boolean" ? value.timestamps : defaults.timestamps,
             outgoingColor: color("outgoingColor"), incomingColor: color("incomingColor"),
-            ...Object.fromEntries(["dms", "groupDms", "servers"].map(key =>
+            ...Object.fromEntries(["dms", "groupDms"].map(key =>
                 [key, typeof value?.[key] === "boolean" ? value[key] : defaults[key]])) };
     }
     function readOptions() {
@@ -64,7 +64,7 @@ function setupLowcordChatAppearance() {
     function messageChanged() { storeChanged = true; scheduleRefresh(); }
     const storeListeners = new Map();
     let enabled = true;
-    let observer;
+    let stopObserving;
     const resizedTimelines = new Set();
     const resizeObserver = new ResizeObserver(() => invalidate());
     // Media decodes and players mount after the row; their size decides the
@@ -390,7 +390,7 @@ function setupLowcordChatAppearance() {
         const channel = stores.get("ChannelStore")?.getChannel(channelID);
         const userID = stores.get("UserStore")?.getCurrentUser()?.id;
         const channelEnabled = channel?.type === 1 ? options.dms : channel?.type === 3
-            ? options.groupDms : [0, 5, 10, 11, 12].includes(channel?.type) && options.servers;
+            ? options.groupDms : false;
         if (!channelEnabled || !userID) { clearBubbles(); return; }
         const nextContext = `${channelID}:${channel.type}:${userID}`;
         if (context !== nextContext) { context = nextContext; fullRefresh = structureChanged = true; }
@@ -463,7 +463,7 @@ function setupLowcordChatAppearance() {
     }
 
     function updateObservers() {
-        observer?.disconnect();
+        stopObserving?.(); stopObserving = undefined;
         resizeObserver.disconnect();
         resizedTimelines.clear();
         for (const [store, listener] of storeListeners) store.removeChangeListener?.(listener);
@@ -481,7 +481,7 @@ function setupLowcordChatAppearance() {
             // batches each DOM commit and runs before paint. Deferring again
             // to rAF lets rows committed during a frame paint once without
             // their bubble (including pending -> confirmed replacements).
-            observer ??= new MutationObserver(records => {
+            stopObserving = Lowcord.onDomMutation(records => {
                 // The app shell, member list, composer and settings animate
                 // independently. Only timeline changes need a message scan.
                 let relevant = false;
@@ -510,8 +510,6 @@ function setupLowcordChatAppearance() {
                     refresh();
                 }
             });
-            observer.observe(document.body, { childList: true, subtree: true,
-                attributes: true, attributeFilter: ["id", "class", "src"] });
         }
         scheduleRefresh();
     }
@@ -588,8 +586,7 @@ function setupLowcordChatAppearance() {
                 h("div", { className: "lowcord-channel-settings" },
                     h("h3", null, "Where to use bubbles"),
                     toggle("Direct messages", "One-to-one conversations.", state.dms, value => setOptions({ dms: value })),
-                    toggle("Group messages", "Keep sender names visible in group DMs.", state.groupDms, value => setOptions({ groupDms: value })),
-                    toggle("Server channels", "Use the same layout in channels and threads.", state.servers, value => setOptions({ servers: value })))),
+                    toggle("Group messages", "Keep sender names visible in group DMs.", state.groupDms, value => setOptions({ groupDms: value })))),
             h("p", { className: "lowcord-chat-description" }, "Changes apply immediately and are saved on this device."),
             error ? h("p", { role: "alert" }, error) : null);
     }

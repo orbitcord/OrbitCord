@@ -10,6 +10,8 @@ function setupLowcordSettings() {
             component: () => IconPanel },
         { id: "extensions", title: "Extensions", icon: "M10 3a2 2 0 0 1 4 0v1h3a1 1 0 0 1 1 1v3h1a2 2 0 0 1 0 4h-1v3a1 1 0 0 1-1 1h-3v1a2 2 0 0 1-4 0v-1H7a1 1 0 0 1-1-1v-3H5a2 2 0 0 1 0-4h1V5a1 1 0 0 1 1-1h3V3Z",
             component: () => ExtensionsPanel },
+        { id: "background", title: "Background", icon: "M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z",
+            component: () => BackgroundPanel },
         { id: "updates", title: "Check for updates", icon: "M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1",
             component: () => UpdatesPanel },
     ];
@@ -73,6 +75,54 @@ function setupLowcordSettings() {
                 "After downloading, open the installer, quit OrbitCord, and drag the new app to Applications to replace your current version.") : null,
             state.installMode === "unavailable" ? h("p", { className: "lowcord-chat-description" },
                 "Install updates from the Mac or Windows version of OrbitCord.") : null);
+    }
+
+    function BackgroundPanel() {
+        const { React } = window.Lowcord;
+        const h = React.createElement;
+        const native = window.__LOWCORD_NATIVE__;
+        const [settings, setSettings] = React.useState(null);
+        const [error, setError] = React.useState("");
+        React.useEffect(() => {
+            let live = true;
+            native?.background?.().then(value => live && setSettings(value)).catch(failure => live && setError(failure.message));
+            return () => { live = false; };
+        }, []);
+        const change = next => {
+            const before = settings;
+            setSettings(next);
+            native.background(next).then(saved => { setSettings(saved); setError(""); },
+                failure => { setSettings(before); setError(failure.message); });
+        };
+        const delays = [[5, "5 min"], [15, "15 min"], [30, "30 min"], [60, "1 hour"]];
+        const arrow = event => {
+            const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+            if (!step) return;
+            event.preventDefault();
+            const next = delays[(delays.findIndex(([minutes]) => minutes === settings.minutes) + step + delays.length) % delays.length][0];
+            change({ ...settings, minutes: next });
+            event.currentTarget.parentElement.querySelector(`[data-minutes="${next}"]`)?.focus();
+        };
+        return h("section", { className: "lowcord-chat-appearance" },
+            h("p", { className: "lowcord-chat-intro" }, "Hidden or minimized, OrbitCord clears cached memory after 30 seconds. Sleep goes further."),
+            settings ? h("div", { className: "lowcord-sleep-card" },
+                h("label", { className: "lowcord-chat-toggle" },
+                    h("span", null, h("strong", null, "Sleep in the background"),
+                        h("span", { className: "lowcord-chat-description" },
+                            "Unloads Discord to free most of its memory, and reloads it when you reopen the window.")),
+                    h("input", { type: "checkbox", role: "switch", checked: settings.sleep,
+                        onChange: event => change({ ...settings, sleep: event.target.checked }) })),
+                h("div", { className: "lowcord-sleep-row", "data-off": !settings.sleep },
+                    h("span", { className: "lowcord-sleep-label" }, h("strong", null, "Sleep after"),
+                        h("span", { className: "lowcord-chat-description" }, "How long the window stays hidden first.")),
+                    h("div", { className: "lowcord-segmented", role: "radiogroup", "aria-label": "Sleep after" },
+                        ...delays.map(([minutes, label]) => h("button", { key: minutes, type: "button", role: "radio",
+                            "data-minutes": minutes, "aria-checked": settings.minutes === minutes, disabled: !settings.sleep,
+                            tabIndex: settings.minutes === minutes ? 0 : -1, onKeyDown: arrow,
+                            onClick: () => change({ ...settings, minutes }) }, label)))),
+                h("p", { className: "lowcord-sleep-note" },
+                    "No notifications arrive while Discord sleeps. OrbitCord stays awake during calls, uploads and playing media.")) : null,
+            error ? h("p", { role: "alert" }, error) : null);
     }
 
     const appIcons = [["default", "Default"], ["candy", "Candy"], ["champagne", "Champagne"], ["graphite", "Graphite"], ["midnight", "Midnight"], ["sun", "Sun"]];

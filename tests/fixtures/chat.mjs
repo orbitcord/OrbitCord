@@ -67,7 +67,12 @@ localStorage.clear();
 if (query.has("legacy")) localStorage.setItem("VencordSettings", JSON.stringify({ plugins: { ChatBubbles: JSON.parse(query.get("legacy")) } }));
 if (query.has("options")) localStorage.setItem("lowcord.dmChatAppearance", query.get("options"));
 // The production hook finds these in Discord's webpack cache.
-window.Lowcord = { storage: localStorage, React, waitForStore: (name, callback) => callback(stores[name]) };
+window.Lowcord = { storage: localStorage, React, waitForStore: (name, callback) => callback(stores[name]),
+    onDomMutation(listener) {
+        const observer = new MutationObserver(listener);
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["id", "class", "src"] });
+        return () => observer.disconnect();
+    } };
 document.addEventListener("DOMContentLoaded", () => {
     // Production injection supplies the CSS string alongside the script.
     fetch("/appearance.css").then(r => r.text()).then(css => {

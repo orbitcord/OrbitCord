@@ -7,6 +7,7 @@ const { setupEmbedPlugins } = require('./embed-plugins.cjs');
 const { createSocialResolver } = require('./social-resolver.cjs');
 const { createSocialPosts, scheme: mediaScheme } = require('./social-posts.cjs');
 const { createUpdateController, latestRelease, macAsset, downloadMacInstaller } = require('./updates.cjs');
+const { createBackgroundSaver } = require('./background.cjs');
 
 app.setName('OrbitCord');
 app.setAppUserModelId('dev.lowcord.app'); // Stable identity preserves existing installs and notifications.
@@ -175,6 +176,9 @@ async function start() {
         },
     });
     const embedPlugins = setupEmbedPlugins(mainWindow.webContents);
+    // LOWCORD_FAST_SLEEP counts sleep delays in seconds for manual testing.
+    const background = createBackgroundSaver({ window: mainWindow, userData, trusted,
+        minute: dev && process.env.LOWCORD_FAST_SLEEP === '1' ? 1000 : 60_000 });
     const socialResolver = createSocialResolver();
     socialPosts = createSocialPosts();
     if (testing && process.env.LOWCORD_TEST_UPDATER === '1') updates.initialize();
@@ -294,6 +298,10 @@ async function start() {
     ipcMain.handle('lowcord:log', (event, message) => { assertSender(event); return backend.call('log', { message }); });
     ipcMain.handle('lowcord:open-external', (event, url) => { assertSender(event); return backend.call('open_external', { url }); });
     ipcMain.handle('lowcord:embed-preferences', (event, settings) => { assertSender(event); embedPlugins.set(settings); });
+    ipcMain.handle('lowcord:background', (event, settings) => {
+        assertSender(event);
+        return settings === undefined ? background.get() : background.set(settings);
+    });
     ipcMain.handle('lowcord:resolve-social-link', (event, url, provider) => {
         assertSender(event);
         if (typeof url !== 'string' || url.length > 2048 || typeof provider !== 'string') throw new Error('Invalid link');
