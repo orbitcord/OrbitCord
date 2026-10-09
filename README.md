@@ -28,7 +28,7 @@ OrbitCord checks GitHub Releases for newer versions. Use **OrbitCord Settings �
 
 Run the setup EXE and follow the installer. If SmartScreen warns you, choose **More info**, then **Run anyway**. OrbitCord downloads updates in the background and asks you to restart to install them.
 
-**OrbitCord Settings → Check for updates** also shows update status and download progress. Version 0.1.5.1 Windows installations receive the stable installer through a compatibility update feed; version 0.1.5.1 on macOS needs one manual upgrade.
+**OrbitCord Settings → Check for updates** also shows update status and download progress.
 
 ## License
 
