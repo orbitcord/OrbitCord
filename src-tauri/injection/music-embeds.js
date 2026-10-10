@@ -79,10 +79,14 @@
         const bar = editor.closest('[class*="channelTextArea_"]');
         if (!bar || editor.closest('[role="dialog"]')) return;
         // Slate renders separate lines as blocks; textContent joins their URLs
-        // together. innerText keeps the line breaks in contenteditable drafts.
-        const content = editor.value ?? editor.innerText ?? editor.textContent ?? '';
+        // together. innerText keeps the line breaks in contenteditable drafts,
+        // but it forces a layout, and this runs on most page changes. Read it
+        // only when the text or the number of lines changed.
         const prior = drafts.get(editor);
-        if (prior?.content === content && (!prior.host || prior.host.isConnected)) return;
+        const key = editor.value ?? `${editor.childElementCount}:${editor.textContent}`;
+        if (prior?.key === key && (!prior.host || prior.host.isConnected)) return;
+        const content = editor.value ?? editor.innerText ?? editor.textContent ?? '';
+        if (prior?.content === content && (!prior.host || prior.host.isConnected)) { prior.key = key; return; }
         const items = musicLinks.collect(content, socialLinks.mapUrls);
         let host = prior?.host;
         if (!items.length) { host?.remove(); host = null; }
@@ -97,7 +101,7 @@
             }
             reconcile(host, items, true);
         }
-        drafts.set(editor, { content, host });
+        drafts.set(editor, { key, content, host });
     }
     function flush() {
         if (frame !== undefined) cancelAnimationFrame(frame);

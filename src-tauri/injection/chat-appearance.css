@@ -2,7 +2,12 @@
    of the message, reply navigation, media players, menus and reactions.
    Every surface rule is scoped as a direct child of the timeline row. Discord's
    own message rules are !important and load later; the extra row selector is
-   what lets ours win on both logical and physical padding. */
+   what lets ours win on both logical and physical padding.
+   A Discord class-substring test only ever sits on the element being styled:
+   as an ancestor it makes every class change restyle whole subtrees. Ancestors
+   are matched by id instead (message-content-, message-reply-context-), and
+   the contents_ column and the hover toolbar are the row's children without an
+   id (:not([id])). */
 
 /* Rows. One spacing scale for text and media: 8px between groups, 2px inside
    a group, room under the last message for its timestamp. */
@@ -68,11 +73,11 @@
    nonce becomes a confirmed message. Keep customized text visually stable;
    scope this to message text so native upload progress and errors stay intact. */
 [id^="chat-messages-"] > [data-lowcord-bubble="outgoing"] [class*="messageContent_"][class*="isSending_"],
-[id^="chat-messages-"] > [data-lowcord-media="outgoing"] > [class*="contents_"] > [class*="messageContent_"][class*="isSending_"] {
+[id^="chat-messages-"] > [data-lowcord-media="outgoing"] > :not([id]) > [class*="messageContent_"][class*="isSending_"] {
     opacity: 1 !important;
 }
-[id^="chat-messages-"] > [data-lowcord-bubble] [class*="messageContent_"] a { color: inherit !important; text-decoration: underline; }
-[id^="chat-messages-"] > [data-lowcord-bubble] [class*="messageContent_"] pre { box-sizing: border-box; max-width: 100%; overflow-x: auto; }
+[id^="chat-messages-"] > [data-lowcord-bubble] [id^="message-content-"] a { color: inherit !important; text-decoration: underline; }
+[id^="chat-messages-"] > [data-lowcord-bubble] [id^="message-content-"] pre { box-sizing: border-box; max-width: 100%; overflow-x: auto; }
 /* Reactions and link previews on a text message stay inside its bubble. */
 [id^="chat-messages-"] > [data-lowcord-bubble] > [class*="container_"]:not([class*="buttonContainer_"]) {
     min-width: 0; max-width: 100%; margin: 6px 0 0 !important; padding: 0 !important;
@@ -90,21 +95,21 @@
 
 /* Discord's faces, names and inline times. Lowcord draws its own face and
    footer time; one-to-one DMs already name the person in the header. */
-[id^="chat-messages-"] > [data-lowcord-cluster] > [class*="contents_"] > [class*="avatar_"],
-[id^="chat-messages-"] > [data-lowcord-cluster] > [class*="contents_"] > [class*="avatarDecoration_"],
-[id^="chat-messages-"] > [data-lowcord-cluster] > [class*="contents_"] > [class*="decoration_"],
-[id^="chat-messages-"] > [data-lowcord-cluster] > [class*="contents_"] > [class*="header_"],
+[id^="chat-messages-"] > [data-lowcord-cluster] > :not([id]) > [class*="avatar_"],
+[id^="chat-messages-"] > [data-lowcord-cluster] > :not([id]) > [class*="avatarDecoration_"],
+[id^="chat-messages-"] > [data-lowcord-cluster] > :not([id]) > [class*="decoration_"],
+[id^="chat-messages-"] > [data-lowcord-cluster] > :not([id]) > [class*="header_"],
 [id^="chat-messages-"] > [data-lowcord-cluster] [class*="timestamp_"] { display: none !important; }
 /* Group DMs: the sender's name opens each incoming group. */
-[id^="chat-messages-"] > [data-lowcord-cluster][data-lowcord-media="incoming"][data-lowcord-show-author="true"][data-lowcord-continuation="false"] > [class*="contents_"] > [class*="header_"],
-[id^="chat-messages-"] > [data-lowcord-bubble="incoming"][data-lowcord-show-author="true"][data-lowcord-continuation="false"] > [class*="contents_"] > [class*="header_"] {
+[id^="chat-messages-"] > [data-lowcord-cluster][data-lowcord-media="incoming"][data-lowcord-show-author="true"][data-lowcord-continuation="false"] > :not([id]) > [class*="header_"],
+[id^="chat-messages-"] > [data-lowcord-bubble="incoming"][data-lowcord-show-author="true"][data-lowcord-continuation="false"] > :not([id]) > [class*="header_"] {
     display: block !important;
     min-height: 0 !important;
     margin: 0 0 3px !important;
     font-size: 12px;
     line-height: 16px;
 }
-[id^="chat-messages-"] > [data-lowcord-bubble] > [class*="contents_"] > [class*="header_"] [class*="username_"] { color: inherit !important; }
+[id^="chat-messages-"] > [data-lowcord-bubble] > :not([id]) [class*="username_"] { color: inherit !important; }
 
 /* Media, uploads, stickers and forwards keep Discord's renderer without a
    bubble. The row uses the same gutters as bubbles on both sides. */
@@ -117,11 +122,11 @@
 [data-lowcord-uploader] { --lowcord-edge: 16px; padding: 2px var(--lowcord-edge) !important; padding-inline: var(--lowcord-edge) !important; min-height: 0 !important; }
 [data-lowcord-uploader][data-lowcord-style="avatars"] { --lowcord-edge: 52px; }
 [data-lowcord-uploader] > [class*="contents_"] { margin: 0 !important; padding: 0 !important; position: static !important; }
-[data-lowcord-uploader] > [class*="contents_"] > :is([class*="avatar_"], [class*="avatarDecoration_"], [class*="decoration_"], [class*="header_"]),
+[data-lowcord-uploader] > :not([id]) > :is([class*="avatar_"], [class*="avatarDecoration_"], [class*="decoration_"], [class*="header_"]),
 [data-lowcord-uploader] [class*="avatarDecoration_"] { display: none !important; }
-[data-lowcord-uploader="right"] > [class*="contents_"] > [class*="messageContent_"] { display: flex !important; justify-content: flex-end; }
+[data-lowcord-uploader="right"] > :not([id]) > [class*="messageContent_"] { display: flex !important; justify-content: flex-end; }
 /* A caption reads as a bubble above its media. */
-[id^="chat-messages-"] > [data-lowcord-media][data-lowcord-caption] > [class*="contents_"] > [class*="messageContent_"] {
+[id^="chat-messages-"] > [data-lowcord-media][data-lowcord-caption] > :not([id]) > [class*="messageContent_"] {
     box-sizing: border-box;
     width: fit-content !important;
     max-width: min(72%, 520px) !important;
@@ -134,8 +139,8 @@
     background: var(--lowcord-bubble-color);
     color: var(--lowcord-bubble-text) !important;
 }
-[id^="chat-messages-"] > [data-lowcord-media][data-lowcord-caption] > [class*="contents_"] > [class*="messageContent_"] a { color: inherit !important; text-decoration: underline; }
-[id^="chat-messages-"] > [data-lowcord-media][data-lowcord-align="right"][data-lowcord-caption] > [class*="contents_"] > [class*="messageContent_"] { margin-left: auto !important; }
+[id^="chat-messages-"] > [data-lowcord-media][data-lowcord-caption] > :not([id]) > [id^="message-content-"] a { color: inherit !important; text-decoration: underline; }
+[id^="chat-messages-"] > [data-lowcord-media][data-lowcord-align="right"][data-lowcord-caption] > :not([id]) > [class*="messageContent_"] { margin-left: auto !important; }
 /* Discord sizes attachments against a full-width grid (minmax(100%, 1fr)).
    Any width or shrink-wrap change inside it collapses media, so outgoing items
    are only translated; --lowcord-media-shift is measured from the content. */
@@ -222,17 +227,17 @@
     border-right: 2px dotted var(--text-muted, #949ba4); border-top-right-radius: 10px;
 }
 /* Emoji-only messages show as they are, large and without a bubble. */
-[id^="chat-messages-"] > [data-lowcord-emoji="true"] > [class*="contents_"] > [class*="messageContent_"] {
+[id^="chat-messages-"] > [data-lowcord-emoji="true"] > :not([id]) > [class*="messageContent_"] {
     margin: 0 !important; padding: 0 !important; text-indent: 0 !important; background: none;
 }
 [id^="chat-messages-"] > [data-lowcord-emoji="true"][data-lowcord-align="right"] > [class*="contents_"] { text-align: right; }
 :is([data-lowcord-bubble], [data-lowcord-media]) [class*="repliedMessageClickableSpine_"] { display: none !important; }
-:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > [class*="username_"],
-:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > :has([class*="username_"]) {
+[data-lowcord-cluster] > [id^="message-reply-context-"] > [class*="username_"],
+[data-lowcord-cluster] > [id^="message-reply-context-"] > :has([class*="username_"]) {
     grid-column: var(--lowcord-reply-text-column); grid-row: 1; min-width: 0; max-width: 100%;
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
-:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] [class*="username_"] {
+[data-lowcord-cluster] > [id^="message-reply-context-"] [class*="username_"] {
     position: static !important;
     font-size: 12px !important;
     line-height: 16px !important;
@@ -243,7 +248,7 @@
 /* The preview is one line: the text (or "Click to see attachment") and,
    for attachments, Discord's icon after it. */
 :is([data-lowcord-bubble], [data-lowcord-media]) [class*="repliedTextPreview_"],
-[id^="chat-messages-"] > :is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > [class*="repliedText"]:not([class*="Icon_"]) {
+[id^="chat-messages-"] > [data-lowcord-cluster] > [id^="message-reply-context-"] > [class*="repliedText"]:not([class*="Icon_"]) {
     grid-column: var(--lowcord-reply-text-column); grid-row: 2;
     display: flex !important;
     align-items: center;
@@ -259,7 +264,7 @@
     color: var(--text-muted, #949ba4) !important;
 }
 :is([data-lowcord-bubble], [data-lowcord-media])[data-lowcord-align="right"] [class*="repliedTextPreview_"] { justify-content: flex-end; }
-:is([data-lowcord-bubble], [data-lowcord-media]) [class*="repliedTextPreview_"] > :is([class*="repliedTextContent_"], [class*="repliedTextPlaceholder_"]) {
+[data-lowcord-cluster] > [id^="message-reply-context-"] > * > :is([class*="repliedTextContent_"], [class*="repliedTextPlaceholder_"]) {
     display: block !important;
     flex: 0 1 auto;
     min-width: 0;
@@ -271,7 +276,7 @@
     line-height: inherit !important;
     color: inherit !important;
 }
-:is([data-lowcord-bubble], [data-lowcord-media]) [class*="repliedTextPreview_"] :is([class*="repliedTextContentIcon_"], svg) {
+[data-lowcord-cluster] > [id^="message-reply-context-"] > :where(div) :is([class*="repliedTextContentIcon_"], svg):where(:not([class*="replyIcon_"])) {
     position: static !important;
     flex: none;
     width: 16px !important;
@@ -280,12 +285,12 @@
 }
 /* The quote has two rows. Anything else Discord adds (badges, icons) would
    fall into new rows over the bubble, so only known parts are shown. */
-[id^="chat-messages-"] > :is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > :not(
+[id^="chat-messages-"] > [data-lowcord-cluster] > [id^="message-reply-context-"] > :not(
     [class*="username_"], :has([class*="username_"]), [class*="repliedText"]:not([class*="Icon_"]), :has([class*="repliedTextPreview_"]),
     [class*="replyAvatar_"], :has([class*="replyAvatar_"]), [class*="replyBadge_"]) { display: none !important; }
-:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > [class*="replyAvatar_"],
-:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > :has([class*="replyAvatar_"]),
-:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > [class*="replyBadge_"] {
+[data-lowcord-cluster] > [id^="message-reply-context-"] > [class*="replyAvatar_"],
+[data-lowcord-cluster] > [id^="message-reply-context-"] > :has([class*="replyAvatar_"]),
+[data-lowcord-cluster] > [id^="message-reply-context-"] > [class*="replyBadge_"] {
     display: none !important;
     grid-column: var(--lowcord-reply-avatar-column, 1); grid-row: 1 / 3; align-self: center;
 }
@@ -302,8 +307,8 @@
     --lowcord-reply-avatar-column: 2;
 }
 /* Discord's reply badge (an arrow in place of the avatar) takes the avatar's place. */
-:is([data-lowcord-bubble], [data-lowcord-media])[data-lowcord-style="avatars"] > [class*="repliedMessage_"] > :is(:has([class*="replyAvatar_"]), [class*="replyBadge_"]) { display: flex !important; }
-:is([data-lowcord-bubble], [data-lowcord-media]) > [class*="repliedMessage_"] > [class*="replyBadge_"] {
+[data-lowcord-cluster][data-lowcord-style="avatars"] > [id^="message-reply-context-"] > :is(:has([class*="replyAvatar_"]), [class*="replyBadge_"]) { display: flex !important; }
+[data-lowcord-cluster] > [id^="message-reply-context-"] > [class*="replyBadge_"] {
     position: static !important; align-items: center; justify-content: center; width: 20px !important; height: 20px !important; margin: 0 !important;
 }
 :is([data-lowcord-bubble], [data-lowcord-media])[data-lowcord-style="avatars"] [class*="replyAvatar_"] { display: block !important; }
@@ -344,7 +349,7 @@
 /* Above the corner: overlapping the content's top far corner, raised above it. */
 [id^="chat-messages-"] > [data-lowcord-actions="corner"] > [class*="buttonContainer_"] { translate: 0 calc(-100% + 10px); }
 [id^="chat-messages-"] > [data-lowcord-actions="corner"] > [class*="buttonContainer_"]::before { flex-basis: max(0px, calc(var(--lowcord-actions-width) - 32px)); }
-[data-lowcord-actions] > [class*="buttonContainer_"] [class*="buttons_"] {
+[data-lowcord-actions] > :not([id]) > [class*="buttons_"] {
     position: relative !important;
     inset: auto !important;
     flex: 0 1 auto;
@@ -355,7 +360,7 @@
     padding: 0 !important;
     transform: none !important;
 }
-[data-lowcord-actions] > [class*="buttonContainer_"] [class*="buttonsInner_"] {
+[data-lowcord-actions] > :not([id]) > * > [class*="buttonsInner_"] {
     box-sizing: border-box;
     position: relative !important;
     inset: auto !important;
@@ -367,8 +372,8 @@
 /* Reactions only: the quick reactions and the picker. Everything after the
    picker (reply, edit, more) stays in the message's right-click menu. Matched
    by position, not by label, so it works in every language. */
-[data-lowcord-actions="react"] > [class*="buttonContainer_"] [class*="buttonsInner_"] > [class*="separator_"] + * ~ *,
-[data-lowcord-actions="react"] > [class*="buttonContainer_"] [class*="buttonsInner_"]:not(:has(> [class*="separator_"])) > :first-child ~ * { display: none !important; }
+[data-lowcord-actions="react"] > :not([id]) > * > * > div + * ~ *,
+[data-lowcord-actions="react"] > :not([id]) > * > :not(:has(> div)) > :first-child ~ * { display: none !important; }
 /* Discord shows the toolbar only while the message itself is hovered. A text
    bubble is narrower than its row, so this strip covers the rest of the row's
    far side: the pointer never leaves the message on its way to the bar. */

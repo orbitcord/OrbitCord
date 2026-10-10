@@ -22,11 +22,11 @@ const setExtension = (page, id, value) => page.evaluate(([id, value]) => Lowcord
 test("desktop download shortcut is hidden without affecting servers or attachment downloads", async ({ page }) => {
     await page.evaluate(() => {
         const fixture = document.createElement("div");
-        fixture.innerHTML = `<nav class="guilds_test">
+        fixture.innerHTML = `<nav class="guilds_test"><div data-list-id="guildsnav">
             <div class="listItem_test" id="server-item"><button aria-label="Test server">Server</button></div>
             <div class="listItem_test" id="download-item"><div aria-label="Download Apps" tabindex="0">Download</div></div>
             <div class="downloadApp_test" id="localized-download"><button aria-label="Télécharger les applications">Download</button></div>
-        </nav><div class="attachment_test"><a href="#download" aria-label="Download Apps">Download</a></div>`;
+        </div></nav><div class="attachment_test"><a href="#download" aria-label="Download Apps">Download</a></div>`;
         document.body.append(fixture);
     });
     await expect(page.locator("#download-item")).toBeHidden();

@@ -2,9 +2,9 @@
    from Discord's theme variables so light and dark themes both work. */
 /* Discord's web client advertises its desktop app in the server rail.
    Hide the whole item, including its spacing and hover target. */
-[class*="guilds_"] [class*="downloadApp_"],
-[class*="guilds_"] [class*="listItem_"]:has([aria-label="Download Apps"]),
-[class*="guilds_"] [aria-label="Download Apps"] {
+[data-list-id="guildsnav"] [class*="downloadApp_"],
+[data-list-id="guildsnav"] [class*="listItem_"]:has([aria-label="Download Apps"]),
+[data-list-id="guildsnav"] [aria-label="Download Apps"] {
     display: none !important;
 }
 
@@ -22,12 +22,12 @@
     box-shadow: 0 16px 48px rgb(0 0 0 / .4);
 }
 /* A page shown over Discord's settings content column, beside its sidebar. */
-[class*="content_"]:has(> .lowcord-settings-inline) { position: relative; }
-[class*="content_"]:has(> .lowcord-settings-inline) > [class*="contentHeader_"] button[aria-label="Close"] { position: relative; z-index: 2; }
+[data-lowcord-settings-host] { position: relative; }
+[data-lowcord-settings-host] > :not(.lowcord-settings-inline) button[aria-label="Close"] { position: relative; z-index: 2; }
 /* Discord's page stays mounted underneath. Its own layers (the Nitro table's
    highlighted column sits at z-index 9) must not paint through, so it gets a
    stacking context of its own and is hidden while an OrbitCord page shows. */
-[class*="content_"]:has(> .lowcord-settings-inline) > :not(.lowcord-settings-inline, [class*="contentHeader_"]) { isolation: isolate; visibility: hidden; }
+[data-lowcord-settings-host] > :not(.lowcord-settings-inline, [class*="contentHeader_"]) { isolation: isolate; visibility: hidden; }
 .lowcord-settings-inline {
     position: absolute; inset: 0; z-index: 1; display: flex; box-sizing: border-box;
     background: var(--background-base-low, var(--background-primary, #313338));

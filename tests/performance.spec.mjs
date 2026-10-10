@@ -188,3 +188,30 @@ test('one observer serves before-paint and per-frame listeners with only the att
     expect(result.frameOnly).toEqual(['src']);
     expect(result.syncAfterRemoval).toBe(4);
 });
+
+test('stylesheets test Discord class substrings only on the element being styled', async ({ page }) => {
+    // As an ancestor, [class*=…] makes Chromium restyle the whole subtree of any
+    // element whose class changes, which made channel switches and hovering stall.
+    const sheets = await Promise.all(['chat-appearance.css', 'lowcord-ui.css', 'themes.css']
+        .map(file => readFile(`src-tauri/injection/${file}`, 'utf8')));
+    const offenders = await page.evaluate(sheets => {
+        const split = (text, separators) => {
+            const parts = []; let depth = 0, quote = '', current = '';
+            for (const char of text) {
+                if (quote) { if (char === quote) quote = ''; }
+                else if (char === '"' || char === "'") quote = char;
+                else if ('(['.includes(char)) depth++;
+                else if (')]'.includes(char)) depth--;
+                else if (!depth && separators.includes(char)) { parts.push(current.trim()); current = ''; continue; }
+                current += char;
+            }
+            return [...parts, current.trim()].filter(Boolean);
+        };
+        const selectors = [];
+        const walk = rules => { for (const rule of rules) { if (rule.selectorText) selectors.push(rule.selectorText); if (rule.cssRules) walk(rule.cssRules); } };
+        for (const text of sheets) { const sheet = new CSSStyleSheet(); sheet.replaceSync(text); walk(sheet.cssRules); }
+        return selectors.flatMap(list => split(list, ',')).filter(selector =>
+            split(selector.replace(/\s*([>+~])\s*/g, '$1'), ' >+~').slice(0, -1).some(compound => compound.includes('[class')));
+    }, sheets);
+    expect(offenders).toEqual([]);
+});

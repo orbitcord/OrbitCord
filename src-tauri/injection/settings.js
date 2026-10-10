@@ -288,6 +288,9 @@ function setupLowcordSettings() {
         host.innerHTML = `<div class="lowcord-settings-page"><header><h1></h1></header><div class="lowcord-settings-body"></div></div>`;
         host.querySelector("h1").textContent = page.title;
         content.append(host);
+        // CSS hides Discord's page under this marker. A class-substring
+        // ancestor selector would restyle whole subtrees on every class change.
+        content.setAttribute("data-lowcord-settings-host", "");
         // Discord's own selection moves to the Lowcord entry while it is open.
         const list = link.closest('ul[role="list"]');
         const previous = [...list.querySelectorAll('[role="link"]')].filter(node => node !== link && [...node.classList].some(selectedName));
@@ -306,6 +309,7 @@ function setupLowcordSettings() {
         pageRoot.render(window.Lowcord.React.createElement(page.component()));
         inline = { host, content, root: pageRoot, cleanup() {
             document.removeEventListener("click", onClick, true);
+            content.removeAttribute("data-lowcord-settings-host");
             link.classList.remove(...selected);
             link.removeAttribute("aria-current");
             removed.forEach(([node, names]) => { if (node.isConnected) node.classList.add(...names); });

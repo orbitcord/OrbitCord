@@ -245,9 +245,11 @@ function setupLowcordChatAppearance() {
     // Discord sizes attachments against a full-width grid, so outgoing media is
     // translated as a whole by the empty space right of each item's content.
     // Reactions wrap in a flex row and are right-justified by CSS instead.
-    function alignAccessories(surface, right, seenMedia) {
-        for (const box of surface.querySelectorAll(accessoriesSelector)) {
-            const boxBounds = box.getBoundingClientRect();
+    // Every row is written, then measured in one layout, then written again:
+    // measuring after each item's write forced a layout per media item.
+    function alignAccessories(entries, seenMedia) {
+        const items = [];
+        for (const { surface, right } of entries) for (const box of surface.querySelectorAll(accessoriesSelector)) {
             for (const item of box.children) {
                 if (item.matches('[class*="reactions_"]')) continue;
                 // classList writes the attribute even when unchanged, which the
@@ -261,24 +263,30 @@ function setupLowcordChatAppearance() {
                     seenMedia.add(media);
                     if (!observedMedia.has(media)) { mediaObserver.observe(media); observedMedia.add(media); }
                 }
-                // Rects include the current shift; subtract it before re-measuring.
-                const current = parseFloat(item.style.getPropertyValue("--lowcord-media-shift")) || 0;
-                // Discord's media column is wider than the picture it holds, so
-                // measure the media elements themselves, then the item's own box.
-                let contentRight = -Infinity;
-                // A social card's carousel holds off-screen slides; measure the card.
-                const inner = item.matches(".lowcord-social-card") ? [] : item.querySelectorAll(mediaSelector);
-                for (const nodes of [inner, [item]]) {
-                    for (const node of nodes) {
-                        const rect = node.getBoundingClientRect();
-                        if (rect.width && rect.height && rect.width < boxBounds.width - 1) contentRight = Math.max(contentRight, rect.right);
-                    }
-                    if (Number.isFinite(contentRight)) break;
-                }
-                const shift = Number.isFinite(contentRight) ? Math.max(0, Math.round(boxBounds.right - (contentRight - current))) : 0;
-                setProperty(item, "--lowcord-media-shift", `${shift}px`);
+                items.push({ box, item });
             }
         }
+        const boxes = new Map();
+        const shifts = items.map(({ box, item }) => {
+            let boxBounds = boxes.get(box);
+            if (!boxBounds) boxes.set(box, boxBounds = box.getBoundingClientRect());
+            // Rects include the current shift; subtract it before re-measuring.
+            const current = parseFloat(item.style.getPropertyValue("--lowcord-media-shift")) || 0;
+            // Discord's media column is wider than the picture it holds, so
+            // measure the media elements themselves, then the item's own box.
+            let contentRight = -Infinity;
+            // A social card's carousel holds off-screen slides; measure the card.
+            const inner = item.matches(".lowcord-social-card") ? [] : item.querySelectorAll(mediaSelector);
+            for (const nodes of [inner, [item]]) {
+                for (const node of nodes) {
+                    const rect = node.getBoundingClientRect();
+                    if (rect.width && rect.height && rect.width < boxBounds.width - 1) contentRight = Math.max(contentRight, rect.right);
+                }
+                if (Number.isFinite(contentRight)) break;
+            }
+            return Number.isFinite(contentRight) ? Math.max(0, Math.round(boxBounds.right - (contentRight - current))) : 0;
+        });
+        items.forEach(({ item }, i) => setProperty(item, "--lowcord-media-shift", `${shifts[i]}px`));
     }
 
     // Discord mounts the hover toolbar only while a message is hovered. Its
@@ -288,21 +296,26 @@ function setupLowcordChatAppearance() {
     // top: the content's top, from the surface's top.
     // width: the content (a bubble, or the media inside a full-width row).
     // room: the row beyond the surface's far side.
-    function placeActions(entry) {
-        const { surface, row, alignment } = entry;
-        const bounds = surface.getBoundingClientRect(), rowBounds = row.getBoundingClientRect();
-        const content = entry.media ? mediaBounds(surface, bounds) : bounds;
-        if (!content) {
-            surface.removeAttribute("data-lowcord-actions");
-            for (const name of actionProperties) surface.style.removeProperty(name);
-            return;
-        }
-        const left = alignment === "left";
-        setProperty(surface, "--lowcord-actions-start", `${Math.round(left ? content.left - bounds.left : bounds.right - content.right)}px`);
-        setProperty(surface, "--lowcord-actions-top", `${Math.round(content.top - bounds.top)}px`);
-        setProperty(surface, "--lowcord-actions-width", `${Math.round(content.right - content.left)}px`);
-        setProperty(surface, "--lowcord-actions-room", `${Math.max(0, Math.round(left ? rowBounds.right - bounds.right : bounds.left - rowBounds.left))}px`);
-        setAttribute(surface, "data-lowcord-actions", options.actions);
+    // Positions are read for every row before any is written, in one layout.
+    function placeActions(entries) {
+        const places = entries.map(entry => {
+            const bounds = entry.surface.getBoundingClientRect(), rowBounds = entry.row.getBoundingClientRect();
+            return { bounds, rowBounds, content: entry.media ? mediaBounds(entry.surface, bounds) : bounds };
+        });
+        entries.forEach(({ surface, alignment }, i) => {
+            const { bounds, rowBounds, content } = places[i];
+            if (!content) {
+                surface.removeAttribute("data-lowcord-actions");
+                for (const name of actionProperties) surface.style.removeProperty(name);
+                return;
+            }
+            const left = alignment === "left";
+            setProperty(surface, "--lowcord-actions-start", `${Math.round(left ? content.left - bounds.left : bounds.right - content.right)}px`);
+            setProperty(surface, "--lowcord-actions-top", `${Math.round(content.top - bounds.top)}px`);
+            setProperty(surface, "--lowcord-actions-width", `${Math.round(content.right - content.left)}px`);
+            setProperty(surface, "--lowcord-actions-room", `${Math.max(0, Math.round(left ? rowBounds.right - bounds.right : bounds.left - rowBounds.left))}px`);
+            setAttribute(surface, "data-lowcord-actions", options.actions);
+        });
     }
     // Media rows span the timeline; measure the pictures, stickers and caption inside.
     function mediaBounds(surface, surfaceBounds) {
@@ -502,8 +515,9 @@ function setupLowcordChatAppearance() {
         for (const entry of work) apply(entry, channel);
         fitBubbles(work.filter(entry => !entry.media));
         const seenMedia = new Set();
-        for (const entry of work) if (entry.media) alignAccessories(entry.surface, entry.side === "outgoing" && entry.alignment === "right", seenMedia);
-        for (const entry of work) placeActions(entry);
+        alignAccessories(work.filter(entry => entry.media).map(entry => ({ surface: entry.surface,
+            right: entry.side === "outgoing" && entry.alignment === "right" })), seenMedia);
+        placeActions(work);
         for (const media of observedMedia) {
             if (!media.isConnected || (changed.has(media.closest('[id^="chat-messages-"]')) && !seenMedia.has(media))) {
                 mediaObserver.unobserve(media); observedMedia.delete(media);
@@ -556,6 +570,10 @@ function setupLowcordChatAppearance() {
                     if (target?.closest('.lowcord-bubble-time, .lowcord-bubble-avatar')) continue;
                     // Hovering mounts Discord's toolbar; CSS alone places it.
                     if (target?.closest(actionsSelector) || (nodes.length && nodes.every(node => node instanceof Element && node.matches(actionsSelector)))) continue;
+                    // Hovering swaps faces and avatar decorations to animated
+                    // images. They never change a bubble; refreshing for each
+                    // swap forced layouts while the pointer moved.
+                    if (record.attributeName === "src" && target instanceof HTMLImageElement && isChromeImage(target)) continue;
                     if (row) { dirtyRows.add(row); relevant = true; }
                     if (record.attributeName === "id" && row) structureChanged = true;
                     if (record.attributeName === "id" && renderedRows.has(target)) { structureChanged = true; relevant = true; }

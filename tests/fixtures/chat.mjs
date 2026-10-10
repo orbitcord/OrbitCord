@@ -12,7 +12,10 @@ const fixture = window.fixture = {
         const row = document.createElement("li");
         row.id = `chat-messages-100-${id}`;
         row.innerHTML = `<div class="message_test" data-list-item-id="chat-messages___100-${id}" aria-label="${author} message"><div class="contents_test"><img class="avatar_test" src="${picture}" alt=""><h3 class="header_test">${author === "self" ? "You" : "Alex"} <time class="timestamp_test">10:30 AM</time></h3>${body}</div></div>`;
-        if (reply) row.firstElementChild.insertAdjacentHTML("afterbegin", `<div class="repliedMessage_test"><span><img class="replyAvatar_test" alt="" src="${picture}"></span><span class="username_test">Alex</span><span class="repliedTextPreview_test"><span class="repliedTextContent_test" role="button" tabindex="0">How's your day going?</span></span></div>`);
+        // Discord ids the message text and the reply quote; Lowcord's CSS anchors on them.
+        const text = row.querySelector('.contents_test > [class*="messageContent_"]');
+        if (text && !text.id) text.id = `message-content-${id}`;
+        if (reply) row.firstElementChild.insertAdjacentHTML("afterbegin", `<div class="repliedMessage_test" id="message-reply-context-${id}"><span><img class="replyAvatar_test" alt="" src="${picture}"></span><span class="username_test">Alex</span><span class="repliedTextPreview_test"><span class="repliedTextContent_test" role="button" tabindex="0">How's your day going?</span></span></div>`);
         row.querySelector(".repliedTextContent_test")?.addEventListener("click", () => fixture.replies++);
         document.querySelector("#timeline").append(row);
         fixture.emit();
@@ -30,7 +33,7 @@ const fixture = window.fixture = {
                     h('div', { className: 'contents_test' },
                         h('img', { className: 'avatar_test', src: picture, alt: '' }),
                         h('h3', { className: 'header_test' }, 'You'),
-                        h('div', { className: 'messageContent_test' + (message.state === 'SENDING' ? ' isSending_test' : '') }, message.content))));
+                        h('div', { id: `message-content-${message.id}`, className: 'messageContent_test' + (message.state === 'SENDING' ? ' isSending_test' : '') }, message.content))));
         }
         const host = document.createElement('div');
         document.querySelector('#timeline').append(host);
