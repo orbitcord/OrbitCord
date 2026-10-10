@@ -1,6 +1,7 @@
 # OrbitCord icons
 
-The app icon picker contains Default, Candy, Champagne, Graphite, Midnight, and Sun.
+The app icon picker contains Default, Candy, Champagne, Graphite, Midnight, Sun,
+Ember, Fjord, Marine, and Scarlet in a five-column, two-row grid.
 `app/*.png` contains the supplied 512px artwork; `app/*-dock.png` fits each
 icon to a centered 420px tile on a transparent 512px canvas.
 

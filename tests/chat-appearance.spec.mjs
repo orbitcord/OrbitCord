@@ -335,7 +335,8 @@ test("settings controls, persisted position, disable and failed saves", async ({
     await settings(page, { outgoingPosition: "left" });
     await expect(bubble(page, 2)).toHaveAttribute("data-lowcord-align", "left");
     expect(await page.evaluate(() => JSON.parse(Lowcord.storage.getItem("lowcord.dmChatAppearance")).outgoingPosition)).toBe("left");
-    await expect(page.getByRole("radio")).toHaveCount(2);
+    // Bubble style (2) and message actions (4).
+    await expect(page.getByRole("radio")).toHaveCount(6);
     await page.getByRole("radio", { name: /With avatars/ }).check();
     await expect(bubble(page, 2)).toHaveAttribute("data-lowcord-style", "avatars");
     await page.getByRole("switch", { name: /Show timestamps/ }).uncheck();
@@ -459,11 +460,11 @@ test("sticker rows keep a cropped avatar and do not stretch decorations", async 
     expect(stickerAfter.height).toBeCloseTo(sticker.height, 0);
 });
 
-for (const width of [1000, 520]) for (const position of ["left", "right"]) {
-    test(`hover toolbar and reply controls, ${position}, width ${width}`, async ({ page }) => {
+for (const actions of ["edge", "beside"]) for (const width of [1000, 520]) for (const position of ["left", "right"]) {
+    test(`hover toolbar and reply controls, ${actions}, ${position}, width ${width}`, async ({ page }) => {
         await page.setViewportSize({width, height:800});
         await load(page);
-        await settings(page, {style:"avatars", outgoingPosition:position});
+        await settings(page, {style:"avatars", outgoingPosition:position, actions});
         await page.evaluate(() => { fixture.toolbar(1); fixture.toolbar(2); });
         await expect(page.locator(".buttonsInner_test")).toHaveCount(2);
         await expect.poll(() => page.locator(".buttonsInner_test").evaluateAll(nodes => nodes.every(node => {
@@ -485,32 +486,79 @@ for (const width of [1000, 520]) for (const position of ["left", "right"]) {
     });
 }
 
-for (const style of ["bubbles", "avatars"]) {
-    test(`hover toolbar sits on left-aligned media, ${style}`, async ({ page }) => {
+test("toolbar placement defaults to the chat edge", async ({ page }) => {
+    await load(page);
+    expect(await page.evaluate(() => window.__lowcordChatAppearance.options.actions)).toBe("edge");
+    await settings(page, { actions: "sideways" });
+    expect(await page.evaluate(() => window.__lowcordChatAppearance.options.actions)).toBe("edge");
+});
+
+for (const actions of ["edge", "beside", "corner", "react"]) for (const style of ["bubbles", "avatars"]) {
+    test(`hover toolbar placement, ${actions}, ${style}`, async ({ page }) => {
         await load(page);
-        await settings(page, { style, outgoingPosition: "left" });
-        // Incoming image, outgoing image on the left, sticker and captioned image.
-        const rows = { 10: ".imageWrapper_test img", 11: ".imageWrapper_test img", 22: ".sticker_test", 28: ".imageWrapper_test img" };
-        await page.evaluate(ids => ids.forEach(id => fixture.toolbar(id)), Object.keys(rows));
-        for (const [id, media] of Object.entries(rows)) {
+        await settings(page, { style, outgoingPosition: "right", actions });
+        // Incoming and outgoing text, incoming and outgoing image.
+        const rows = { 1: ".messageContent_test", 2: ".messageContent_test", 10: ".imageWrapper_test img", 11: ".imageWrapper_test img" };
+        for (const [id, content] of Object.entries(rows)) {
             const row = page.locator(`#chat-messages-100-${id}`);
-            await expect(row.locator(".message_test")).toHaveAttribute("data-lowcord-media", /.+/);
-            await expect.poll(() => row.evaluate((node, media) => {
+            await expect(row.locator(".message_test")).toHaveAttribute("data-lowcord-actions", actions);
+            await row.scrollIntoViewIfNeeded();
+            // Discord mounts the bar on hover: it must be in place in the
+            // frame it appears, and stay there.
+            const read = () => row.evaluate((node, content) => {
                 const bar = node.querySelector(".buttonsInner_test").getBoundingClientRect();
-                const content = node.querySelector(media).getBoundingClientRect();
-                return Math.abs(bar.right - Math.max(content.right, content.left + bar.width)) <= 1;
-            }, media)).toBe(true);
+                const surface = node.querySelector(".message_test");
+                const box = (surface.hasAttribute("data-lowcord-bubble") ? surface : node.querySelector(content)).getBoundingClientRect();
+                const css = getComputedStyle(surface);
+                const edge = surface.hasAttribute("data-lowcord-media") ? parseFloat(css.paddingRight)
+                    : parseFloat(surface.dataset.lowcordAlign === "right" ? css.marginRight : css.marginLeft);
+                const visible = [...node.querySelectorAll(".buttonsInner_test button")].filter(button => button.getClientRects().length).length;
+                return { right: surface.dataset.lowcordAlign === "right", bar: bar.toJSON(), box: box.toJSON(), row: node.getBoundingClientRect().toJSON(), edge, visible };
+            }, content);
+            const first = await row.evaluate(node => new Promise(resolve => {
+                const surface = node.querySelector(".message_test");
+                window.fixture.toolbar(node.id.split("-").pop());
+                const bar = surface.querySelector(".buttonsInner_test").getBoundingClientRect();
+                requestAnimationFrame(() => resolve([bar.left, bar.top]));
+            }));
+            const placed = await read();
+            await page.waitForTimeout(100);
+            expect([placed.bar.left, placed.bar.top]).toEqual(first);
+            expect(await read()).toEqual(placed);
+            const { right, bar, box, row: line, edge, visible } = placed;
+            expect(visible).toBe(actions === "react" ? 1 : 4);
+            // Inside the chat, never past the far gutter.
+            expect(bar.left).toBeGreaterThanOrEqual(line.left + edge - 1);
+            expect(bar.right).toBeLessThanOrEqual(line.right - edge + 1);
+            if (actions === "edge") expect(right ? bar.left - line.left : line.right - bar.right).toBeCloseTo(edge, 0);
+            if (actions === "beside" || actions === "react") expect(right ? box.left - bar.right : bar.left - box.right).toBeCloseTo(6, 0);
+            if (actions === "corner") expect(bar.bottom - box.top).toBeCloseTo(10, 0);
+            else expect(bar.top).toBeCloseTo(box.top, 0);
+            // Outside of corner, the bar never covers the message or its picture.
+            if (actions !== "corner") expect(bar.right <= box.left + 1 || bar.left >= box.right - 1).toBe(true);
         }
-        // Clicking through the moved toolbar still reaches Discord's handler.
-        await surface(page, 10).scrollIntoViewIfNeeded();
-        const reply = await surface(page, 10).getByLabel("Reply", { exact: true }).boundingBox();
-        const image = await surface(page, 10).locator(".imageWrapper_test img").boundingBox();
-        await page.mouse.move(image.x + 4, image.y + image.height / 2);
-        await page.mouse.move(reply.x + reply.width / 2, reply.y + reply.height / 2, { steps: 20 });
-        await page.mouse.down(); await page.mouse.up();
-        expect(await page.evaluate(() => fixture.replies)).toBe(1);
+        // The bar's buttons, not the picture under or beside it, take the click.
+        if (actions !== "react") {
+            const target = surface(page, 10);
+            const image = await target.locator(".imageWrapper_test img").boundingBox();
+            const reply = await target.getByLabel("Reply", { exact: true }).boundingBox();
+            await page.mouse.move(image.x + 4, image.y + image.height / 2);
+            await page.mouse.move(reply.x + reply.width / 2, reply.y + reply.height / 2, { steps: 20 });
+            await page.mouse.down(); await page.mouse.up();
+            expect(await page.evaluate(() => fixture.replies)).toBe(1);
+        }
     });
 }
+
+test("message actions settings pick a placement", async ({ page }) => {
+    await load(page);
+    const options = page.getByRole("radiogroup", { name: "Message actions" }).getByRole("radio");
+    await expect(options).toHaveCount(4);
+    await expect(page.getByRole("radio", { name: /Chat edge/ })).toBeChecked();
+    await page.getByRole("radio", { name: /Top corner/ }).check();
+    expect(await page.evaluate(() => window.__lowcordChatAppearance.options.actions)).toBe("corner");
+    await expect(bubble(page, 1)).toHaveAttribute("data-lowcord-actions", "corner");
+});
 
 test("channel modes, virtualized row reuse, missing user and system messages", async ({ page }) => {
     await load(page);
@@ -624,11 +672,7 @@ for (const style of ["bubbles", "avatars"]) for (const width of [1000, 520]) {
         await expect(page.locator(".decoration__test")).toBeHidden();
         await expect(row.locator(".avatar_test")).toBeHidden();
         await expect(row.locator(".lowcord-bubble-avatar")).toHaveCount(style === "avatars" ? 1 : 0);
-        const barOffset = () => row.evaluate(node => Math.round(node.querySelector(".buttonsInner_test").getBoundingClientRect().right
-            - node.querySelector(".message_test").getBoundingClientRect().right));
-        const styledOffset = await barOffset();
         await page.evaluate(() => window.__lowcordChatAppearance.setEnabled(false));
-        expect(styledOffset).toBe(await barOffset());
         await page.evaluate(() => window.__lowcordChatAppearance.setEnabled(true));
         await expect(row.locator(".message_test")).toHaveAttribute("data-lowcord-media", "outgoing");
         const result = await row.evaluate(node => {

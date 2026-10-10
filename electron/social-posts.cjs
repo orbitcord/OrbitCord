@@ -150,6 +150,14 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         return items;
     };
     const largest = list => [...(list ?? [])].filter(item => item?.url).sort((a, b) => (b.width * b.height || 0) - (a.width * a.height || 0))[0]?.url;
+    // X lists each video in several qualities. All MP4s go along, highest
+    // bitrate first, so an upload can step down to one that fits.
+    const mp4s = list => (list ?? []).filter(variant => variant?.url && (variant.content_type ?? (variant.container === 'mp4' ? 'video/mp4' : null)) === 'video/mp4')
+        .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0)).map(variant => variant.url);
+    const xVideo = (urls, poster, extra) => {
+        const src = urls.length ? proxy({ url: urls[0], variants: urls }) : null;
+        return src && { type: 'video', src, poster: proxy(poster), ...extra };
+    };
     const base = (target, fields) => ({ site: target.site, service: links.sites[target.site].name, color: links.sites[target.site].color,
         url: target.canonical, author: {}, text: '', stats: {}, media: [], sensitive: false, ...fields,
         media: (fields.media ?? []).filter(Boolean).slice(0, 20) });
@@ -165,11 +173,7 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         const items = (tweet.mediaDetails ?? []).map(item => {
             const size = { width: number(item.original_info?.width), height: number(item.original_info?.height) };
             if (item.type === 'photo') return image(item.media_url_https && `${item.media_url_https}?name=large`, { ...size, alt: item.ext_alt_text ?? undefined });
-            // Highest bitrate first; uploads step down to one that fits.
-            const variants = (item.video_info?.variants ?? []).filter(variant => variant.content_type === 'video/mp4' && variant.url)
-                .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0)).map(variant => variant.url);
-            const src = variants.length ? proxy({ url: variants[0], variants }) : null;
-            return src && { type: 'video', src, poster: proxy(item.media_url_https), ...size, ...(item.type === 'animated_gif' ? { loop: true, gif: true } : {}) };
+            return xVideo(mp4s(item.video_info?.variants), item.media_url_https, { ...size, ...(item.type === 'animated_gif' ? { loop: true, gif: true } : {}) });
         });
         if (items.some(item => !item)) throw new Error('Missing media');
         const user = tweet.user ?? {};
@@ -182,6 +186,7 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
             sensitive: Boolean(tweet.possibly_sensitive), media: items,
         });
     }
+    // Age-restricted posts come from here: X's embed API answers them with a tombstone.
     async function fxTwitter(target, id) {
         const { tweet } = await json(`https://api.fxtwitter.com/status/${id}`);
         if (!tweet) throw new Error('Post not found');
@@ -193,9 +198,12 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
             created: tweet.created_timestamp ? tweet.created_timestamp * 1000 : null,
             stats: { replies: number(tweet.replies), reposts: number(tweet.retweets), likes: number(tweet.likes), views: number(tweet.views) },
             sensitive: Boolean(tweet.possibly_sensitive),
-            media: items.map(item => item.type === 'photo'
-                ? image(item.url, { width: item.width, height: item.height, alt: item.altText })
-                : video(item.url, item.thumbnail_url, { width: item.width, height: item.height, ...(item.type === 'gif' ? { loop: true, gif: true } : {}) })),
+            media: items.map(item => {
+                if (item.type === 'photo') return image(item.url, { width: item.width, height: item.height, alt: item.altText });
+                const urls = mp4s(item.variants ?? item.formats);
+                return xVideo(urls.length ? urls : [item.url].filter(Boolean), item.thumbnail_url,
+                    { width: item.width, height: item.height, ...(item.type === 'gif' ? { loop: true, gif: true } : {}) });
+            }),
         });
     }
     async function vxTwitter(target, id) {
@@ -295,7 +303,13 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
                 const src = proxy(sound ? { reddit: clip.fallback_url } : clip.fallback_url);
                 if (src) items = [{ type: 'video', src, poster: proxy(poster), width: clip.width, height: clip.height, ...(clip.is_gif ? { loop: true, gif: true } : {}) }];
             } else if (source.post_hint === 'image' || /^https:\/\/i\.redd\.it\//.test(source.url ?? '')) {
-                items = [image(source.url, { width: source.preview?.images?.[0]?.source?.width, height: source.preview?.images?.[0]?.source?.height })];
+                const preview = source.preview?.images?.[0];
+                const size = { width: preview?.source?.width, height: preview?.source?.height };
+                // A GIF plays from Reddit's MP4 of it, a fraction of the size.
+                // An upload sends the GIF itself when it fits, else that MP4 as a GIF.
+                const clip = /\.gif$/i.test(source.url ?? '') ? preview?.variants?.mp4?.source?.url : null;
+                const src = clip && proxy({ url: clip, original: secure(source.url) });
+                items = [src ? { type: 'video', src, poster: proxy(poster), ...size, loop: true, gif: true } : image(source.url, size)];
             } else if (poster) items = [image(poster)];
         }
         return base(target, {
@@ -616,22 +630,34 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         }
         throw Object.assign(new Error('Too large'), { code: 'too-large' });
     }
-    // Instagram Reels and X videos are one progressive MP4, taken from the
-    // post's own data. X serves GIFs as MP4 too, which the page re-encodes.
+    // Instagram Reels, X videos and Reddit GIFs are one progressive MP4, taken
+    // from the post's own data. X serves GIFs as MP4 too, which the page
+    // re-encodes; a Reddit GIF that fits is sent as itself instead.
     function singleVideo(target, limit) {
         return withPost(target, async post => {
             const item = post?.media?.length === 1 && post.media[0].type === 'video' ? post.media[0] : null;
             const source = item && sourceOf(item);
             if (!source?.url) throw Object.assign(new Error('Not a video post'), { code: 'not-video' });
+            const id = target.site === 'twitter' ? /\/status\/(\d+)/.exec(target.path)?.[1]
+                : target.site === 'reddit' ? /\/comments\/(\w+)/.exec(post.url ?? '')?.[1]
+                : /\/(?:p|reel|reels|tv)\/([\w-]+)/.exec(target.path)?.[1];
+            const name = `${target.site === 'twitter' ? 'x' : target.site}-${id ?? 'video'}`;
+            if (source.original) {
+                const data = await download(source.original, limit).catch(() => null);
+                if (data && sniff(data) === 'image/gif') return { name: `${name}.gif`, type: 'image/gif', data, gif: true };
+            }
             const data = await fitting(source, limit, url => download(url, limit));
-            const id = target.site === 'twitter' ? /\/status\/(\d+)/.exec(target.path)?.[1] : /\/(?:p|reel|reels|tv)\/([\w-]+)/.exec(target.path)?.[1];
-            return { name: `${target.site === 'twitter' ? 'x' : target.site}-${id ?? 'video'}.mp4`, type: 'video/mp4', data, gif: Boolean(item.gif) };
+            return { name: `${name}.mp4`, type: 'video/mp4', data, gif: Boolean(item.gif) };
         });
     }
     async function socialVideo(value, limit) {
         const target = links.parse(value);
         if (!Number.isSafeInteger(limit) || limit < 1024 * 1024 || limit > 1024 ** 3) throw new Error('Invalid limit');
-        if (target?.site === 'reddit') return redditVideo(value, limit);
+        // Reddit's own videos are DASH streams; its GIFs are a single MP4.
+        if (target?.site === 'reddit') return redditVideo(value, limit).catch(error => {
+            if (error.code === 'not-video') return singleVideo(target, limit);
+            throw error;
+        });
         if (target?.site === 'instagram' || target?.site === 'twitter') return singleVideo(target, limit);
         throw Object.assign(new Error('Unsupported link'), { code: 'not-video' });
     }

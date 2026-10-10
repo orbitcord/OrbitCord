@@ -127,7 +127,7 @@ function setupLowcordSettings() {
             error ? h("p", { role: "alert" }, error) : null);
     }
 
-    const appIcons = [["default", "Default"], ["candy", "Candy"], ["champagne", "Champagne"], ["graphite", "Graphite"], ["midnight", "Midnight"], ["sun", "Sun"]];
+    const appIcons = [["default", "Default"], ["candy", "Candy"], ["champagne", "Champagne"], ["graphite", "Graphite"], ["midnight", "Midnight"], ["sun", "Sun"], ["ember", "Ember"], ["fjord", "Fjord"], ["marine", "Marine"], ["scarlet", "Scarlet"]];
     function IconPanel() {
         const { React } = window.Lowcord;
         const h = React.createElement;

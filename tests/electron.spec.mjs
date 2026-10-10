@@ -41,7 +41,7 @@ test('Windows icon resources contain real images at every taskbar size and survi
         const resources = await app.evaluate(({ nativeImage }, { dir, root }) => {
             const { windowsIconPath } = process.mainModule.require(`${root}/electron/windows-icon.cjs`);
             const { readFileSync } = process.mainModule.require('node:fs');
-            return ['default', 'candy', 'champagne', 'graphite', 'midnight', 'sun'].map(id => {
+            return ['default', 'candy', 'champagne', 'graphite', 'midnight', 'sun', 'ember', 'fjord', 'marine', 'scarlet'].map(id => {
                 const source = `${root}/src-tauri/icons/app/${id}.png`;
                 const path = windowsIconPath(source, dir, nativeImage);
                 const ico = readFileSync(path);
@@ -82,7 +82,7 @@ test('Windows icon resources contain real images at every taskbar size and survi
                 return { id, path, cached, sizes };
             });
         }, { dir, root: resolve('.') });
-        expect(new Set(resources.map(resource => resource.path)).size).toBe(6);
+        expect(new Set(resources.map(resource => resource.path)).size).toBe(10);
         for (const resource of resources) {
             expect(resource.cached).toBe(resource.path);
             expect(resource.sizes).toEqual([16, 20, 24, 32, 40, 48, 64, 128, 256]);

@@ -128,7 +128,7 @@ const scheduleState = () => {
     stateTimer = setTimeout(() => saveState().catch(error => console.error('[lowcord]', error.message)), 300);
 };
 
-const appIcons = ['default', 'candy', 'champagne', 'graphite', 'midnight', 'sun'];
+const appIcons = ['default', 'candy', 'champagne', 'graphite', 'midnight', 'sun', 'ember', 'fjord', 'marine', 'scarlet'];
 let windowsIconUpdate = Promise.resolve();
 const iconPath = (id, dock) => join(__dirname, '..', 'src-tauri', 'icons', 'app', `${id}${dock ? '-dock' : ''}.png`);
 function readAppIcon() {

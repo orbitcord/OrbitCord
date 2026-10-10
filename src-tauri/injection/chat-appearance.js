@@ -8,7 +8,11 @@ function setupLowcordChatAppearance() {
     const storage = Lowcord.storage;
     const optionsKey = "lowcord.dmChatAppearance";
     // A null text color means automatic: black or white, whichever reads better.
-    const defaults = { style: "bubbles", outgoingPosition: "right", timestamps: true, outgoingColor: "#006be6", incomingColor: "#3a3a3c",
+    // actions: where Discord's hover toolbar sits. "edge" keeps it at the far
+    // side of the chat, "beside" next to the message, "corner" over its top
+    // corner, "react" beside it with only the reaction buttons.
+    const actionPlacements = ["edge", "beside", "corner", "react"];
+    const defaults = { style: "bubbles", outgoingPosition: "right", actions: "edge", timestamps: true, outgoingColor: "#006be6", incomingColor: "#3a3a3c",
         outgoingTextColor: null, incomingTextColor: null, dms: true, groupDms: true };
     // Matches the CSS: 16px gutter, plus a 28px face and 8px gap in avatar style.
     const gutter = 16, face = 36;
@@ -17,6 +21,7 @@ function setupLowcordChatAppearance() {
         // The retired Classic and iMessage styles both become plain bubbles.
         return { style: value?.style === "avatars" ? "avatars" : "bubbles",
             outgoingPosition: ["left", "right"].includes(value?.outgoingPosition) ? value.outgoingPosition : defaults.outgoingPosition,
+            actions: actionPlacements.includes(value?.actions) ? value.actions : defaults.actions,
             timestamps: typeof value?.timestamps === "boolean" ? value.timestamps : defaults.timestamps,
             outgoingColor: color("outgoingColor"), incomingColor: color("incomingColor"),
             outgoingTextColor: color("outgoingTextColor"), incomingTextColor: color("incomingTextColor"),
@@ -54,8 +59,8 @@ function setupLowcordChatAppearance() {
     const marker = "data-lowcord-bubble";
     const attributes = [marker, "data-lowcord-media", "data-lowcord-align", "data-lowcord-show-author", "data-lowcord-continuation",
         "data-lowcord-cluster", "data-lowcord-emoji", "data-lowcord-style", "data-lowcord-actions", "data-lowcord-timed", "data-lowcord-caption", "data-lowcord-fit"];
-    const properties = ["--lowcord-bubble-color", "--lowcord-bubble-text", "--lowcord-reply-max-width", "--lowcord-actions-max-width",
-        "--lowcord-actions-inset", "--lowcord-actions-top", "--lowcord-actions-bridge-height", "--lowcord-actions-shift", "--lowcord-fit"];
+    const actionProperties = ["--lowcord-actions-start", "--lowcord-actions-top", "--lowcord-actions-width", "--lowcord-actions-room"];
+    const properties = ["--lowcord-bubble-color", "--lowcord-bubble-text", "--lowcord-reply-max-width", ...actionProperties, "--lowcord-fit"];
     const stores = new Map();
     // The pending nonce leaves MessageStore before React replaces its row.
     // Keep that row's last message until the DOM identity changes. Weak keys
@@ -229,6 +234,7 @@ function setupLowcordChatAppearance() {
     }
 
     // Discord's attachment grid. The fixture nests it inside contents_.
+    const actionsSelector = '[class*="buttonContainer_"]';
     const accessoriesSelector = ':scope > [id^="message-accessories-"], '
         + ':scope > .lowcord-music-embeds, :scope > .lowcord-social-embeds, '
         + ':scope > [class*="container_"]:not([class*="buttonContainer_"]), '
@@ -275,46 +281,36 @@ function setupLowcordChatAppearance() {
         }
     }
 
-    // Toolbar placement beside a bubble. Discord hides it and makes it
-    // click-through as soon as the pointer leaves the message, so the gap
-    // beside the bubble needs a hover target.
-    function placeActions(surface, row, alignment) {
-        const actions = surface.querySelector(':scope > [class*="buttonContainer_"], :scope > [class*="buttons_"]');
-        if (!actions) {
+    // Discord mounts the hover toolbar only while a message is hovered. Its
+    // place is measured from the message alone, before it exists, so CSS puts
+    // it in position the moment it mounts and nothing moves afterwards.
+    // start: the content's near edge, from the surface's near side.
+    // top: the content's top, from the surface's top.
+    // width: the content (a bubble, or the media inside a full-width row).
+    // room: the row beyond the surface's far side.
+    function placeActions(entry) {
+        const { surface, row, alignment } = entry;
+        const bounds = surface.getBoundingClientRect(), rowBounds = row.getBoundingClientRect();
+        const content = entry.media ? mediaBounds(surface, bounds) : bounds;
+        if (!content) {
             surface.removeAttribute("data-lowcord-actions");
-            for (const name of ["--lowcord-actions-inset", "--lowcord-actions-top", "--lowcord-actions-bridge-height"]) surface.style.removeProperty(name);
+            for (const name of actionProperties) surface.style.removeProperty(name);
             return;
         }
-        const bubbleBounds = surface.getBoundingClientRect();
-        const rowBounds = row.getBoundingClientRect();
-        const freeSpace = alignment === "left" ? rowBounds.right - bubbleBounds.right : bubbleBounds.left - rowBounds.left;
-        // Align the visible bar, rather than its often padded outer container.
-        // Plugin buttons can change both its width and height.
-        const barBounds = (actions.querySelector('[class*="buttonsInner_"]') ?? actions).getBoundingClientRect();
-        const actionBounds = actions.getBoundingClientRect();
-        const outside = barBounds.width > 0 && freeSpace >= barBounds.width + 12;
-        const offset = alignment === "left" ? barBounds.left - actionBounds.left : actionBounds.right - barBounds.right;
-        setProperty(surface, "--lowcord-actions-inset", `${(outside ? bubbleBounds.width + 6 : 4) - offset}px`);
-        const top = Math.max(0, (bubbleBounds.height - barBounds.height) / 2) - (barBounds.top - actionBounds.top);
-        setProperty(surface, "--lowcord-actions-top", `${top}px`);
-        setAttribute(surface, "data-lowcord-actions", outside ? "outside" : "inside");
-        setProperty(surface, "--lowcord-actions-bridge-height", `${Math.max(bubbleBounds.height, barBounds.height)}px`);
+        const left = alignment === "left";
+        setProperty(surface, "--lowcord-actions-start", `${Math.round(left ? content.left - bounds.left : bounds.right - content.right)}px`);
+        setProperty(surface, "--lowcord-actions-top", `${Math.round(content.top - bounds.top)}px`);
+        setProperty(surface, "--lowcord-actions-width", `${Math.round(content.right - content.left)}px`);
+        setProperty(surface, "--lowcord-actions-room", `${Math.max(0, Math.round(left ? rowBounds.right - bounds.right : bounds.left - rowBounds.left))}px`);
+        setAttribute(surface, "data-lowcord-actions", options.actions);
     }
-
-    // Media rows span the timeline, so Discord's toolbar stays at the far right.
-    // Left-aligned media pulls it back over the content's top-right corner,
-    // where Discord puts it for right-hand messages. A translate keeps
-    // Discord's own anchoring and vertical offset intact.
-    function placeMediaActions(surface, alignment) {
-        const actions = surface.querySelector(':scope > [class*="buttonContainer_"], :scope > [class*="buttons_"]');
-        const bar = actions && (actions.querySelector('[class*="buttonsInner_"]') ?? actions).getBoundingClientRect();
-        if (alignment !== "left" || !bar?.width) { surface.style.removeProperty("--lowcord-actions-shift"); return; }
-        const surfaceBounds = surface.getBoundingClientRect();
-        let left = Infinity, right = -Infinity;
+    // Media rows span the timeline; measure the pictures, stickers and caption inside.
+    function mediaBounds(surface, surfaceBounds) {
+        let left = Infinity, right = -Infinity, top = Infinity;
         const measure = node => {
             const rect = node.getBoundingClientRect();
             if (!rect.width || !rect.height || rect.width >= surfaceBounds.width - 1) return false;
-            left = Math.min(left, rect.left); right = Math.max(right, rect.right);
+            left = Math.min(left, rect.left); right = Math.max(right, rect.right); top = Math.min(top, rect.top);
             return true;
         };
         for (const box of surface.querySelectorAll(accessoriesSelector)) for (const item of box.children) {
@@ -326,10 +322,7 @@ function setupLowcordChatAppearance() {
         const text = surface.querySelector(':scope > [class*="contents_"] > [class*="messageContent_"]');
         if (text && surface.hasAttribute("data-lowcord-caption")) measure(text);
         else if (text && surface.getAttribute("data-lowcord-emoji") === "true") text.querySelectorAll("img").forEach(measure);
-        if (!Number.isFinite(right)) { surface.style.removeProperty("--lowcord-actions-shift"); return; }
-        const current = parseFloat(surface.style.getPropertyValue("--lowcord-actions-shift")) || 0;
-        const target = Math.max(right, left + bar.width);
-        setProperty(surface, "--lowcord-actions-shift", `${Math.min(0, Math.round(target - (bar.right - current)))}px`);
+        return Number.isFinite(right) ? { left, right, top } : null;
     }
 
     // A wrapped bubble is as wide as its longest possible line, so a long
@@ -364,14 +357,12 @@ function setupLowcordChatAppearance() {
         const avatars = options.style === "avatars";
         if (media) {
             surface.removeAttribute(marker);
-            surface.removeAttribute("data-lowcord-actions");
             setAttribute(surface, "data-lowcord-media", side);
             setAttribute(surface, "data-lowcord-emoji", String(Boolean(entry.emoji)));
         } else {
             surface.removeAttribute("data-lowcord-media");
             surface.removeAttribute("data-lowcord-emoji");
             surface.removeAttribute("data-lowcord-caption");
-            surface.style.removeProperty("--lowcord-actions-shift");
             clearAccessories(surface);
             setAttribute(surface, marker, side);
         }
@@ -387,7 +378,6 @@ function setupLowcordChatAppearance() {
         setTime(surface, entry.date, options.timestamps && entry.last && !Number.isNaN(entry.date.getTime()));
         const available = Math.max(0, entry.width - 2 * (gutter + (avatars ? face : 0)));
         setProperty(surface, "--lowcord-reply-max-width", `${Math.floor(Math.min(360, available))}px`);
-        setProperty(surface, "--lowcord-actions-max-width", `${Math.floor(available)}px`);
         if (media) {
             const caption = surface.querySelector(':scope > [class*="contents_"] > [class*="messageContent_"]');
             if (!entry.emoji && caption?.textContent.trim() && !caption.hasAttribute("data-lowcord-social-link-only")) setAttribute(surface, "data-lowcord-caption", "true");
@@ -511,10 +501,9 @@ function setupLowcordChatAppearance() {
         for (const entry of work) entry.width = entry.row.clientWidth;
         for (const entry of work) apply(entry, channel);
         fitBubbles(work.filter(entry => !entry.media));
-        for (const entry of work) if (!entry.media) placeActions(entry.surface, entry.row, entry.alignment);
         const seenMedia = new Set();
         for (const entry of work) if (entry.media) alignAccessories(entry.surface, entry.side === "outgoing" && entry.alignment === "right", seenMedia);
-        for (const entry of work) if (entry.media) placeMediaActions(entry.surface, entry.alignment);
+        for (const entry of work) placeActions(entry);
         for (const media of observedMedia) {
             if (!media.isConnected || (changed.has(media.closest('[id^="chat-messages-"]')) && !seenMedia.has(media))) {
                 mediaObserver.unobserve(media); observedMedia.delete(media);
@@ -565,6 +554,8 @@ function setupLowcordChatAppearance() {
                     if (record.type === "childList" && nodes.length && nodes.every(node => node instanceof Element &&
                         node.matches('.lowcord-bubble-time, .lowcord-bubble-avatar'))) continue;
                     if (target?.closest('.lowcord-bubble-time, .lowcord-bubble-avatar')) continue;
+                    // Hovering mounts Discord's toolbar; CSS alone places it.
+                    if (target?.closest(actionsSelector) || (nodes.length && nodes.every(node => node instanceof Element && node.matches(actionsSelector)))) continue;
                     if (row) { dirtyRows.add(row); relevant = true; }
                     if (record.attributeName === "id" && row) structureChanged = true;
                     if (record.attributeName === "id" && renderedRows.has(target)) { structureChanged = true; relevant = true; }
@@ -690,6 +681,23 @@ function setupLowcordChatAppearance() {
                     "aria-label": "Message layout preview" },
                     example("incoming", "Alex", ["Hey! How’s your day going?"], "10:41 AM"),
                     example("outgoing", "You", ["Pretty good!", "What about you?"], "10:42 AM", "Hey! How’s your day going?")),
+                h("div", { className: "lowcord-actions-setting", role: "radiogroup", "aria-labelledby": "lowcord-actions-title",
+                    style: { "--lowcord-outgoing-color": colors.outgoingColor, "--lowcord-incoming-color": colors.incomingColor } },
+                    h("span", null, h("strong", { id: "lowcord-actions-title" }, "Message actions"),
+                        h("span", { className: "lowcord-chat-description" }, "Where reactions, reply and more appear when you point at a message.")),
+                    h("div", { className: "lowcord-actions-options" },
+                        ...[["edge", "Chat edge", "Same spot every time"], ["beside", "Beside", "Next to each message"],
+                            ["corner", "Top corner", "Floats over the corner"], ["react", "Reactions only", "Rest in right-click menu"]]
+                            .map(([value, title, description]) =>
+                            h("label", { key: value, className: "lowcord-actions-option", "data-selected": String(state.actions === value) },
+                                h("span", { className: "lowcord-actions-thumb", "data-actions": value, "aria-hidden": true },
+                                    h("span", { className: "lowcord-thumb-bubble incoming" }),
+                                    h("span", { className: "lowcord-thumb-bubble outgoing" }),
+                                    h("span", { className: "lowcord-thumb-bar" }, h("i"), h("i"), h("i"))),
+                                h("span", { className: "lowcord-actions-label" },
+                                    h("input", { type: "radio", name: "lowcord-actions", value, checked: state.actions === value,
+                                        onChange: () => save(() => setOptions({ actions: value })) }),
+                                    h("span", null, h("strong", null, title), h("span", { className: "lowcord-chat-description" }, description))))))),
                 h("div", { className: "lowcord-color-settings" },
                     h("div", { className: "lowcord-color-heading" },
                         h("span", null, h("strong", null, "Colors"), h("span", { className: "lowcord-chat-description" }, theme

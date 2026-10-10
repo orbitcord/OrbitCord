@@ -141,7 +141,6 @@
    are only translated; --lowcord-media-shift is measured from the content. */
 [id^="chat-messages-"] > [data-lowcord-media] .lowcord-media-item { transform: translateX(var(--lowcord-media-shift, 0px)); }
 [id^="chat-messages-"] > [data-lowcord-media="outgoing"][data-lowcord-align="right"] [class*="reactions_"] { justify-content: flex-end; }
-[id^="chat-messages-"] > [data-lowcord-media] > :is([class*="buttonContainer_"], [class*="buttons_"]) { translate: var(--lowcord-actions-shift, 0px) 0; }
 
 /* Footer time under the last message of a group. */
 .lowcord-bubble-time {
@@ -309,29 +308,46 @@
 }
 :is([data-lowcord-bubble], [data-lowcord-media])[data-lowcord-style="avatars"] [class*="replyAvatar_"] { display: block !important; }
 
-/* The outer action container can have zero width in Discord. Give it an
-   intrinsic width and reset the inner bar's right anchoring and translation,
-   so short incoming bubbles cannot push the controls into the avatar gutter. */
-[id^="chat-messages-"] > [data-lowcord-bubble] > [class*="buttonContainer_"],
-[id^="chat-messages-"] > [data-lowcord-bubble] > [class*="buttons_"] {
+/* Discord's hover toolbar. It mounts only while a message is hovered, so its
+   place is pure CSS from measurements taken before it exists: it never jumps.
+   The container spans from the content's near edge to the far gutter and is
+   click-through; a ::before spacer pushes the bar along it, and shrinks when
+   the window is too narrow, so the bar always stays inside the chat.
+   --lowcord-actions-start/-top/-width/-room come from placeActions(). */
+[id^="chat-messages-"] > [data-lowcord-actions] > [class*="buttonContainer_"] {
     position: absolute !important;
-    top: var(--lowcord-actions-top, 4px) !important;
+    top: var(--lowcord-actions-top) !important;
     bottom: auto !important;
-    left: var(--lowcord-actions-inset, 4px) !important;
-    right: auto !important;
-    width: max-content !important;
+    left: var(--lowcord-actions-start) !important;
+    right: calc(var(--lowcord-edge) - var(--lowcord-actions-room)) !important;
+    display: flex !important;
+    flex-direction: row;
+    align-items: flex-start;
+    width: auto !important;
     min-width: 0 !important;
-    max-width: var(--lowcord-actions-max-width, calc(100vw - 48px)) !important;
+    max-width: none !important;
+    height: auto !important;
     margin: 0 !important;
     padding: 0 !important;
     transform: none !important;
+    pointer-events: none !important;
     z-index: 2;
 }
-[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="right"] > [class*="buttonContainer_"],
-[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-align="right"] > [class*="buttons_"] { left: auto !important; right: var(--lowcord-actions-inset, 4px) !important; }
-[data-lowcord-bubble] > [class*="buttonContainer_"] [class*="buttons_"] {
+[id^="chat-messages-"] > [data-lowcord-actions][data-lowcord-align="right"] > [class*="buttonContainer_"] {
+    flex-direction: row-reverse;
+    left: calc(var(--lowcord-edge) - var(--lowcord-actions-room)) !important;
+    right: var(--lowcord-actions-start) !important;
+}
+[id^="chat-messages-"] > [data-lowcord-actions] > [class*="buttonContainer_"]::before { content: ""; flex: 0 1 calc(var(--lowcord-actions-width) + 6px); min-width: 0; }
+/* Chat edge: the same spot for every message, at the far side of the chat. */
+[id^="chat-messages-"] > [data-lowcord-actions="edge"] > [class*="buttonContainer_"]::before { flex: 1 1 0; }
+/* Above the corner: overlapping the content's top far corner, raised above it. */
+[id^="chat-messages-"] > [data-lowcord-actions="corner"] > [class*="buttonContainer_"] { translate: 0 calc(-100% + 10px); }
+[id^="chat-messages-"] > [data-lowcord-actions="corner"] > [class*="buttonContainer_"]::before { flex-basis: max(0px, calc(var(--lowcord-actions-width) - 32px)); }
+[data-lowcord-actions] > [class*="buttonContainer_"] [class*="buttons_"] {
     position: relative !important;
     inset: auto !important;
+    flex: 0 1 auto;
     width: max-content !important;
     min-width: 0 !important;
     max-width: 100% !important;
@@ -339,7 +355,7 @@
     padding: 0 !important;
     transform: none !important;
 }
-[data-lowcord-bubble] [class*="buttonsInner_"] {
+[data-lowcord-actions] > [class*="buttonContainer_"] [class*="buttonsInner_"] {
     box-sizing: border-box;
     position: relative !important;
     inset: auto !important;
@@ -348,17 +364,23 @@
     max-width: 100% !important;
     flex-wrap: wrap !important;
 }
-/* Discord shows the toolbar only while the message itself is hovered. This strip
-   spans the 6px gap to an outside toolbar, so the pointer never leaves the message. */
-[data-lowcord-bubble][data-lowcord-actions="outside"]::after {
+/* Reactions only: the quick reactions and the picker. Everything after the
+   picker (reply, edit, more) stays in the message's right-click menu. Matched
+   by position, not by label, so it works in every language. */
+[data-lowcord-actions="react"] > [class*="buttonContainer_"] [class*="buttonsInner_"] > [class*="separator_"] + * ~ *,
+[data-lowcord-actions="react"] > [class*="buttonContainer_"] [class*="buttonsInner_"]:not(:has(> [class*="separator_"])) > :first-child ~ * { display: none !important; }
+/* Discord shows the toolbar only while the message itself is hovered. A text
+   bubble is narrower than its row, so this strip covers the rest of the row's
+   far side: the pointer never leaves the message on its way to the bar. */
+[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-actions]::after {
     content: "";
     position: absolute;
     top: 0;
     left: 100%;
-    width: 8px;
-    height: max(100%, var(--lowcord-actions-bridge-height, 0px));
+    width: max(0px, calc(var(--lowcord-actions-room) - var(--lowcord-edge)));
+    height: 100%;
 }
-[data-lowcord-bubble][data-lowcord-align="right"][data-lowcord-actions="outside"]::after { left: auto; right: 100%; }
+[id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-actions][data-lowcord-align="right"]::after { left: auto; right: 100%; }
 @media (max-width: 700px) {
     [id^="chat-messages-"] > [data-lowcord-cluster] { --lowcord-gutter: 10px; }
     [data-lowcord-uploader] { --lowcord-edge: 10px; }
@@ -426,6 +448,42 @@
 }
 .lowcord-position-control select:hover { border-color: var(--text-muted, #949ba4); }
 .lowcord-position-control select:disabled { cursor: default; }
+/* Message actions: a card per toolbar placement, each with a sketch of it. */
+.lowcord-actions-setting { margin-bottom: 24px; }
+.lowcord-actions-setting > span strong { font-size: 16px; }
+.lowcord-actions-setting > span .lowcord-chat-description { margin-top: 4px; font-size: 13px; }
+.lowcord-actions-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-top: 12px; }
+.lowcord-actions-option {
+    display: grid; gap: 10px; padding: 8px 8px 12px; cursor: pointer;
+    border: 1px solid var(--background-modifier-accent, #4e5058); border-radius: 10px;
+    transition: background 160ms ease, border-color 160ms ease;
+}
+.lowcord-actions-option:hover { background: var(--background-modifier-hover, rgba(148, 155, 164, .08)); }
+.lowcord-actions-option[data-selected="true"] { border-color: var(--brand-500, #5865f2); background: color-mix(in srgb, var(--brand-500, #5865f2) 9%, transparent); }
+.lowcord-actions-option:has(input:focus-visible) { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 3px; }
+.lowcord-actions-label { display: flex; align-items: flex-start; gap: 8px; padding: 0 4px; }
+.lowcord-actions-label input { margin: 2px 0 0; accent-color: var(--brand-500, #5865f2); }
+.lowcord-actions-label strong { font-size: 14px; }
+.lowcord-actions-label .lowcord-chat-description { font-size: 12px; margin-top: 3px; line-height: 1.35; }
+/* The sketch: a received bubble with its bar, and a reply under it. */
+.lowcord-actions-thumb {
+    position: relative; display: block; height: 62px; overflow: hidden;
+    border-radius: 6px; background: var(--background-base-lower, var(--background-secondary, #2b2d31));
+}
+.lowcord-thumb-bubble { position: absolute; height: 14px; border-radius: 7px; }
+.lowcord-thumb-bubble.incoming { left: 8px; top: 18px; width: 40%; background: var(--lowcord-incoming-color); }
+.lowcord-thumb-bubble.outgoing { right: 8px; top: 40px; width: 32%; background: var(--lowcord-outgoing-color); opacity: .5; }
+.lowcord-thumb-bar {
+    position: absolute; top: 19px; display: flex; align-items: center; gap: 3px; height: 12px; padding: 0 3px; border-radius: 4px;
+    background: var(--background-floating, #111214); box-shadow: 0 0 0 1px var(--border-subtle, rgb(148 155 164 / .3));
+}
+.lowcord-thumb-bar i { width: 5px; height: 5px; border-radius: 50%; background: var(--interactive-normal, #b5bac1); }
+.lowcord-thumb-bar i:first-child { background: #f5c242; }
+[data-actions="edge"] > .lowcord-thumb-bar { right: 8px; }
+[data-actions="beside"] > .lowcord-thumb-bar, [data-actions="react"] > .lowcord-thumb-bar { left: calc(8px + 40% + 4px); }
+[data-actions="corner"] > .lowcord-thumb-bar { top: 10px; left: calc(8px + 40% - 12px); }
+[data-actions="react"] > .lowcord-thumb-bar i:not(:first-child) { display: none; }
+
 /* Colors: one card per side, bubble and text swatches with a live sample. */
 .lowcord-color-settings { margin-bottom: 24px; }
 .lowcord-color-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
@@ -506,5 +564,5 @@ button.lowcord-color-auto:hover { color: var(--text-default, #f2f3f5); }
 
 @media (max-width: 600px) { .lowcord-style-options { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) {
-    .lowcord-chat-toggle input, .lowcord-chat-toggle input::before, .lowcord-style-option { transition: none; }
+    .lowcord-chat-toggle input, .lowcord-chat-toggle input::before, .lowcord-style-option, .lowcord-actions-option { transition: none; }
 }

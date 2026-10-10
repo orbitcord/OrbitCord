@@ -244,6 +244,52 @@ test('X is read from its own embed API, and uploads step down to a video quality
     expect((await posts.get('https://x.com/s/status/2')).text).toBe('fx');
 });
 
+test('an age-restricted X post (an embed API tombstone) steps down through fxtwitter\'s video qualities, in a carousel too', async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2]);
+    const sizes = { 'https://video.twimg.com/high.mp4': 30 * 1024 * 1024, 'https://video.twimg.com/mid.mp4': 6 * 1024 * 1024, 'https://video.twimg.com/low.mp4': 16 };
+    const posts = createSocialPosts(async (url, init) => {
+        if (url.startsWith('https://cdn.syndication.twimg.com/')) return jsonResponse({ __typename: 'TweetTombstone' });
+        if (url.startsWith('https://api.fxtwitter.com/status/')) return jsonResponse({ tweet: { text: 'fx', author: { name: 'n', screen_name: 's' }, media: { all: [
+            { type: 'video', url: 'https://video.twimg.com/high.mp4', thumbnail_url: 'https://pbs.twimg.com/t.jpg', formats: [
+                { container: 'm3u8', url: 'https://video.twimg.com/a.m3u8' }, { container: 'mp4', bitrate: 632000, url: 'https://video.twimg.com/low.mp4' },
+                { container: 'mp4', bitrate: 10368000, url: 'https://video.twimg.com/high.mp4' }, { container: 'mp4', bitrate: 2176000, url: 'https://video.twimg.com/mid.mp4' }] },
+            ...(url.endsWith('/2') ? [{ type: 'photo', url: 'https://pbs.twimg.com/a.jpg' }] : [])] } } });
+        if (url in sizes) return new Response(init.method === 'HEAD' ? null : `ftyp${url.slice(-8)}`, { headers: { 'content-type': 'video/mp4', 'content-length': String(init.method === 'HEAD' ? sizes[url] : 12) } });
+        if (url === 'https://pbs.twimg.com/a.jpg') return new Response(jpeg, { headers: { 'content-type': 'image/jpeg' } });
+        return new Response('missing', { status: 404 });
+    });
+    const video = await posts.socialVideo('https://x.com/s/status/1', 10 * 1024 * 1024);
+    expect([video.name, Buffer.from(video.data).toString()]).toEqual(['x-1.mp4', 'ftyp/mid.mp4']);
+    const { files } = await posts.socialMedia('https://x.com/s/status/2', 1024 * 1024);
+    expect(files.map(file => [file.name, file.type])).toEqual([['x-2-1.mp4', 'video/mp4'], ['x-2-2.jpg', 'image/jpeg']]);
+});
+
+test('a Reddit GIF image post plays from its MP4, and uploads as the GIF when it fits', async () => {
+    const gif = Buffer.from('GIF89a-tiny');
+    const post = name => jsonResponse([{ data: { children: [{ data: { title: 'gif', author: 'a', subreddit: 'gifs', subreddit_name_prefixed: 'r/gifs',
+        permalink: `/r/gifs/comments/${name}/gif/`, post_hint: 'image', url: `https://i.redd.it/${name}.gif`,
+        preview: { images: [{ source: { url: `https://preview.redd.it/${name}.gif?s=1`, width: 4, height: 3 },
+            variants: { mp4: { source: { url: `https://preview.redd.it/${name}.gif?format=mp4&s=2`, width: 4, height: 3 } } } }] } } }] } }]);
+    const fetched = [];
+    const posts = createSocialPosts(async (url, init) => {
+        fetched.push(`${init?.method ?? 'GET'} ${url}`);
+        const name = /comments\/(\w+)/.exec(url)?.[1];
+        if (url.startsWith('https://api.reddit.com/r/')) return jsonResponse({});
+        if (name) return post(name);
+        if (url === 'https://i.redd.it/small.gif') return new Response(gif, { headers: { 'content-type': 'image/gif' } });
+        if (url === 'https://i.redd.it/huge.gif') return new Response(null, { headers: { 'content-type': 'image/gif', 'content-length': String(50 * 1024 * 1024) } });
+        if (url.includes('format=mp4')) return new Response(init?.method === 'HEAD' ? null : 'ftyp-clip', { headers: { 'content-type': 'video/mp4', 'content-length': '9' } });
+        return new Response('missing', { status: 404 });
+    });
+    expect((await posts.get('https://www.reddit.com/r/gifs/comments/small/gif/')).media).toEqual([expect.objectContaining({ type: 'video', gif: true, loop: true, width: 4 })]);
+    expect(fetched.some(call => call.includes('i.redd.it'))).toBe(false);
+    const small = await posts.socialVideo('https://www.reddit.com/r/gifs/comments/small/gif/', 10 * 1024 * 1024);
+    expect([small.name, small.type, small.gif, Buffer.from(small.data).toString()]).toEqual(['reddit-small.gif', 'image/gif', true, 'GIF89a-tiny']);
+    // Too large as a GIF: its MP4 goes to the page, which makes a GIF that fits.
+    const huge = await posts.socialVideo('https://www.reddit.com/r/gifs/comments/huge/gif/', 10 * 1024 * 1024);
+    expect([huge.name, huge.type, huge.gif]).toEqual(['reddit-huge.mp4', 'video/mp4', true]);
+});
+
 test('a download that fails reads the post again once, for fresh media URLs', async () => {
     let lookups = 0;
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2]);
@@ -591,6 +637,22 @@ test.describe('Videos as files', () => {
         await expect.poll(() => page.evaluate(() => attached)).toEqual([expect.stringMatching(/^[a-z]{7}\.gif$/)]);
         expect(await page.evaluate(() => attachedTypes)).toEqual(['image/gif']);
         await expect(page.locator('.lowcord-toast')).toContainText('GIF attached');
+    });
+
+    test('a Reddit GIF that already fits is attached as itself, not re-encoded', async ({ page }) => {
+        await page.evaluate(() => { window.__LOWCORD_NATIVE__ = {
+            socialPost: async () => ({ media: [{ type: 'video', gif: true }] }),
+            socialVideo: async () => ({ name: 'reddit-abc.gif', type: 'image/gif', gif: true, data: new Uint8Array([71, 73, 70, 56, 57, 97]) }),
+        }; });
+        await page.evaluate(() => {
+            window.attachedTypes = [];
+            document.getElementById('composer').addEventListener('paste', event => { for (const file of event.clipboardData.files) attachedTypes.push(file.type); });
+            Lowcord.gif.fromVideo = async () => { throw new Error('must not re-encode'); };
+        });
+        await page.evaluate(() => pasteText('https://www.reddit.com/r/gifs/comments/abc/gif/'));
+        await expect.poll(() => page.evaluate(() => attached)).toEqual([expect.stringMatching(/^[a-z]{7}\.gif$/)]);
+        expect(await page.evaluate(() => attachedTypes)).toEqual(['image/gif']);
+        await expect(page.locator('.lowcord-toast')).toContainText('Reddit GIF attached');
     });
 
     test('Enter while a carousel is still being checked sends without a video notice', async ({ page }) => {

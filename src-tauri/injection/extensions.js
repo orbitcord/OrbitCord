@@ -272,8 +272,9 @@
             if (result?.gif) entry.kind = "GIF";
             if (result?.error === "too-large") { toast(`This ${service} ${entry.kind} is too large to upload, so the link will be sent.`, true); return; }
             if (!(result?.data instanceof Uint8Array)) { toast(`Couldn’t download that ${service} ${entry.kind}, so the link will be sent.`, true); return; }
-            let file = new File([result.data], result.name, { type: "video/mp4" });
-            if (result.gif) {
+            // A Reddit GIF that fits arrives as the GIF itself.
+            let file = new File([result.data], result.name, { type: result.type === "image/gif" ? "image/gif" : "video/mp4" });
+            if (result.gif && file.type !== "image/gif") {
                 if (!entry.announce) entry.status.update(`Making the ${service} GIF…`, "It will be sent instead of the link.");
                 let gif = null;
                 try { gif = await window.Lowcord.gif?.fromVideo(result.data, uploadLimit()); } catch {}

@@ -345,7 +345,7 @@
 @media (prefers-reduced-motion: reduce) { .lowcord-social-nav { transition: none; } }
 
 .lowcord-icon-lead { margin: 0 0 20px; font-size: 14px; line-height: 20px; color: var(--text-muted, #949ba4); }
-.lowcord-icon-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; max-width: 456px; }
+.lowcord-icon-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
 .lowcord-icon-option {
     position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 12px;
     padding: 20px 8px 14px; border: 2px solid transparent; border-radius: 12px; cursor: pointer;
