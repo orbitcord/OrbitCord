@@ -269,7 +269,8 @@
     max-width: 100% !important;
     height: 16px !important;
     margin: 0 !important;
-    overflow: hidden;
+    /* Clip sideways only: theme fonts and emoji can run taller than the line. */
+    overflow-x: clip; overflow-y: visible;
     font-size: 12px !important;
     line-height: 16px !important;
     white-space: nowrap !important;
@@ -280,13 +281,15 @@
     display: block !important;
     flex: 0 1 auto;
     min-width: 0;
-    max-height: 16px;
-    overflow: hidden;
+    overflow-x: clip; overflow-y: visible;
     text-overflow: ellipsis;
     white-space: nowrap !important;
     font-size: inherit !important;
     line-height: inherit !important;
     color: inherit !important;
+}
+[data-lowcord-cluster] > [id^="message-reply-context-"] > :where(div) :is(img, [class*="emoji"]):not([class*="Icon_"]) {
+    width: auto !important; height: 14px !important; max-height: 14px; margin: 0 !important; vertical-align: -3px;
 }
 [data-lowcord-cluster] > [id^="message-reply-context-"] > :where(div) :is([class*="repliedTextContentIcon_"], svg):where(:not([class*="replyIcon_"])) {
     position: static !important;
