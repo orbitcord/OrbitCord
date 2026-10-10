@@ -85,7 +85,8 @@
         const prior = drafts.get(editor);
         const key = editor.value ?? `${editor.childElementCount}:${editor.textContent}`;
         if (prior?.key === key && (!prior.host || prior.host.isConnected)) return;
-        const content = editor.value ?? editor.innerText ?? editor.textContent ?? '';
+        // An empty draft (most channel switches) has no links to lay out.
+        const content = editor.value ?? (/[^\s\u200b\ufeff]/.test(editor.textContent) ? editor.innerText : '');
         if (prior?.content === content && (!prior.host || prior.host.isConnected)) { prior.key = key; return; }
         const items = musicLinks.collect(content, socialLinks.mapUrls);
         let host = prior?.host;

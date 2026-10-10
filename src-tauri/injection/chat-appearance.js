@@ -68,10 +68,15 @@ function setupLowcordChatAppearance() {
     const rowMessages = new WeakMap();
     const renderedRows = new Map(), dirtyRows = new Set();
     let orderedRows = [], fullRefresh = true, structureChanged = true, storeChanged = false;
-    let context, timeCache = new WeakMap(), timeContext;
+    let context, timeCache = new WeakMap(), timeContext, timeFormat, titleFormat;
     let colorKey, textColors;
     function invalidate() { fullRefresh = true; structureChanged = true; scheduleRefresh(); }
     function messageChanged() { storeChanged = true; scheduleRefresh(); }
+    // Discord loads the other person's profile after every DM switch. A user
+    // change can only move an avatar picture (a change of account is caught
+    // by the context check), so it must not lay out every row again.
+    let avatarsChanged = false;
+    function usersChanged() { avatarsChanged = true; scheduleRefresh(); }
     const storeListeners = new Map();
     let enabled = true;
     let stopObserving;
@@ -100,7 +105,7 @@ function setupLowcordChatAppearance() {
         resizedTimelines.clear();
         mediaObserver.disconnect();
         observedMedia.clear();
-        renderedRows.clear(); orderedRows = []; dirtyRows.clear(); context = undefined;
+        renderedRows.clear(); orderedRows = []; dirtyRows.clear(); context = undefined; cancelActions();
         fullRefresh = structureChanged = true;
         document.querySelectorAll(`[${marker}], [data-lowcord-media]`).forEach(clearSurface);
     }
@@ -222,8 +227,7 @@ function setupLowcordChatAppearance() {
         if (surface.lastElementChild !== time) surface.append(time);
         let formatted = timeCache.get(surface);
         if (!formatted || formatted.value !== date.getTime()) {
-            formatted = { value: date.getTime(), text: date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
-                iso: date.toISOString(), title: date.toLocaleString() };
+            formatted = { value: date.getTime(), text: timeFormat.format(date), iso: date.toISOString(), title: titleFormat.format(date) };
             timeCache.set(surface, formatted);
         }
         const text = formatted.text;
@@ -245,9 +249,10 @@ function setupLowcordChatAppearance() {
     // Discord sizes attachments against a full-width grid, so outgoing media is
     // translated as a whole by the empty space right of each item's content.
     // Reactions wrap in a flex row and are right-justified by CSS instead.
-    // Every row is written, then measured in one layout, then written again:
-    // measuring after each item's write forced a layout per media item.
-    function alignAccessories(entries, seenMedia) {
+    // markAccessories writes; measureAccessories reads every item in the same
+    // layout as the other measurements. Measuring after each item's write
+    // forced a layout per media item.
+    function markAccessories(entries, seenMedia) {
         const items = [];
         for (const { surface, right } of entries) for (const box of surface.querySelectorAll(accessoriesSelector)) {
             for (const item of box.children) {
@@ -266,8 +271,11 @@ function setupLowcordChatAppearance() {
                 items.push({ box, item });
             }
         }
+        return items;
+    }
+    function measureAccessories(items) {
         const boxes = new Map();
-        const shifts = items.map(({ box, item }) => {
+        return items.map(({ box, item }) => {
             let boxBounds = boxes.get(box);
             if (!boxBounds) boxes.set(box, boxBounds = box.getBoundingClientRect());
             // Rects include the current shift; subtract it before re-measuring.
@@ -286,9 +294,31 @@ function setupLowcordChatAppearance() {
             }
             return Number.isFinite(contentRight) ? Math.max(0, Math.round(boxBounds.right - (contentRight - current))) : 0;
         });
-        items.forEach(({ item }, i) => setProperty(item, "--lowcord-media-shift", `${shifts[i]}px`));
     }
 
+    // The hover toolbar is placed once the frame has painted: it matters only
+    // when the pointer reaches a message, and measuring it before paint cost
+    // another layout of the whole channel.
+    const pendingActions = new Set();
+    let actionsFrame, actionsTimer;
+    function queueActions(entries) {
+        for (const entry of entries) pendingActions.add(entry);
+        actionsFrame ??= requestAnimationFrame(() => {
+            actionsTimer = setTimeout(() => {
+                actionsFrame = actionsTimer = undefined;
+                // Skip rows that were cleared or read again since.
+                const current = [...pendingActions].filter(entry => renderedRows.get(entry.row)?.entry === entry && entry.surface.isConnected);
+                pendingActions.clear();
+                if (enabled) placeActions(current);
+            });
+        });
+    }
+    function cancelActions() {
+        if (actionsFrame !== undefined) cancelAnimationFrame(actionsFrame);
+        clearTimeout(actionsTimer);
+        actionsFrame = actionsTimer = undefined;
+        pendingActions.clear();
+    }
     // Discord mounts the hover toolbar only while a message is hovered. Its
     // place is measured from the message alone, before it exists, so CSS puts
     // it in position the moment it mounts and nothing moves afterwards.
@@ -341,14 +371,10 @@ function setupLowcordChatAppearance() {
     // A wrapped bubble is as wide as its longest possible line, so a long
     // message can end in a wide gap. Fit wrapped bubbles to their widest
     // line: release every width, read all of them in one layout, then write.
-    function fitBubbles(entries) {
-        for (const { surface } of entries) surface.removeAttribute("data-lowcord-fit");
-        const widths = entries.map(({ surface }) => wrappedWidth(surface));
-        entries.forEach(({ surface }, i) => {
-            if (!widths[i]) { surface.style.removeProperty("--lowcord-fit"); return; }
-            setProperty(surface, "--lowcord-fit", `${widths[i]}px`);
-            surface.setAttribute("data-lowcord-fit", "");
-        });
+    function fitBubble(surface, width) {
+        if (!width) { surface.style.removeProperty("--lowcord-fit"); return; }
+        setProperty(surface, "--lowcord-fit", `${width}px`);
+        surface.setAttribute("data-lowcord-fit", "");
     }
     function wrappedWidth(surface) {
         const text = surface.querySelector(':scope > [class*="contents_"] > [class*="messageContent_"]');
@@ -384,13 +410,14 @@ function setupLowcordChatAppearance() {
         setAttribute(surface, "data-lowcord-show-author", String(channel.type !== 1));
         setAttribute(surface, "data-lowcord-continuation", String(entry.continuation));
         setAttribute(surface, "data-lowcord-cluster", clusterRole(entry.continuation, entry.last));
+        // The placement mode restyles the whole message; set it with the rest
+        // so it shares this restyle. placeActions() fills in the measurements.
+        setAttribute(surface, "data-lowcord-actions", options.actions);
         const color = side === "outgoing" ? options.outgoingColor : options.incomingColor;
         setProperty(surface, "--lowcord-bubble-color", color);
         setProperty(surface, "--lowcord-bubble-text", textColors[side]);
         setAvatar(surface, message, avatars && entry.last);
         setTime(surface, entry.date, options.timestamps && entry.last && !Number.isNaN(entry.date.getTime()));
-        const available = Math.max(0, entry.width - 2 * (gutter + (avatars ? face : 0)));
-        setProperty(surface, "--lowcord-reply-max-width", `${Math.floor(Math.min(360, available))}px`);
         if (media) {
             const caption = surface.querySelector(':scope > [class*="contents_"] > [class*="messageContent_"]');
             if (!entry.emoji && caption?.textContent.trim() && !caption.hasAttribute("data-lowcord-social-link-only")) setAttribute(surface, "data-lowcord-caption", "true");
@@ -465,7 +492,13 @@ function setupLowcordChatAppearance() {
         if (context !== nextContext) { context = nextContext; fullRefresh = structureChanged = true; }
         const format = Intl.DateTimeFormat().resolvedOptions();
         const nextTimeContext = `${format.locale}:${format.timeZone}`;
-        if (timeContext !== nextTimeContext) { timeContext = nextTimeContext; timeCache = new WeakMap(); fullRefresh = true; }
+        if (timeContext !== nextTimeContext) {
+            timeContext = nextTimeContext; timeCache = new WeakMap(); fullRefresh = true;
+            // The same output as toLocaleTimeString/toLocaleString, without
+            // building a formatter for every timestamp.
+            timeFormat = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" });
+            titleFormat = new Intl.DateTimeFormat([], { year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric" });
+        }
         const nextColors = `${options.incomingColor}:${options.outgoingColor}:${options.incomingTextColor}:${options.outgoingTextColor}`;
         if (colorKey !== nextColors) { colorKey = nextColors; textColors = textColorsFor(options); }
         if (fullRefresh || structureChanged) {
@@ -510,14 +543,26 @@ function setupLowcordChatAppearance() {
             entry.last = !joins(entry, entries[i + 1]);
             work.push(entry);
         });
-        // Read widths before writing padding, colors, avatars and timestamps.
-        for (const entry of work) entry.width = entry.row.clientWidth;
+        // Every write that shapes a row comes first, then every measurement in
+        // one layout, then the writes that depend on it. Each read between
+        // writes would lay out the whole new channel again.
         for (const entry of work) apply(entry, channel);
-        fitBubbles(work.filter(entry => !entry.media));
+        const bubbles = work.filter(entry => !entry.media);
+        for (const { surface } of bubbles) surface.removeAttribute("data-lowcord-fit");
         const seenMedia = new Set();
-        alignAccessories(work.filter(entry => entry.media).map(entry => ({ surface: entry.surface,
+        const items = markAccessories(work.filter(entry => entry.media).map(entry => ({ surface: entry.surface,
             right: entry.side === "outgoing" && entry.alignment === "right" })), seenMedia);
-        placeActions(work);
+        const widths = work.map(entry => entry.row.clientWidth);
+        const fits = bubbles.map(({ surface }) => wrappedWidth(surface));
+        const shifts = measureAccessories(items);
+        const avatars = options.style === "avatars";
+        work.forEach(({ surface }, i) => {
+            const available = Math.max(0, widths[i] - 2 * (gutter + (avatars ? face : 0)));
+            setProperty(surface, "--lowcord-reply-max-width", `${Math.floor(Math.min(360, available))}px`);
+        });
+        bubbles.forEach(({ surface }, i) => fitBubble(surface, fits[i]));
+        items.forEach(({ item }, i) => setProperty(item, "--lowcord-media-shift", `${shifts[i]}px`));
+        queueActions(work);
         for (const media of observedMedia) {
             if (!media.isConnected || (changed.has(media.closest('[id^="chat-messages-"]')) && !seenMedia.has(media))) {
                 mediaObserver.unobserve(media); observedMedia.delete(media);
@@ -530,7 +575,10 @@ function setupLowcordChatAppearance() {
         for (const timeline of timelines) if (timeline && !resizedTimelines.has(timeline)) {
             resizeObserver.observe(timeline); resizedTimelines.add(timeline);
         }
-        dirtyRows.clear(); fullRefresh = structureChanged = storeChanged = false;
+        if (avatarsChanged) for (const { entry } of renderedRows.values()) {
+            if (entry && !changed.has(entry.row)) setAvatar(entry.surface, entry.message, options.style === "avatars" && entry.last);
+        }
+        dirtyRows.clear(); fullRefresh = structureChanged = storeChanged = avatarsChanged = false;
     }
 
     function scheduleRefresh() {
@@ -547,7 +595,7 @@ function setupLowcordChatAppearance() {
         frame = undefined;
         if (!enabled) { clearBubbles(); return; }
         for (const [name, store] of stores) {
-            const listener = name === "MessageStore" ? messageChanged : invalidate;
+            const listener = name === "MessageStore" ? messageChanged : name === "UserStore" ? usersChanged : invalidate;
             storeListeners.set(store, listener); store.addChangeListener?.(listener);
         }
         fullRefresh = structureChanged = true;

@@ -9,6 +9,17 @@
    the contents_ column and the hover toolbar are the row's children without an
    id (:not([id])). */
 
+/* Measured lengths that chat-appearance.js writes on a message. They don't
+   inherit: a write then restyles the message and the one child that reads it
+   (by an explicit inherit), not the whole message. */
+@property --lowcord-fit { syntax: "*"; inherits: false; }
+@property --lowcord-media-shift { syntax: "*"; inherits: false; }
+@property --lowcord-reply-max-width { syntax: "*"; inherits: false; }
+@property --lowcord-actions-start { syntax: "*"; inherits: false; }
+@property --lowcord-actions-top { syntax: "*"; inherits: false; }
+@property --lowcord-actions-width { syntax: "*"; inherits: false; }
+@property --lowcord-actions-room { syntax: "*"; inherits: false; }
+
 /* Rows. One spacing scale for text and media: 8px between groups, 2px inside
    a group, room under the last message for its timestamp. */
 [id^="chat-messages-"]:has(> [data-lowcord-cluster]) { margin: 0 !important; padding: 8px 0 0 !important; }
@@ -187,6 +198,7 @@
     top: auto !important;
     left: 0 !important;
     right: auto !important;
+    --lowcord-reply-max-width: inherit;
     box-sizing: border-box;
     display: grid !important;
     grid-template-columns: minmax(0, 1fr);
@@ -320,6 +332,8 @@
    the window is too narrow, so the bar always stays inside the chat.
    --lowcord-actions-start/-top/-width/-room come from placeActions(). */
 [id^="chat-messages-"] > [data-lowcord-actions] > [class*="buttonContainer_"] {
+    --lowcord-actions-start: inherit; --lowcord-actions-top: inherit;
+    --lowcord-actions-width: inherit; --lowcord-actions-room: inherit;
     position: absolute !important;
     top: var(--lowcord-actions-top) !important;
     bottom: auto !important;
@@ -343,7 +357,7 @@
     left: calc(var(--lowcord-edge) - var(--lowcord-actions-room)) !important;
     right: var(--lowcord-actions-start) !important;
 }
-[id^="chat-messages-"] > [data-lowcord-actions] > [class*="buttonContainer_"]::before { content: ""; flex: 0 1 calc(var(--lowcord-actions-width) + 6px); min-width: 0; }
+[id^="chat-messages-"] > [data-lowcord-actions] > [class*="buttonContainer_"]::before { --lowcord-actions-width: inherit; content: ""; flex: 0 1 calc(var(--lowcord-actions-width) + 6px); min-width: 0; }
 /* Chat edge: the same spot for every message, at the far side of the chat. */
 [id^="chat-messages-"] > [data-lowcord-actions="edge"] > [class*="buttonContainer_"]::before { flex: 1 1 0; }
 /* Above the corner: overlapping the content's top far corner, raised above it. */
@@ -378,6 +392,7 @@
    bubble is narrower than its row, so this strip covers the rest of the row's
    far side: the pointer never leaves the message on its way to the bar. */
 [id^="chat-messages-"] > [data-lowcord-bubble][data-lowcord-actions]::after {
+    --lowcord-actions-room: inherit;
     content: "";
     position: absolute;
     top: 0;
