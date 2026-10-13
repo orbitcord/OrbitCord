@@ -53,8 +53,8 @@ export async function prepare(release = false, { platform = process.platform, ar
 export async function buildPreload({ sourceRoot = root, output = join(sourceRoot, '.lowcord'), release = false } = {}) {
     await mkdir(output, { recursive: true });
     const read = file => readFile(join(sourceRoot, 'src-tauri', 'injection', file), 'utf8');
-    const [boot, shim, discord, themes, extensions, chatCapture, background, gif, musicEmbeds, socialEmbeds, appearance, settings, themesCSS, appearanceCSS, uiCSS] = await Promise.all(
-        ['boot.js', 'shim.js', 'discord.js', 'themes.js', 'extensions.js', 'chat-capture.js', 'background.js', 'gif.js', 'music-embeds.js', 'social-embeds.js', 'chat-appearance.js', 'settings.js', 'themes.css', 'chat-appearance.css', 'lowcord-ui.css'].map(read));
+    const [boot, shim, discord, themes, extensions, chatCapture, massDelete, mediaGallery, background, gif, musicEmbeds, socialEmbeds, appearance, settings, themesCSS, appearanceCSS, uiCSS] = await Promise.all(
+        ['boot.js', 'shim.js', 'discord.js', 'themes.js', 'extensions.js', 'chat-capture.js', 'mass-delete.js', 'media-gallery.js', 'background.js', 'gif.js', 'music-embeds.js', 'social-embeds.js', 'chat-appearance.js', 'settings.js', 'themes.css', 'chat-appearance.css', 'lowcord-ui.css'].map(read));
     // Static function body, serialized by Electron into the page's main world
     // synchronously at document start. No eval, script tag or CSP bypass.
     const socialLinks = await readFile(join(sourceRoot, 'electron', 'social-links.cjs'), 'utf8');
@@ -93,7 +93,7 @@ if (process.isMainFrame && location.protocol !== 'data:') {
         if (window.self !== window.top || window.__LOWCORD_INIT__) return;
         window.__LOWCORD_INIT__ = true;
         // The theme is applied first, before Discord paints anything.
-        ${boot}\n${shim}\n${discord}\n${themes}\nsetupLowcordThemes();\n${socialLinks}\n${musicLinks}\n${extensions}\n${chatCapture}\n${background}\n${gif}\n${musicEmbeds}\n${socialEmbeds}\n${appearance}\n
+        ${boot}\n${shim}\n${discord}\n${themes}\nsetupLowcordThemes();\n${socialLinks}\n${musicLinks}\n${extensions}\n${chatCapture}\n${massDelete}\n${mediaGallery}\n${background}\n${gif}\n${musicEmbeds}\n${socialEmbeds}\n${appearance}\n
         setupLowcordChatAppearance();
         ${settings}\nsetupLowcordSettings();
         ${release ? '' : 'window.__LOWCORD_REPORT__();'}

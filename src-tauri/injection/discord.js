@@ -166,6 +166,8 @@
         get createRoot() { return cached("createRoot", filters.byCode("(299));", ".onRecoverableError")); },
         get CloudUpload() { return cached("cloudUpload", value => typeof value?.prototype?.trackUploadFinished === "function"); },
         get RestAPI() { return cached("rest", value => typeof value === "object" && filters.byProps("del", "put", "post", "get", "patch")(value)); },
+        // Discord's router: opens a path such as /channels/@me/<channel>/<message>.
+        get transitionTo() { return cached("transitionTo", filters.byCode("transitionTo -")); },
         get Dispatcher() { return cached("dispatcher", filters.byProps("dispatch", "subscribe", "unsubscribe")); },
     };
 })();

@@ -8,6 +8,9 @@
         { id: "anonymiseFileNames", title: "Anonymise file names", description: "Uploads get a random 7-letter name. Extensions and spoilers stay." },
         { id: "voiceMessages", title: "Voice messages", description: "Record voice messages from the waveform button." },
         { id: "chatCapture", title: "Chat screenshots", description: "The camera button in the message bar captures every message from a first to a last one as a single image." },
+        { id: "mediaGallery", title: "Media gallery", description: "The photo button in a chat’s header shows every photo and video sent there as a grid. Click one to jump to its message." },
+        { id: "copyMediaLink", title: "Copy media link", description: "Right-click a photo or video in a chat to copy its link." },
+        { id: "massDelete", title: "Mass delete", description: "The trash button in the message bar deletes every message you sent in a DM, a channel or a whole server, however old." },
         { id: "quickReply", title: "Quick reply", description: "Shift + ↑/↓ in an empty box picks a message to reply to. Esc cancels. Replaces Discord’s edit shortcut." },
         { id: "cleanUrls", title: "Clean links", description: "Strips tracking parameters like utm_ and fbclid from links you send." },
         { id: "silentTyping", title: "Silent typing", description: "Hides your typing indicator." },
@@ -850,7 +853,7 @@
         const node = document.createElementNS("http://www.w3.org/2000/svg", "svg");
         node.setAttribute("viewBox", "0 0 24 24"); node.setAttribute("width", "20"); node.setAttribute("height", "20");
         node.setAttribute("aria-hidden", "true");
-        node.innerHTML = `<path fill="currentColor" d="${path}"/>`;
+        node.innerHTML = `<path fill="currentColor" fill-rule="evenodd" d="${path}"/>`;
         return node;
     };
     const micPath = "M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Zm7 9a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V20H8a1 1 0 1 0 0 2h8a1 1 0 1 0 0-2h-3v-2.08A7 7 0 0 0 19 11Z";
@@ -1186,27 +1189,96 @@
         }
     }
 
-    // A waveform button at the start of the message bar's buttons. Discord
-    // mutates the page constantly, so a full scan runs only when a known bar
-    // went away or half a second has passed.
-    let bars = [], scanned = 0;
-    function placeVoiceButtons(event) {
+    // ----- Message bar actions -------------------------------------------------
+    // Lowcord's message bar actions share one button at the start of Discord's
+    // buttons. With one action on, the button is that action; with more, a
+    // chevron opens a small menu of them. Discord mutates the page constantly,
+    // so a full scan runs only when a known bar went away, the actions changed,
+    // or half a second has passed.
+    const composerActions = [];
+    const chevronPath = "M5.3 14.7a1 1 0 0 0 1.4 0L12 9.42l5.3 5.3a1 1 0 0 0 1.4-1.42l-6-6a1 1 0 0 0-1.4 0l-6 6a1 1 0 0 0 0 1.42Z";
+    function addComposerAction(action) {
+        composerActions.push(action);
+        composerActions.sort((a, b) => a.order - b.order);
+        placeActions(new Event(changeEvent));
+    }
+    let actionBars = [], actionsScanned = 0, placedActions = "", actionsMenu;
+    function placeActions(event) {
         if (!window.Lowcord.domChanged(event, '[class*="channelTextArea_"]')) return;
-        const show = enabled("voiceMessages");
-        const settled = bars.length && bars.every(bar => bar.isConnected && bar.querySelector(":scope > .lowcord-voice-button"));
-        if (show && !event && settled && performance.now() - scanned < 500) return;
-        scanned = performance.now();
-        bars = [...document.querySelectorAll('[class*="channelTextArea_"] [class*="buttons_"]')];
-        for (const bar of bars) {
-            const existing = bar.querySelector(":scope > .lowcord-voice-button");
-            if (!show) { existing?.remove(); continue; }
-            if (existing) continue;
-            bar.prepend(ui("button", { type: "button", className: "lowcord-voice-button", "aria-label": "Record a voice message",
-                title: "Record a voice message", onClick: openRecorder }, svg(waveformPath)));
+        const actions = composerActions.filter(action => enabled(action.id));
+        const key = actions.map(action => action.id).join();
+        const settled = key === placedActions && actionBars.length
+            && actionBars.every(bar => bar.isConnected && (!actions.length || bar.querySelector(":scope > .lowcord-actions-button")));
+        if (!event && settled && performance.now() - actionsScanned < 500) return;
+        actionsScanned = performance.now();
+        if (key !== placedActions) {
+            closeActions(true);
+            for (const button of document.querySelectorAll(".lowcord-actions-button")) button.remove();
+            placedActions = key;
+        }
+        actionBars = [...document.querySelectorAll('[class*="channelTextArea_"] [class*="buttons_"]')];
+        for (const bar of actionBars) {
+            if (!actions.length || bar.querySelector(":scope > .lowcord-actions-button")) continue;
+            const [only] = actions;
+            const button = actions.length === 1
+                ? ui("button", { type: "button", className: "lowcord-actions-button", "aria-label": only.label, title: only.label,
+                    onClick: () => only.run() }, svg(only.path))
+                : ui("button", { type: "button", className: "lowcord-actions-button", "aria-label": "Extensions", title: "Extensions",
+                    "aria-haspopup": "menu", "aria-expanded": "false", onClick: () => toggleActions(button) }, svg(chevronPath));
+            bar.prepend(button);
         }
     }
-    window.Lowcord.onDomChange(placeVoiceButtons);
-    window.addEventListener(changeEvent, placeVoiceButtons);
+    function closeActions(instant = false) {
+        if (!actionsMenu) return;
+        const { node, button, listeners } = actionsMenu;
+        actionsMenu = undefined;
+        for (const [type, fn, capture] of listeners) window.removeEventListener(type, fn, capture);
+        button.setAttribute("aria-expanded", "false");
+        if (instant || matchMedia("(prefers-reduced-motion: reduce)").matches) { node.remove(); return; }
+        node.setAttribute("data-closing", "");
+        node.addEventListener("animationend", event => { if (event.target === node) node.remove(); });
+        setTimeout(() => node.remove(), 250);
+    }
+    function toggleActions(button) {
+        if (actionsMenu?.button === button) { closeActions(); return; }
+        closeActions(true);
+        const actions = composerActions.filter(action => enabled(action.id));
+        const items = actions.map((action, index) => ui("button", { type: "button", role: "menuitem",
+            className: `lowcord-actions-item${action.danger ? " lowcord-actions-danger" : ""}`, style: `--lowcord-index:${index}`,
+            // The action takes over at once, so the menu doesn't linger in it.
+            onClick: () => { closeActions(true); action.run(); } }, svg(action.path), ui("span", {}, action.label)));
+        const node = ui("div", { className: "lowcord-actions", role: "menu", "aria-label": "Extensions" }, ...items);
+        document.body.append(node);
+        // Above the button, or below it without room, centred on it where the
+        // window allows; the animation grows from the button.
+        const box = button.getBoundingClientRect(), width = node.offsetWidth;
+        const left = Math.max(8, Math.min(box.left + box.width / 2 - width / 2, innerWidth - width - 8));
+        const below = box.top - node.offsetHeight - 6 < 8;
+        node.style.left = `${left}px`;
+        if (below) node.style.top = `${box.bottom + 6}px`; else node.style.bottom = `${innerHeight - box.top + 6}px`;
+        node.toggleAttribute("data-below", below);
+        node.style.setProperty("--lowcord-origin", `${box.left + box.width / 2 - left}px`);
+        button.setAttribute("aria-expanded", "true");
+        const outside = event => { if (!node.contains(event.target) && !button.contains(event.target)) closeActions(); };
+        const key = event => {
+            const index = items.indexOf(document.activeElement);
+            if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); closeActions(); button.focus(); }
+            else if (event.key === "Tab") closeActions();
+            else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) && index !== -1) {
+                event.preventDefault();
+                const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+                    : (index + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
+                items[next].focus();
+            }
+        };
+        const away = () => closeActions(true);
+        actionsMenu = { node, button, listeners: [["pointerdown", outside, true], ["keydown", key, true], ["resize", away, false], ["blur", away, false]] };
+        for (const [type, fn, capture] of actionsMenu.listeners) window.addEventListener(type, fn, capture);
+        items[0]?.focus({ preventScroll: true });
+    }
+    window.Lowcord.onDomChange(placeActions);
+    window.addEventListener(changeEvent, placeActions);
+    addComposerAction({ id: "voiceMessages", order: 0, label: "Voice message", path: waveformPath, run: openRecorder });
 
     // Allow playback only for official music embeds. Save the original allow
     // attribute so disabling the plugin restores Discord's own frame policy.
@@ -1234,5 +1306,5 @@
     window.addEventListener(changeEvent, fixMusicFrames);
     window.Lowcord.extensions = { catalog, enabled, set, setOption, changeEvent,
         get state() { return { ...state }; }, get options() { return { ...options }; },
-        cleanContent, socialContent, anonymous, openRecorder, toast, progress, ui };
+        cleanContent, socialContent, anonymous, openRecorder, toast, progress, ui, addComposerAction };
 })();

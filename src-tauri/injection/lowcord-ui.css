@@ -8,7 +8,7 @@
     display: none !important;
 }
 
-.lowcord-settings-backdrop, .lowcord-voice-backdrop {
+.lowcord-settings-backdrop, .lowcord-voice-backdrop, .lowcord-purge-backdrop {
     position: fixed; inset: 0; z-index: 10000;
     display: grid; place-items: center;
     background: rgb(0 0 0 / .6);
@@ -146,7 +146,7 @@
 .lowcord-embed-options .lowcord-position-control select:hover { border-color: var(--interactive-normal, #b5bac1); }
 @media (max-width: 720px) { .lowcord-embed-options { grid-template-columns: minmax(0, 1fr); } }
 .lowcord-settings-nav button:focus-visible, .lowcord-settings-close:focus-visible,
-.lowcord-button:focus-visible, .lowcord-voice-button:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px; }
+.lowcord-button:focus-visible, .lowcord-actions-button:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px; }
 
 .lowcord-voice {
     display: flex; flex-direction: column; gap: 16px;
@@ -175,16 +175,55 @@
 .lowcord-button:hover { filter: brightness(1.1); }
 .lowcord-button:disabled { opacity: .5; cursor: not-allowed; filter: none; }
 .lowcord-button-primary { background: var(--brand-500, #5865f2); }
+.lowcord-button-danger { background: var(--button-danger-background, #da373c); }
 .lowcord-updates-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0; }
 .lowcord-updates-page progress { width: min(100%, 360px); accent-color: var(--brand-500, #5865f2); }
 .lowcord-voice-record.lowcord-recording { background: var(--status-danger, #da373c); }
 
-.lowcord-voice-button, .lowcord-capture-button {
+/* Message bar actions: one button among Discord's, and, with several
+   actions on, a small menu that springs up from it. */
+.lowcord-actions-button {
     display: grid; place-items: center; width: 32px; height: 44px; margin: 0 2px; padding: 0;
     border: 0; background: transparent; color: var(--interactive-normal, #b5bac1); cursor: pointer;
+    transition: color 120ms, transform 180ms cubic-bezier(.34, 1.56, .64, 1);
 }
-.lowcord-voice-button:hover, .lowcord-capture-button:hover { color: var(--interactive-hover, #dbdee1); }
-.lowcord-capture-button:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px; }
+.lowcord-actions-button:hover, .lowcord-actions-button[aria-expanded="true"] { color: var(--interactive-hover, #dbdee1); }
+.lowcord-actions-button:active { transform: scale(.84); transition-duration: 120ms, 90ms; }
+.lowcord-actions-button svg { transition: transform 190ms cubic-bezier(.34, 1.56, .64, 1); }
+.lowcord-actions-button[aria-expanded="true"] svg { transform: rotate(180deg); }
+.lowcord-actions {
+    position: fixed; z-index: 10002; box-sizing: border-box; min-width: 212px; padding: 6px;
+    display: flex; flex-direction: column; gap: 2px; border-radius: 12px;
+    background: var(--background-surface-highest, var(--background-floating, #111214));
+    border: 1px solid var(--border-subtle, rgb(255 255 255 / .06));
+    box-shadow: 0 12px 32px rgb(0 0 0 / .34), 0 2px 6px rgb(0 0 0 / .18);
+    transform-origin: var(--lowcord-origin, 50%) 100%;
+    animation: lowcord-actions-in 160ms cubic-bezier(.34, 1.56, .64, 1);
+}
+.lowcord-actions[data-below] { transform-origin: var(--lowcord-origin, 50%) 0; }
+.lowcord-actions[data-closing] { animation: lowcord-actions-out 80ms ease-in forwards; pointer-events: none; }
+@keyframes lowcord-actions-in { from { opacity: 0; transform: translateY(10px) scale(.86); } 40% { opacity: 1; } }
+@keyframes lowcord-actions-out { to { opacity: 0; transform: translateY(6px) scale(.94); } }
+.lowcord-actions-item {
+    display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px 0 8px; border: 0; border-radius: 8px;
+    font: inherit; font-size: 14px; font-weight: 500; text-align: left; white-space: nowrap; cursor: pointer;
+    background: transparent; color: var(--text-normal, #dbdee1);
+    animation: lowcord-actions-item-in 170ms cubic-bezier(.34, 1.56, .64, 1) both;
+    animation-delay: calc(8ms + var(--lowcord-index, 0) * 12ms);
+    transition: background-color 120ms, color 120ms;
+}
+@keyframes lowcord-actions-item-in { from { opacity: 0; transform: translateY(8px) scale(.96); } }
+.lowcord-actions-item svg { flex: none; color: var(--interactive-normal, #b5bac1); transition: transform 150ms cubic-bezier(.34, 1.56, .64, 1), color 120ms; }
+.lowcord-actions-item:is(:hover, :focus-visible) { outline: none; background: var(--background-modifier-hover, rgb(255 255 255 / .06)); color: var(--interactive-active, #fff); }
+.lowcord-actions-item:is(:hover, :focus-visible) svg { color: currentColor; transform: scale(1.14); }
+.lowcord-actions-item:active svg { transform: scale(.9); transition-duration: 80ms; }
+.lowcord-actions-danger:is(:hover, :focus-visible) {
+    background: color-mix(in srgb, var(--status-danger, #da373c) 14%, transparent); color: var(--text-feedback-critical, #f57976);
+}
+@media (prefers-reduced-motion: reduce) {
+    .lowcord-actions, .lowcord-actions-item { animation: none; }
+    .lowcord-actions-button, .lowcord-actions-button svg, .lowcord-actions-item svg { transition: none; }
+}
 
 /* Chat screenshots: a picking bar over the chat, and the chosen range. */
 .lowcord-capture-bar {
@@ -197,10 +236,30 @@
     box-shadow: 0 14px 36px rgb(0 0 0 / .34), 0 2px 8px rgb(0 0 0 / .2);
     color: #f2f3f5;
 }
-.lowcord-capture-bar .lowcord-toast-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.lowcord-capture-bar .lowcord-toast-title { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.lowcord-capture-bar .lowcord-toast-detail { font-size: 12px; color: #b5bac1; }
-.lowcord-capture-bar .lowcord-button { flex: none; padding: 6px 14px; }
+/* Mass delete: a choice of where, then a status card that stays while it runs. */
+.lowcord-purge-options { display: flex; flex-direction: column; gap: 8px; }
+.lowcord-purge-option {
+    display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 8px; cursor: pointer;
+    background: var(--background-base-lower, var(--background-secondary, #2b2d31));
+}
+.lowcord-purge-option input { margin: 3px 0 0; accent-color: var(--brand-500, #5865f2); }
+.lowcord-purge-option > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lowcord-purge-option strong { font-weight: 600; overflow-wrap: anywhere; }
+.lowcord-purge-option strong + span { font-size: 13px; color: var(--text-muted, #949ba4); }
+.lowcord-purge-bar {
+    position: fixed; top: 64px; right: 20px; z-index: 10001;
+    display: flex; align-items: center; gap: 10px; box-sizing: border-box;
+    width: min(360px, calc(100vw - 40px)); padding: 8px 8px 8px 16px; border-radius: 16px;
+    background: rgb(24 25 28 / .9);
+    -webkit-backdrop-filter: blur(18px) saturate(1.5); backdrop-filter: blur(18px) saturate(1.5);
+    border: 1px solid rgb(255 255 255 / .1);
+    box-shadow: 0 14px 36px rgb(0 0 0 / .34), 0 2px 8px rgb(0 0 0 / .2);
+    color: #f2f3f5;
+}
+.lowcord-capture-bar .lowcord-toast-copy, .lowcord-purge-bar .lowcord-toast-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.lowcord-capture-bar .lowcord-toast-title, .lowcord-purge-bar .lowcord-toast-title { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lowcord-capture-bar .lowcord-toast-detail, .lowcord-purge-bar .lowcord-toast-detail { font-size: 12px; color: #b5bac1; }
+.lowcord-capture-bar .lowcord-button, .lowcord-purge-bar .lowcord-button { flex: none; padding: 6px 14px; }
 [data-lowcord-capture-picking] [id^="chat-messages-"] { cursor: crosshair; }
 [data-lowcord-capture-picking] [id^="chat-messages-"][data-lowcord-capture] {
     background: color-mix(in srgb, var(--brand-500, #5865f2) 16%, transparent);
@@ -208,7 +267,7 @@
 }
 /* While capturing, nothing that floats over the chat may land in the picture. */
 [data-lowcord-capturing] [id^="chat-messages-"] { pointer-events: none; }
-[data-lowcord-capturing] :is([class*="buttonContainer_"], [class*="newMessagesBar_"], [class*="jumpToPresentBar_"], [class*="chatGradient_"], .lowcord-toast) {
+[data-lowcord-capturing] :is([class*="buttonContainer_"], [class*="newMessagesBar_"], [class*="jumpToPresentBar_"], [class*="chatGradient_"], .lowcord-toast, .lowcord-purge-bar, .lowcord-actions) {
     visibility: hidden !important;
 }
 /* While capturing, the bar sits on the channel header: compact, no shadow over the chat. */
@@ -496,3 +555,198 @@
 }
 /* A theme switch cross-fades the window once. */
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .3s; animation-timing-function: ease; }
+
+/* Media gallery: a pane over the right of the chat, in the theme's colours.
+   Square tiles in three columns, grouped under sticky month headings. */
+.lowcord-media-button[aria-pressed="true"] { color: var(--interactive-active, #fff); }
+.lowcord-media-pane {
+    --lowcord-media-surface: var(--background-base-low, var(--background-secondary, #2b2d31));
+    position: fixed; z-index: 100; box-sizing: border-box;
+    display: flex; flex-direction: column;
+    background: var(--lowcord-media-surface); color: var(--text-normal, #dbdee1);
+    border-left: 1px solid var(--border-subtle, rgb(255 255 255 / .06));
+    box-shadow: -16px 0 40px rgb(0 0 0 / .22);
+    animation: lowcord-media-in 240ms cubic-bezier(.22, 1, .36, 1);
+}
+.lowcord-media-pane[data-closing] { animation: lowcord-media-out 160ms ease-in forwards; pointer-events: none; }
+@keyframes lowcord-media-in { from { opacity: 0; transform: translateX(24px); } }
+@keyframes lowcord-media-out { to { opacity: 0; transform: translateX(16px); } }
+/* Title, switch, month headings and tiles share one 12px edge on each side. */
+.lowcord-media-pane > header { display: flex; align-items: center; gap: 8px; padding: 14px 5px 10px 12px; }
+.lowcord-media-heading { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.lowcord-media-heading h2 { margin: 0; font-size: 16px; line-height: 20px; font-weight: 600; color: var(--header-primary, #f2f3f5); }
+.lowcord-media-subtitle { font-size: 12px; line-height: 16px; color: var(--text-muted, #949ba4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lowcord-media-close {
+    flex: none; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px;
+    background: transparent; color: var(--interactive-normal, #b5bac1); cursor: pointer;
+}
+.lowcord-media-close:hover { background: var(--background-modifier-hover, rgb(255 255 255 / .06)); color: var(--interactive-hover, #dbdee1); }
+.lowcord-media-segments {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; margin: 0 12px 4px; padding: 2px; border-radius: 9px;
+    background: var(--background-base-lower, var(--background-tertiary, #1e1f22));
+}
+.lowcord-media-segment {
+    height: 28px; padding: 0 8px; border: 0; border-radius: 7px; font: inherit; font-size: 13px; font-weight: 500;
+    background: transparent; color: var(--text-muted, #949ba4); cursor: pointer;
+    transition: background-color 120ms, color 120ms;
+}
+.lowcord-media-segment:hover { color: var(--interactive-hover, #dbdee1); }
+.lowcord-media-segment[aria-checked="true"] {
+    background: var(--background-modifier-selected, rgb(255 255 255 / .1)); color: var(--interactive-active, #fff);
+    box-shadow: 0 1px 2px rgb(0 0 0 / .18);
+}
+.lowcord-media-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 12px 16px; scrollbar-width: thin; }
+.lowcord-media-month h3 {
+    position: sticky; top: 0; z-index: 2; margin: 0; padding: 8px 0 6px;
+    font: inherit; background: var(--lowcord-media-surface);
+}
+/* The month heading is a quiet button: text flush with the tiles, a chevron
+   that says it opens, and a soft pill only on hover. */
+.lowcord-media-month-button {
+    display: inline-flex; align-items: center; gap: 4px; margin: 0 0 0 -6px; padding: 3px 6px; border: 0; border-radius: 6px;
+    background: transparent; font: inherit; font-size: 12px; line-height: 16px; font-weight: 600; cursor: pointer;
+    color: var(--header-secondary, var(--text-muted, #b5bac1));
+    transition: background-color 120ms, color 120ms;
+}
+.lowcord-media-month-button svg { opacity: .7; transition: transform 160ms ease-out; }
+.lowcord-media-month-button:hover, .lowcord-media-month-button[aria-expanded="true"] {
+    background: var(--background-modifier-hover, rgb(255 255 255 / .06)); color: var(--interactive-active, #fff);
+}
+.lowcord-media-month-button[aria-expanded="true"] svg { transform: rotate(180deg); }
+.lowcord-media-month-button:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 0; }
+.lowcord-media-latest {
+    position: sticky; top: 6px; z-index: 3; display: flex; align-items: center; gap: 4px; margin: 6px auto 0; padding: 5px 12px 5px 9px;
+    border: 0; border-radius: 999px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    background: var(--brand-500, #5865f2); color: #fff; box-shadow: 0 4px 12px rgb(0 0 0 / .28);
+}
+.lowcord-media-latest[hidden] { display: none; }
+.lowcord-media-latest svg { transform: rotate(180deg); }
+.lowcord-media-latest:hover { filter: brightness(1.1); }
+.lowcord-media-latest:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+/* Month picker: a floating card under the heading, a year switcher on top
+   and the year's months in a 4 × 3 grid. */
+.lowcord-months {
+    position: absolute; z-index: 5; box-sizing: border-box; padding: 10px;
+    border-radius: 12px; background: var(--background-surface-highest, var(--background-floating, #111214));
+    border: 1px solid var(--border-subtle, rgb(255 255 255 / .06));
+    box-shadow: 0 12px 32px rgb(0 0 0 / .36);
+    transform-origin: top left; animation: lowcord-months-in 140ms cubic-bezier(.22, 1, .36, 1);
+}
+@keyframes lowcord-months-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
+.lowcord-months-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.lowcord-months-year { font-size: 14px; font-weight: 600; color: var(--header-primary, #f2f3f5); font-variant-numeric: tabular-nums; }
+.lowcord-months-step {
+    display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px;
+    background: transparent; color: var(--interactive-normal, #b5bac1); cursor: pointer;
+}
+.lowcord-months-step[data-direction="previous"] svg { transform: rotate(90deg); }
+.lowcord-months-step[data-direction="next"] svg { transform: rotate(-90deg); }
+.lowcord-months-step:hover:not(:disabled) { background: var(--background-modifier-hover, rgb(255 255 255 / .06)); color: var(--interactive-active, #fff); }
+.lowcord-months-step:disabled { opacity: .3; cursor: default; }
+.lowcord-months-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.lowcord-months-month {
+    position: relative; height: 34px; padding: 0; border: 0; border-radius: 8px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+    background: transparent; color: var(--text-normal, #dbdee1);
+    transition: background-color 120ms, color 120ms;
+}
+.lowcord-months-month:hover:not(:disabled) { background: var(--background-modifier-hover, rgb(255 255 255 / .06)); color: var(--interactive-active, #fff); }
+.lowcord-months-month:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: -2px; }
+.lowcord-months-month[aria-current="true"] { background: var(--brand-500, #5865f2); color: #fff; font-weight: 600; }
+/* Months already in the grid carry a small dot. */
+.lowcord-months-month[data-loaded]::after {
+    content: ""; position: absolute; left: 50%; bottom: 4px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%;
+    background: currentColor; opacity: .55;
+}
+.lowcord-months-month:disabled { color: var(--text-muted, #949ba4); opacity: .4; cursor: default; }
+.lowcord-media-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; }
+.lowcord-media-tile {
+    position: relative; display: block; width: 100%; aspect-ratio: 1; padding: 0; border: 0; border-radius: 4px; overflow: hidden;
+    background: var(--background-base-lower, var(--background-tertiary, #1e1f22)); cursor: pointer;
+}
+.lowcord-media-tile img {
+    width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0;
+    transition: opacity 180ms ease-out, filter 160ms;
+}
+.lowcord-media-tile img[data-loaded] { opacity: 1; }
+.lowcord-media-tile:hover img { filter: brightness(1.08); }
+.lowcord-media-tile::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / .06);
+}
+.lowcord-media-tile:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 1px; }
+.lowcord-media-tile[data-current]::after { box-shadow: inset 0 0 0 2px var(--brand-500, #5865f2); }
+.lowcord-media-tile[data-broken] img { visibility: hidden; }
+.lowcord-media-badge {
+    position: absolute; left: 5px; bottom: 5px; display: inline-flex; align-items: center; gap: 3px;
+    padding: 2px 6px 2px 5px; border-radius: 6px; background: rgb(0 0 0 / .62); color: #fff;
+    font-size: 11px; line-height: 14px; font-weight: 600; font-variant-numeric: tabular-nums; pointer-events: none;
+}
+.lowcord-media-tile[data-spoiler] img { filter: blur(18px) brightness(.8); transform: scale(1.15); }
+.lowcord-media-spoiler {
+    position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
+    font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #fff;
+}
+/* Delete: a small dark disc in the tile's top-right corner, shown on hover
+   or keyboard focus; it turns red under the pointer. */
+.lowcord-media-cell { position: relative; }
+.lowcord-media-delete {
+    position: absolute; top: 5px; right: 5px; z-index: 1;
+    display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 50%;
+    background: rgb(0 0 0 / .62); color: #fff; cursor: pointer;
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    opacity: 0; transform: scale(.85);
+    transition: opacity 120ms ease-out, transform 120ms ease-out, background-color 120ms;
+}
+.lowcord-media-cell:is(:hover, :focus-within) .lowcord-media-delete { opacity: 1; transform: none; }
+.lowcord-media-delete:hover { background: var(--status-danger, #da373c); }
+.lowcord-media-delete:active { transform: scale(.92); }
+.lowcord-media-delete:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 1px; }
+.lowcord-media-cell[data-deleting] { opacity: .45; pointer-events: none; transition: opacity 120ms; }
+.lowcord-media-cell[data-removing] { animation: lowcord-media-remove 180ms ease-in forwards; pointer-events: none; }
+@keyframes lowcord-media-remove { to { opacity: 0; transform: scale(.88); } }
+.lowcord-media-skeleton { padding-top: 34px; }
+.lowcord-media-skeleton[hidden] { display: none; }
+.lowcord-media-skeleton span {
+    aspect-ratio: 1; border-radius: 4px;
+    background: var(--background-base-lower, var(--background-tertiary, #1e1f22));
+    animation: lowcord-media-pulse 1.2s ease-in-out infinite alternate;
+}
+@keyframes lowcord-media-pulse { to { opacity: .45; } }
+.lowcord-media-footer { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px 8px 4px; text-align: center; }
+.lowcord-media-status { margin: 0; font-size: 13px; line-height: 18px; color: var(--text-muted, #949ba4); }
+.lowcord-media-pane[data-empty] .lowcord-media-footer { padding-top: 30%; }
+.lowcord-media-pane[data-empty] .lowcord-media-status { font-size: 14px; color: var(--text-normal, #dbdee1); }
+.lowcord-media-sentinel { height: 1px; }
+@media (prefers-reduced-motion: reduce) {
+    .lowcord-media-pane, .lowcord-media-skeleton span, .lowcord-months { animation: none; }
+    .lowcord-media-tile img, .lowcord-media-delete { transition: none; }
+}
+/* Right-click menu on a media tile, shaped like Discord's context menus. */
+.lowcord-menu {
+    position: fixed; z-index: 10002; box-sizing: border-box; min-width: 188px; padding: 6px;
+    display: flex; flex-direction: column; gap: 2px; border-radius: 8px;
+    background: var(--background-surface-highest, var(--background-floating, #111214));
+    border: 1px solid var(--border-subtle, rgb(255 255 255 / .06));
+    box-shadow: 0 8px 24px rgb(0 0 0 / .32);
+    animation: lowcord-menu-in 110ms ease-out;
+}
+@keyframes lowcord-menu-in { from { opacity: 0; transform: scale(.97); } }
+.lowcord-menu-item {
+    display: flex; align-items: center; min-height: 32px; padding: 6px 8px; border: 0; border-radius: 4px;
+    font: inherit; font-size: 14px; font-weight: 500; text-align: left; cursor: pointer;
+    background: transparent; color: var(--interactive-normal, #b5bac1);
+}
+.lowcord-menu-item:is(:hover, :focus-visible) { outline: none; background: var(--background-modifier-hover, rgb(255 255 255 / .06)); color: var(--interactive-active, #fff); }
+@media (prefers-reduced-motion: reduce) { .lowcord-menu { animation: none; } }
+/* While the item added to Discord's message menu is hovered, it carries
+   Discord's own focused class, and the item Discord's menu still has focused
+   shows plain. The fallback matches Discord's grey hover. */
+#message[data-lowcord-media-hover] [role="menuitem"][class*="focused_"]:not(.lowcord-copy-media) {
+    background-color: var(--lowcord-menu-item-bg, transparent) !important;
+    color: var(--lowcord-menu-item-color, inherit) !important;
+}
+.lowcord-copy-media-focused {
+    background: var(--background-modifier-hover, rgb(255 255 255 / .06));
+    color: var(--interactive-active, #fff);
+}
+.lowcord-copy-media:focus-visible { outline: none; }

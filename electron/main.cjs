@@ -138,10 +138,14 @@ function readAppIcon() {
     } catch {}
     return 'default';
 }
-// Changes the live dock/taskbar/window icon. The installed executable's icon
-// stays unchanged; Windows pins need their own icon resource updated too.
-function applyAppIcon(id) {
-    if (process.platform === 'darwin') app.dock.setIcon(nativeImage.createFromPath(iconPath(id, true)));
+// Changes the live dock/taskbar/window icon. Windows pins need their own icon
+// resource updated too, and macOS shows the bundle's icon once the app quits.
+function applyAppIcon(id, changed) {
+    if (process.platform === 'darwin') {
+        app.dock.setIcon(nativeImage.createFromPath(iconPath(id, true)));
+        if (app.isPackaged && !testing) require('./mac-icon.cjs').applyMacBundleIcon(id === 'default' ? null : iconPath(id, true),
+            { executable: process.execPath, userData, changed }).catch(error => console.error('[lowcord] Bundle icon:', error.message));
+    }
     else if (process.platform === 'win32') {
         // Finish each shell refresh before applying the next selection. A fast
         // series of clicks must leave every surface on the last selected icon.
@@ -291,7 +295,7 @@ async function start() {
         if (id === 'previews') return Object.fromEntries(appIcons.map(name =>
             [name, nativeImage.createFromPath(iconPath(name)).resize({ width: 160, height: 160, quality: 'best' }).toDataURL()]));
         if (!appIcons.includes(id)) throw new Error('Unknown icon');
-        await applyAppIcon(id);
+        await applyAppIcon(id, true);
         try { writeFileSync(join(userData, 'app-icon.json'), JSON.stringify({ icon: id })); } catch (error) { console.error('[lowcord]', error.message); }
         return id;
     });

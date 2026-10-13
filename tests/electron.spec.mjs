@@ -150,7 +150,7 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(browser.userAgent).not.toMatch(/(?:Electron|Lowcord|Datcord|OrbitCord)\//i);
         expect(browser.getUserMedia).toBe('function');
         expect(browser.peerConnection).toBe('function');
-        expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true, extensions: 15, fetchHooked: true });
+        expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true, extensions: 18, fetchHooked: true });
         expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
             .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'captureRegion', 'copyImage', 'saveImage'] });
         // Card media loads like <img>/<video> (no CORS) from the privileged scheme;
@@ -607,8 +607,11 @@ test('chat screenshots capture real window pixels across scrolling, at page zoom
         });
         // A native resize and zoom confuse Playwright's pointer geometry, so the
         // picks are DOM clicks; the pixels below are real window captures.
-        await expect(page.locator('#capture-buttons .lowcord-capture-button')).toHaveCount(1);
-        await page.evaluate(() => document.querySelector('#capture-buttons .lowcord-capture-button').click());
+        await expect(page.locator('#capture-buttons .lowcord-actions-button')).toHaveCount(1);
+        await page.evaluate(() => {
+            document.querySelector('#capture-buttons .lowcord-actions-button').click();
+            [...document.querySelectorAll('.lowcord-actions-item')].find(item => item.textContent === 'Screenshot messages').click();
+        });
         for (const id of [3, 24]) await page.evaluate(id => {
             const row = document.getElementById(`chat-messages-7-${id}`);
             row.scrollIntoView({ block: 'center' });

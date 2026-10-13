@@ -18,6 +18,11 @@ const xhr = (page, method, path, body, type = "application/json") => page.evalua
     request.send(body);
 }), [method, path, body, type]);
 const setExtension = (page, id, value) => page.evaluate(([id, value]) => Lowcord.extensions.set(id, value), [id, value]);
+// Message bar actions share one button; with several on, it opens a menu.
+async function runAction(page, name, scope = ".buttons_test") {
+    await page.locator(`${scope} .lowcord-actions-button`).click();
+    await page.getByRole("menu", { name: "Extensions" }).getByRole("menuitem", { name }).click();
+}
 
 test("desktop download shortcut is hidden without affecting servers or attachment downloads", async ({ page }) => {
     await page.evaluate(() => {
@@ -144,20 +149,46 @@ test("files are anonymised as they reach the composer, before Discord uploads th
     expect(JSON.parse((await received(page))[0].body).files).toEqual(files);
 });
 
-test("voice message button sits in the message bar and opens the recorder", async ({ page }) => {
-    const button = page.getByRole("button", { name: "Record a voice message" });
-    await expect(button).toHaveCount(1);
-    await expect(page.locator(".buttons_test > :first-child")).toHaveClass(/lowcord-voice-button/);
+test("message bar actions share one button that opens a menu, or is the only action", async ({ page }) => {
+    const button = page.locator(".buttons_test > :first-child");
+    await expect(button).toHaveClass(/lowcord-actions-button/);
+    await expect(button).toHaveAccessibleName("Extensions");
+    await expect(page.locator(".lowcord-actions-button")).toHaveCount(1);
     await button.click();
+    await expect(button).toHaveAttribute("aria-expanded", "true");
+    const menu = page.getByRole("menu", { name: "Extensions" });
+    await expect(menu.getByRole("menuitem")).toHaveText(["Voice message", "Screenshot messages", "Delete my messages"]);
+    await expect(menu.getByRole("menuitem").first()).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(menu.getByRole("menuitem", { name: "Delete my messages" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(button).toBeFocused();
+    await expect(button).toHaveAttribute("aria-expanded", "false");
+    // A click outside closes it too.
+    await button.click();
+    await page.mouse.click(5, 5);
+    await expect(menu).toHaveCount(0);
+
+    await runAction(page, "Voice message");
+    await expect(menu).toHaveCount(0);
     const dialog = page.getByRole("dialog", { name: "Record a voice message" });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Send" })).toBeDisabled();
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
+
+    // With one action on, the button is that action.
+    await setExtension(page, "chatCapture", false);
+    await setExtension(page, "massDelete", false);
+    await expect(button).toHaveAccessibleName("Voice message");
+    await button.click();
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
     await setExtension(page, "voiceMessages", false);
-    await expect(button).toHaveCount(0);
+    await expect(page.locator(".lowcord-actions-button")).toHaveCount(0);
     await setExtension(page, "voiceMessages", true);
-    await expect(button).toHaveCount(1);
+    await expect(page.locator(".lowcord-actions-button")).toHaveCount(1);
 });
 
 // Feed real Web Audio into real MediaRecorder without needing an OS microphone
@@ -193,7 +224,7 @@ async function recordingInput(page, { unavailable = false, pending = false } = {
             return destination.stream;
         } });
     }, { unavailable, pending });
-    await page.getByRole("button", { name: "Record a voice message" }).click();
+    await runAction(page, "Voice message");
     await page.getByRole("button", { name: "Record", exact: true }).click();
 }
 
@@ -390,9 +421,7 @@ async function captureChat(page) {
 test("chat screenshots stitch the picked range into one image and restore the scroll", async ({ page }) => {
     await page.setViewportSize({ width: 700, height: 420 });
     await captureChat(page);
-    const button = page.locator("#capture-buttons .lowcord-capture-button");
-    await expect(button).toHaveAccessibleName("Screenshot messages");
-    await button.click();
+    await runAction(page, "Screenshot messages", "#capture-buttons");
     const bar = page.getByRole("dialog", { name: "Chat screenshot" });
     await expect(bar).toContainText("Click the first message");
     await expect(bar.getByRole("button", { name: "Capture" })).toBeDisabled();
@@ -438,7 +467,7 @@ test("chat screenshots stitch the picked range into one image and restore the sc
 
 test("chat screenshots cancel with Escape and leave Discord's clicks alone afterwards", async ({ page }) => {
     await captureChat(page);
-    await page.locator("#capture-buttons .lowcord-capture-button").click();
+    await runAction(page, "Screenshot messages", "#capture-buttons");
     await page.locator("#chat-messages-7-4").click();
     await expect(page.locator('[data-lowcord-capture="range"]')).toHaveCount(1);
     await page.keyboard.press("Escape");
@@ -447,5 +476,356 @@ test("chat screenshots cancel with Escape and leave Discord's clicks alone after
     await page.locator("#chat-messages-7-1").click();
     expect(await page.evaluate(() => window.rowClicks)).toBe(1);
     await setExtension(page, "chatCapture", false);
-    await expect(page.locator(".lowcord-capture-button")).toHaveCount(0);
+    await page.locator("#capture-buttons .lowcord-actions-button").click();
+    await expect(page.getByRole("menuitem", { name: "Screenshot messages" })).toHaveCount(0);
+});
+
+// A stand-in for Discord's search index and REST client: 60 of the user's
+// messages, one system message that can't be deleted, and other people's.
+async function fakeMessages(page, { guild }) {
+    await page.evaluate(guild => {
+        const me = "1", channelId = "500", guildId = guild ? "900" : null;
+        const messages = [];
+        for (let i = 1; i <= 70; i++) messages.push({ id: String(10_000 + i), channel_id: i % 7 === 0 && guild ? "501" : channelId,
+            author: { id: i % 10 === 0 ? "2" : me }, type: i === 33 ? 3 : 0 });
+        window.purge = { searches: [], deletes: [], messages, rateLimited: false, indexed: false };
+        const stores = {
+            UserStore: { getCurrentUser: () => ({ id: me }), getUser: () => ({ globalName: "Sam" }) },
+            SelectedChannelStore: { getChannelId: () => channelId },
+            ChannelStore: { getChannel: id => ({ id, guild_id: guildId, name: guild ? "general" : "", recipients: guild ? undefined : ["2"] }) },
+            GuildStore: { getGuild: () => ({ name: "Test server" }) },
+        };
+        const store = Lowcord.store;
+        Lowcord.store = name => stores[name] ?? store(name);
+        Object.assign(Lowcord.massDelete.pacing, { search: 1, indexing: 1 });
+        Object.defineProperty(Lowcord, "RestAPI", { configurable: true, value: {
+            async get({ url, query }) {
+                purge.searches.push({ url, query: { ...query } });
+                // Discord answers 202 while it indexes a channel for the first time.
+                if (!purge.indexed) { purge.indexed = true; return { status: 202, body: { retry_after: 0 } }; }
+                const hits = purge.messages.filter(m => m.author.id === query.author_id
+                    && (!query.channel_id || m.channel_id === query.channel_id)
+                    && (!query.max_id || BigInt(m.id) <= BigInt(query.max_id)))
+                    .sort((a, b) => Number(b.id) - Number(a.id));
+                return { status: 200, body: { total_results: hits.length, messages: hits.slice(0, 25).map(m => [m]) } };
+            },
+            async del({ url }) {
+                if (purge.slow) await new Promise(resolve => setTimeout(resolve, purge.slow));
+                const id = url.split("/").pop();
+                if (purge.deletes.length === 5 && !purge.rateLimited) { purge.rateLimited = true; throw { status: 429, body: { retry_after: 0.001 } }; }
+                const message = purge.messages.find(m => m.id === id);
+                if (!message) throw { status: 404, body: { code: 10008 } };
+                if (message.type === 3) throw { status: 400, body: { code: 50021 } };
+                purge.deletes.push(url);
+                // Like Discord's index, search keeps returning deleted messages for a while.
+            },
+        } });
+    }, guild);
+}
+
+test("mass delete removes every own message in a DM, past rate limits and indexing", async ({ page }) => {
+    await fakeMessages(page, { guild: false });
+    await runAction(page, "Delete my messages");
+    const dialog = page.getByRole("dialog", { name: "Delete your messages?" });
+    await expect(dialog).toContainText("Every message you sent to Sam");
+    await expect(dialog.getByRole("radiogroup")).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+    await dialog.getByRole("button", { name: "Delete my messages" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.locator(".lowcord-toast")).toContainText("Deleted 62 messages", { timeout: 15_000 });
+    await expect(page.locator(".lowcord-toast")).toContainText("1 couldn’t be deleted");
+    await expect(page.locator(".lowcord-purge-bar")).toHaveCount(0);
+    const { searches, deletes } = await page.evaluate(() => window.purge);
+    expect(searches[0]).toEqual({ url: "/channels/500/messages/search",
+        query: { author_id: "1", sort_by: "timestamp", sort_order: "desc", include_nsfw: true } });
+    expect(new Set(deletes).size).toBe(62);
+    expect(deletes.every(url => url.startsWith("/channels/500/messages/"))).toBe(true);
+});
+
+test("mass delete in a server picks the channel or the whole server and can stop", async ({ page }) => {
+    await fakeMessages(page, { guild: true });
+    await runAction(page, "Delete my messages");
+    const dialog = page.getByRole("dialog", { name: "Delete your messages?" });
+    await expect(dialog.getByRole("radio", { name: /Only in #general/ })).toBeChecked();
+    await dialog.getByRole("button", { name: "Delete my messages" }).click();
+    await expect(page.locator(".lowcord-toast")).toContainText("Deleted 53 messages", { timeout: 15_000 });
+    let state = await page.evaluate(() => window.purge);
+    expect(state.searches.at(-1).url).toBe("/guilds/900/messages/search");
+    expect(state.searches.at(-1).query.channel_id).toBe("500");
+    expect(state.deletes.every(url => url.startsWith("/channels/500/"))).toBe(true);
+
+    await page.evaluate(() => {
+        purge.messages = purge.messages.filter(m => !purge.deletes.some(url => url.endsWith(`/${m.id}`)));
+        purge.deletes = []; purge.searches = []; purge.slow = 50;
+    });
+    await runAction(page, "Delete my messages");
+    await dialog.getByRole("radio", { name: /Everywhere in Test server/ }).check();
+    await dialog.getByRole("button", { name: "Delete my messages" }).click();
+    const bar = page.locator(".lowcord-purge-bar");
+    await expect(bar).toContainText("Test server");
+    await expect.poll(() => page.evaluate(() => purge.deletes.length)).toBeGreaterThan(2);
+    await bar.getByRole("button", { name: "Stop" }).click();
+    await expect(page.locator(".lowcord-toast")).toContainText("Stopped after deleting");
+    state = await page.evaluate(() => window.purge);
+    expect(state.searches.at(-1).query.channel_id).toBeUndefined();
+    expect(state.deletes.some(url => url.startsWith("/channels/501/"))).toBe(true);
+    expect(state.deletes.length).toBeLessThan(60);
+});
+
+test("media gallery shows a DM's photos and videos by month and jumps to a message", async ({ page }) => {
+    await page.evaluate(() => {
+        document.body.insertAdjacentHTML("beforeend", `<div class="chat_test" style="position:fixed;inset:0 0 0 200px;display:flex;flex-direction:column">
+            <section class="title_test" style="height:48px"><div class="toolbar_test" style="display:flex;gap:8px">
+                <div class="iconWrapper_test clickable_test" role="button" aria-label="Pinned Messages"><svg class="icon_test" width="24" height="24"></svg></div>
+                <div class="search_test"></div></div></section>
+            <div class="content_test" style="flex:1"><main class="chatContent_test"></main></div></div>`);
+        const file = (id, type, extra = {}) => ({ id, filename: extra.spoiler ? "SPOILER_x.png" : "x.png", content_type: type, width: 1200, height: 800,
+            duration_secs: extra.duration, proxy_url: `https://media.discordapp.net/attachments/1/${id}/x?ex=1&hm=2` });
+        const media = (id, day, type, extra = {}) => ({ id: String(id), channel_id: "700", timestamp: `2026-${day}T12:00:00Z`,
+            author: extra.own ? { id: "1", username: "me" } : { id: "2", global_name: "Ada" }, embeds: [], content: extra.content ?? "",
+            attachments: [file(`a${id}`, type, extra), ...(extra.second ? [file(`b${id}`, type)] : [])] });
+        const messages = window.galleryMessages = [];
+        for (let i = 0; i < 30; i++) messages.push(media(20_000 + i, i < 10 ? "08-03" : "10-05", i % 5 === 0 ? "video/mp4" : "image/png",
+            { duration: 75, spoiler: i === 29, own: i === 27 || i === 28, second: i === 27, content: i === 27 ? "two photos" : "" }));
+        messages.push({ id: "20100", channel_id: "700", timestamp: "2026-10-06T12:00:00Z", author: { id: "1", username: "me" }, attachments: [],
+            embeds: [{ type: "gifv", thumbnail: { proxy_url: "https://media.discordapp.net/external/g.gif", width: 200, height: 200 } }] });
+        window.gallery = { searches: [], jumps: [], edits: [] };
+        const stores = {
+            SelectedChannelStore: { getChannelId: () => "700" },
+            ChannelStore: { getChannel: id => ({ id, guild_id: null, recipients: ["2"] }) },
+            UserStore: { getUser: () => ({ globalName: "Ada" }), getCurrentUser: () => ({ id: "1" }) },
+        };
+        const store = Lowcord.store;
+        Lowcord.store = name => stores[name] ?? store(name);
+        Lowcord.mediaGallery.timing.search = 1;
+        Object.defineProperty(Lowcord, "transitionTo", { configurable: true, value: path => gallery.jumps.push(path) });
+        Object.defineProperty(Lowcord, "RestAPI", { configurable: true, value: {
+            async get({ url, query }) {
+                gallery.searches.push({ url, query: { ...query } });
+                const hits = messages.filter(m => (!query.max_id || BigInt(m.id) <= BigInt(query.max_id))
+                    && (query.has.includes("video") || !m.attachments.some(a => a.content_type.startsWith("video/"))))
+                    .sort((a, b) => Number(b.id) - Number(a.id));
+                return { status: 200, body: { total_results: hits.length, messages: hits.slice(0, 25).map(m => [m]) } };
+            },
+            async del({ url }) {
+                gallery.edits.push(["delete", url]);
+                const id = url.split("/").pop();
+                messages.splice(messages.findIndex(m => m.id === id), 1);
+            },
+            async patch({ url, body }) {
+                gallery.edits.push(["patch", url, body]);
+                const message = messages.find(m => m.id === url.split("/").pop());
+                message.attachments = message.attachments.filter(a => body.attachments.some(kept => kept.id === a.id));
+            },
+        } });
+    });
+    const button = page.locator(".toolbar_test .lowcord-media-button");
+    await expect(button).toHaveAccessibleName("Media");
+    await expect(page.locator(".toolbar_test > *").nth(1)).toHaveClass(/lowcord-media-button/);
+    await button.click();
+    const pane = page.getByRole("complementary", { name: "Media" });
+    await expect(pane).toContainText("Ada");
+    await expect(pane.locator(".lowcord-media-tile")).toHaveCount(32);
+    await expect(pane.getByRole("status")).toHaveText("That’s everything.");
+    const months = await pane.locator(".lowcord-media-month h3").allTextContents();
+    expect(months).toHaveLength(2);
+    expect(await pane.locator(".lowcord-media-badge", { hasText: "1:15" }).count()).toBe(6);
+    await expect(pane.locator(".lowcord-media-badge", { hasText: "GIF" })).toHaveCount(1);
+    await expect(pane.locator(".lowcord-media-tile[data-spoiler]")).toHaveCount(1);
+    const src = await pane.locator(".lowcord-media-tile img").nth(1).getAttribute("src");
+    expect(src).toContain("ex=1"); expect(src).toContain("format=webp"); expect(src).toContain("width=420"); expect(src).toContain("height=280");
+    const first = await page.evaluate(() => gallery.searches[0]);
+    expect(first).toEqual({ url: "/channels/700/messages/search", query: { has: ["image", "video"], include_nsfw: true } });
+
+    await pane.locator(".lowcord-media-tile").nth(3).click();
+    expect(await page.evaluate(() => gallery.jumps)).toEqual(["/channels/@me/700/20027"]);
+    await expect(pane.locator(".lowcord-media-tile[data-current]")).toHaveCount(1);
+
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await pane.locator(".lowcord-media-tile").first().click({ button: "right" });
+    const menu = page.getByRole("menu", { name: "Media options" });
+    await expect(menu.getByRole("menuitem", { name: "Copy media link" })).toBeFocused();
+    await menu.getByRole("menuitem", { name: "Copy media link" }).click();
+    await expect(menu).toHaveCount(0);
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("https://media.discordapp.net/external/g.gif");
+    await expect(page.locator(".lowcord-toast")).toContainText("Link copied");
+    await pane.locator(".lowcord-media-tile").nth(1).click({ button: "right" });
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(pane).toBeVisible();
+
+    // Only the user's own media can be deleted; the button shows on hover.
+    await expect(pane.locator(".lowcord-media-delete")).toHaveCount(4);
+    const own = pane.locator('.lowcord-media-cell[data-message="20028"]');
+    const remove = own.getByRole("button", { name: "Delete photo" });
+    await expect(remove).toHaveCSS("opacity", "0");
+    await own.hover();
+    await expect(remove).toHaveCSS("opacity", "1");
+    await remove.click();
+    await expect(own).toHaveCount(0);
+    // A message with text and two photos loses only the photo.
+    const pair = pane.locator('.lowcord-media-cell[data-message="20027"]');
+    await pair.first().hover();
+    await pair.first().getByRole("button", { name: "Delete photo" }).click();
+    await expect(pair).toHaveCount(1);
+    expect(await page.evaluate(() => gallery.edits)).toEqual([["delete", "/channels/700/messages/20028"],
+        ["patch", "/channels/700/messages/20027", { attachments: [{ id: "b20027" }] }]]);
+    // Its last photo, with the text still there, is again removed alone.
+    await pair.first().hover();
+    await pair.first().getByRole("button", { name: "Delete photo" }).click();
+    await expect(pair).toHaveCount(0);
+    expect(await page.evaluate(() => gallery.edits.at(-1))).toEqual(["patch", "/channels/700/messages/20027", { attachments: [] }]);
+    await expect(pane.locator(".lowcord-media-tile")).toHaveCount(29);
+
+    await pane.getByRole("radio", { name: "Photos" }).click();
+    await expect(pane.getByRole("radio", { name: "Photos" })).toHaveAttribute("aria-checked", "true");
+    await expect(pane.locator(".lowcord-media-tile")).toHaveCount(23);
+    await expect(pane.locator(".lowcord-media-badge", { hasText: "1:15" })).toHaveCount(0);
+
+    await pane.locator(".lowcord-media-tile").first().focus();
+    await page.keyboard.press("Escape");
+    await expect(pane).toHaveCount(0);
+    await expect(button).toHaveAttribute("aria-pressed", "false");
+});
+
+test("right-clicking chat media adds Copy Media Link to Discord's message menu", async ({ page }) => {
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.evaluate(() => {
+        document.body.insertAdjacentHTML("beforeend", `<ol style="position:fixed;top:0;left:300px;z-index:50;margin:0;list-style:none">
+            <li id="chat-messages-700-1"><div id="message-accessories-1">
+                <div class="imageWrapper_test" id="photo" style="width:120px;height:80px;position:relative">
+                    <a class="originalLink_test" href="https://cdn.discordapp.com/attachments/1/2/photo.png?ex=1" style="position:absolute;inset:0"></a>
+                    <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" style="width:120px;height:80px"></div>
+                <div class="wrapper_test" id="clip"><video src="https://cdn.discordapp.com/attachments/1/3/clip.mp4" width="120" height="60"></video></div>
+                <div class="reactions_test"><img class="emoji_test" id="emoji" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="16" height="16"></div>
+            </div></li></ol>`);
+        // Discord's own menu: rendered a frame after the click, closed by Escape.
+        window.addEventListener("contextmenu", event => {
+            event.preventDefault();
+            requestAnimationFrame(() => {
+                document.querySelector("#message")?.remove();
+                document.body.insertAdjacentHTML("beforeend", `<div id="message" role="menu" style="position:fixed;top:200px;left:300px;z-index:60;background:#111">
+                    <div role="group"><div class="item_test" role="menuitem" id="message-add-reaction">Add Reaction</div></div>
+                    <div role="group"><div class="item_test focused_test labelContainer_test" role="menuitem" id="message-copy-text" tabindex="-1">
+                    <div class="iconContainer_test"><svg width="24" height="24" viewBox="0 0 24 24"><path d="M0 0h1"/></svg></div>
+                    <div class="label_test"><span data-text-variant="text-sm/medium">Copy Text</span></div></div></div></div>`);
+            });
+        });
+        document.addEventListener("keydown", event => { if (event.key === "Escape") document.querySelector("#message")?.remove(); });
+    });
+    const menu = page.locator("#message");
+    const item = menu.getByRole("menuitem", { name: "Copy Media Link" });
+
+    await page.locator("#photo").click({ button: "right" });
+    await expect(item).toHaveCount(1);
+    await expect(menu.getByRole("menuitem").nth(1)).toHaveText("Copy Media Link");
+    await expect(item).not.toHaveClass(/focused_test/);
+    // Discord keeps its own item focused; hovering ours takes the highlight.
+    await page.addStyleTag({ content: ".focused_test { background: rgb(80, 80, 80); }" });
+    const copyText = menu.getByRole("menuitem", { name: "Copy Text" });
+    const background = locator => locator.evaluate(node => getComputedStyle(node).backgroundColor);
+    expect(await background(copyText)).toBe("rgb(80, 80, 80)");
+    await item.hover();
+    await expect(item).toHaveClass(/focused_test/);
+    expect(await background(item)).toBe("rgb(80, 80, 80)");
+    expect(await background(copyText)).toBe("rgba(0, 0, 0, 0)");
+    await copyText.hover();
+    await expect(item).not.toHaveClass(/focused_test/);
+    expect(await background(copyText)).toBe("rgb(80, 80, 80)");
+    await item.click();
+    await expect(menu).toHaveCount(0);
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("https://cdn.discordapp.com/attachments/1/2/photo.png?ex=1");
+    await expect(page.locator(".lowcord-toast")).toContainText("Link copied");
+
+    await page.locator("#clip video").click({ button: "right" });
+    await item.click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("https://cdn.discordapp.com/attachments/1/3/clip.mp4");
+
+    await page.locator("#emoji").click({ button: "right", force: true });
+    await expect(menu.getByRole("menuitem", { name: "Copy Text" })).toHaveCount(1);
+    await expect(item).toHaveCount(0);
+
+    await page.keyboard.press("Escape");
+    await setExtension(page, "copyMediaLink", false);
+    await page.locator("#photo").click({ button: "right" });
+    await expect(menu.getByRole("menuitem", { name: "Copy Text" })).toHaveCount(1);
+    await expect(item).toHaveCount(0);
+});
+
+test("media gallery months: headings open a month picker that scrolls or restarts from an older month", async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 380 });
+    await page.evaluate(() => {
+        document.body.insertAdjacentHTML("beforeend", `<div style="position:fixed;inset:0 0 0 200px;display:flex;flex-direction:column">
+            <section class="title_test" style="height:48px"><div class="toolbar_test" style="display:flex"></div></section>
+            <div class="content_test" style="flex:1"></div></div>`);
+        // Channel created in March 2025; a photo in each of Jan, Mar, Aug and Oct 2026, and one in May 2025.
+        const id = date => ((BigInt(Date.parse(date)) - 1420070400000n) << 22n).toString();
+        const channelId = id("2025-03-10T00:00:00Z");
+        const messages = ["2026-10-05", "2026-08-03", "2026-03-20", "2026-01-15", "2025-05-02"].flatMap(day =>
+            Array.from({ length: 4 }, (_, n) => ({ id: (BigInt(id(`${day}T12:00:00Z`)) + BigInt(n)).toString(), channel_id: channelId,
+                timestamp: `${day}T12:00:00Z`, author: { id: "2" }, embeds: [],
+                attachments: [{ id: `${day}-${n}`, content_type: "image/png", width: 10, height: 10, proxy_url: "https://media.discordapp.net/x.png" }] })));
+        window.monthSearches = [];
+        const stores = {
+            SelectedChannelStore: { getChannelId: () => channelId },
+            ChannelStore: { getChannel: cid => ({ id: cid, guild_id: null, recipients: ["2"] }) },
+            UserStore: { getUser: () => ({ globalName: "Ada" }), getCurrentUser: () => ({ id: "1" }) },
+        };
+        const store = Lowcord.store;
+        Lowcord.store = name => stores[name] ?? store(name);
+        Lowcord.mediaGallery.timing.search = 1;
+        Object.defineProperty(Lowcord, "RestAPI", { configurable: true, value: {
+            async get({ query }) {
+                monthSearches.push(query.max_id ?? null);
+                // Pages of 4, so later months need more scrolling.
+                const hits = messages.filter(m => !query.max_id || BigInt(m.id) <= BigInt(query.max_id));
+                return { status: 200, body: { total_results: hits.length, messages: hits.slice(0, 4).map(m => [m]) } };
+            },
+        } });
+    });
+    await page.locator(".lowcord-media-button").click();
+    const pane = page.getByRole("complementary", { name: "Media" });
+    await expect(pane.locator(".lowcord-media-tile")).toHaveCount(20);
+    // Title, switch, headings and tiles start at one edge.
+    await pane.evaluate(node => Promise.all(node.getAnimations().map(animation => animation.finished)));
+    const left = selector => pane.locator(selector).first().evaluate(node => Math.round(node.getBoundingClientRect().left));
+    const edge = await left(".lowcord-media-tile");
+    expect(await left("header h2")).toBe(edge);
+    expect(await left(".lowcord-media-segments")).toBe(edge);
+    const headingText = await pane.locator(".lowcord-media-month-button").first().evaluate(node => {
+        const range = document.createRange(); range.selectNodeContents(node.firstChild); return Math.round(range.getBoundingClientRect().left);
+    });
+    expect(headingText).toBe(edge);
+
+    await pane.locator(".lowcord-media-month-button").first().click();
+    const picker = page.getByRole("dialog", { name: "Choose a month" });
+    await expect(picker.locator(".lowcord-months-year")).toHaveText("2026");
+    await expect(picker.locator('[aria-current="true"]')).toBeFocused();
+    await expect(picker.locator("[data-loaded]")).toHaveCount(4);
+    await expect(picker.getByRole("button", { name: "Next year" })).toBeDisabled();
+    // A loaded month scrolls into view.
+    await picker.locator("[data-loaded]").first().click();
+    await expect(picker).toHaveCount(0);
+    const jan = pane.locator(".lowcord-media-month").filter({ hasText: /2026/ }).last();
+    await expect.poll(() => jan.evaluate(node => Math.abs(node.getBoundingClientRect().top - node.closest(".lowcord-media-body").getBoundingClientRect().top))).toBeLessThan(2);
+
+    // Earlier years stop at the chat's creation; an unloaded month restarts the grid.
+    await pane.locator(".lowcord-media-month-button").first().click();
+    await picker.getByRole("button", { name: "Previous year" }).click();
+    await expect(picker.locator(".lowcord-months-year")).toHaveText("2025");
+    await expect(picker.getByRole("button", { name: "Previous year" })).toBeDisabled();
+    await expect(picker.locator(".lowcord-months-month:disabled")).toHaveCount(2);
+    await picker.locator(".lowcord-months-month").nth(6).click();
+    await expect(pane.locator(".lowcord-media-tile")).toHaveCount(4);
+    await expect(pane.locator(".lowcord-media-month")).toHaveCount(1);
+    const back = pane.getByRole("button", { name: "Back to newest" });
+    await expect(back).toBeVisible();
+    await back.click();
+    await expect(back).toBeHidden();
+    await expect(pane.locator(".lowcord-media-tile")).toHaveCount(20);
+
+    await pane.locator(".lowcord-media-month-button").first().click();
+    await page.keyboard.press("Escape");
+    await expect(picker).toHaveCount(0);
+    await expect(pane).toBeVisible();
 });

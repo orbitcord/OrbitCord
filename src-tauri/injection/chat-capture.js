@@ -255,34 +255,8 @@
         return { width: canvas.width, height: canvas.height, segments: segments.length };
     }
 
-    // ----- Message bar button ----------------------------------------------------
-    function icon() {
-        const node = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        node.setAttribute("viewBox", "0 0 24 24"); node.setAttribute("width", "20"); node.setAttribute("height", "20");
-        node.setAttribute("aria-hidden", "true");
-        node.innerHTML = `<path fill="currentColor" fill-rule="evenodd" d="${cameraPath}"/>`;
-        return node;
-    }
-    let bars = [], scanned = 0;
-    function placeButtons(event) {
-        if (!window.Lowcord.domChanged(event, '[class*="channelTextArea_"]')) return;
-        const show = extensions.enabled("chatCapture");
-        if (!show && session) stop();
-        const settled = bars.length && bars.every(bar => bar.isConnected && bar.querySelector(":scope > .lowcord-capture-button"));
-        if (show && !event && settled && performance.now() - scanned < 500) return;
-        scanned = performance.now();
-        bars = [...document.querySelectorAll('[class*="channelTextArea_"] [class*="buttons_"]')];
-        for (const bar of bars) {
-            const existing = bar.querySelector(":scope > .lowcord-capture-button");
-            if (!show) { existing?.remove(); continue; }
-            if (existing) continue;
-            const button = ui("button", { type: "button", className: "lowcord-capture-button",
-                "aria-label": "Screenshot messages", title: "Screenshot messages", onClick: start }, icon());
-            const voice = bar.querySelector(":scope > .lowcord-voice-button");
-            if (voice) voice.after(button); else bar.prepend(button);
-        }
-    }
-    window.Lowcord.onDomChange(placeButtons);
-    window.addEventListener(extensions.changeEvent, placeButtons);
+    // ----- Message bar action ---------------------------------------------------
+    extensions.addComposerAction({ id: "chatCapture", order: 1, label: "Screenshot messages", path: cameraPath, run: start });
+    window.addEventListener(extensions.changeEvent, () => { if (session && !extensions.enabled("chatCapture")) stop(); });
     window.Lowcord.chatCapture = { start, stop, run, get active() { return Boolean(session); } };
 })();
