@@ -322,11 +322,16 @@ test('account windows keep separate logins, badges and window state across resta
         await page.waitForFunction(() => window.earlyInjection);
         expect(app.windows()).toHaveLength(1);
         expect(await page.evaluate(() => localStorage.getItem('lowcord-test-login'))).toBe('main');
-        const [second] = await Promise.all([app.waitForEvent('window'), page.evaluate(() => window.__LOWCORD_NATIVE__.accounts('open', 'account-1'))]);
+        const [second] = await Promise.all([app.waitForEvent('window'), page.evaluate(() => window.__LOWCORD_NATIVE__.accounts('open-named', { name: 'second-user' }))]);
         await second.waitForFunction(() => window.earlyInjection);
         expect(await second.evaluate(() => localStorage.getItem('lowcord-test-login'))).toBe('second');
         expect(await app.evaluate(({ BrowserWindow, session }) => BrowserWindow.getAllWindows()
             .find(window => window.webContents.session === session.fromPartition('persist:account-1')).getBounds().width)).toBe(900);
+        // Picking an account OrbitCord doesn't know yet opens a new, named window.
+        const [third] = await Promise.all([app.waitForEvent('window'), page.evaluate(() => window.__LOWCORD_NATIVE__.accounts('open-named', { name: 'third-user' }))]);
+        await third.waitForFunction(() => window.earlyInjection);
+        expect((await page.evaluate(() => window.__LOWCORD_NATIVE__.accounts())).map(account => account.name))
+            .toEqual(['main-user', 'second-user', 'third-user']);
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
 

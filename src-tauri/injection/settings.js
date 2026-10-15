@@ -134,6 +134,82 @@ function setupLowcordSettings() {
     }
     reportAccount();
 
+    // Discord's Switch Accounts submenu signs this window into another
+    // account. Ask first whether to open that account in a window of its own
+    // instead, so both stay signed in.
+    const submenuPrefix = "switch-accounts-submenu-";
+    const switchTarget = event => {
+        let item = event.target?.closest?.(`[role="menuitem"][id^="${submenuPrefix}"]`);
+        // Keyboard activation targets the menu; the focused item is active.
+        if (!item && event.type === "keydown") item = event.target?.closest?.(`#switch-accounts-submenu`)?.querySelector('[role="menuitem"][class*="focused"]');
+        const userId = item?.id.slice(submenuPrefix.length);
+        if (!userId || !/^\d+$/.test(userId) || userId === window.Lowcord.store("UserStore")?.getCurrentUser?.()?.id) return null;
+        return { item, userId, name: item.textContent.trim() };
+    };
+    let switchingHere = false;
+    function interceptSwitch(event) {
+        if (switchingHere || !window.__LOWCORD_NATIVE__?.accounts) return;
+        if (event.type === "keydown" && event.key !== "Enter" && event.key !== " ") return;
+        const target = switchTarget(event);
+        if (!target) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        // The submenu closes when the pointer leaves it; keep Discord's own
+        // handler to switch this window afterwards.
+        const props = Object.entries(target.item).find(([key]) => key.startsWith("__reactProps$"))?.[1];
+        void chooseSwitch({ ...target, onClick: props?.onClick });
+    }
+    window.addEventListener("click", interceptSwitch, true);
+    window.addEventListener("keydown", interceptSwitch, true);
+
+    const element = (tag, props, ...children) => {
+        const node = document.createElement(tag);
+        for (const [key, value] of Object.entries(props)) {
+            if (key.startsWith("on")) node.addEventListener(key.slice(2).toLowerCase(), value);
+            else if (key === "className") node.className = value;
+            else node.setAttribute(key, value);
+        }
+        node.append(...children.filter(Boolean));
+        return node;
+    };
+    function chooseSwitch({ item, name, onClick }) {
+        if (document.querySelector(".lowcord-switch-backdrop")) return;
+        const native = window.__LOWCORD_NATIVE__;
+        const closeMenus = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true }));
+        const switchHere = () => {
+            close();
+            switchingHere = true;
+            try {
+                if (item.isConnected) item.click();
+                else onClick?.({ preventDefault() {}, stopPropagation() {}, currentTarget: item, target: item });
+            } finally { switchingHere = false; }
+        };
+        const openWindow = () => {
+            close();
+            closeMenus();
+            native.accounts("open-named", { name }).catch(error => console.error("[Lowcord]", error));
+        };
+        const button = (label, className, onClick) => element("button", { type: "button", className, onClick }, label);
+        const dialog = element("div", { className: "lowcord-voice", role: "dialog", "aria-modal": "true", "aria-labelledby": "lowcord-switch-title" },
+            element("h2", { id: "lowcord-switch-title" }, `Switch to ${name}?`),
+            element("p", { className: "lowcord-voice-status" },
+                `Open ${name} in a new window so both accounts stay signed in, or switch this window to ${name}. A new window asks you to log in once.`),
+            element("div", { className: "lowcord-dialog-actions" },
+                button("Switch this window", "lowcord-button", switchHere),
+                button("Open in new window", "lowcord-button lowcord-button-primary", openWindow)));
+        const backdrop = element("div", { className: "lowcord-voice-backdrop lowcord-switch-backdrop" }, dialog);
+        // Discord's outside-click handlers would close its menus underneath.
+        for (const type of ["pointerdown", "mousedown", "click"]) backdrop.addEventListener(type, event => {
+            event.stopPropagation();
+            if (type === "mousedown" && event.target === backdrop) close();
+        });
+        const onKey = event => { if (event.key === "Escape") { event.stopPropagation(); event.preventDefault(); close(); } };
+        function close() { window.removeEventListener("keydown", onKey, true); backdrop.remove(); }
+        window.addEventListener("keydown", onKey, true);
+        document.body.append(backdrop);
+        dialog.querySelector(".lowcord-button-primary").focus();
+    }
+
     function BackgroundPanel() {
         const { React } = window.Lowcord;
         const h = React.createElement;

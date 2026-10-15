@@ -106,9 +106,9 @@ function openAccount(account) {
         .finally(() => openingAccounts.delete(account)));
     return openingAccounts.get(account);
 }
-function newAccount() {
+function newAccount(label = null) {
     const next = Math.max(0, ...accounts.map(account => Number(account.id.slice(8)) || 0)) + 1;
-    const account = { id: `account-${next}`, label: null };
+    const account = { id: `account-${next}`, label };
     accounts.push(account);
     saveAccounts();
     accountsChanged();
@@ -141,7 +141,7 @@ const trayMenu = () => Menu.buildFromTemplate([
 const appMenu = () => Menu.buildFromTemplate([
     ...(process.platform === 'darwin' ? [{ label: 'OrbitCord', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] }] : []),
     { label: 'File', submenu: [
-        { label: 'New Account Window', accelerator: 'CmdOrCtrl+Shift+N', click: () => void newAccount() },
+        { label: 'New Account Window', accelerator: 'CmdOrCtrl+Shift+A', click: () => void newAccount() },
         ...(accounts.length > 1 ? [{ type: 'separator' }, ...accounts.map(account => ({ label: accountName(account), click: () => void openAccount(account) }))] : []),
     ] },
     { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' },
@@ -477,6 +477,15 @@ function registerIpc() {
         const record = assertSender(event);
         if (action === undefined) return accountList(record);
         if (action === 'new') { void newAccount(); return accountList(record); }
+        if (action === 'open-named') {
+            // From Discord's Switch Accounts menu: reuse the window signed into
+            // that account, or open a new one named after it until login.
+            const name = labelText(id?.name);
+            if (!name) throw new Error('Invalid account name');
+            const existing = accounts.find(account => account.label === name);
+            void (existing ? openAccount(existing) : newAccount(name));
+            return accountList(record);
+        }
         const account = accounts.find(entry => entry.id === id);
         if (!account) throw new Error('Unknown account');
         if (action === 'open') void openAccount(account);
