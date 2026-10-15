@@ -14,6 +14,8 @@ function setupLowcordSettings() {
             component: () => ExtensionsPanel },
         { id: "background", title: "Background", icon: "M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z",
             component: () => BackgroundPanel },
+        { id: "accounts", title: "Accounts", icon: "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM2 21v-1a6 6 0 0 1 12 0v1M16 3.5a4 4 0 0 1 0 7M22 21v-1a6 6 0 0 0-4-5.6",
+            component: () => AccountsPanel },
         { id: "updates", title: "Check for updates", icon: "M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1",
             component: () => UpdatesPanel },
     ];
@@ -78,6 +80,59 @@ function setupLowcordSettings() {
             state.installMode === "unavailable" ? h("p", { className: "lowcord-chat-description" },
                 "Install updates from the Mac or Windows version of OrbitCord.") : null);
     }
+
+    // Each account opens in a window with its own login, so several accounts
+    // can stay signed in at once.
+    function AccountsPanel() {
+        const { React } = window.Lowcord;
+        const h = React.createElement;
+        const native = window.__LOWCORD_NATIVE__;
+        const [list, setList] = React.useState(null);
+        const [error, setError] = React.useState("");
+        React.useEffect(() => {
+            let live = true;
+            const unsubscribe = native?.onAccountsChanged?.(next => live && setList(next));
+            native?.accounts?.().then(next => live && setList(next)).catch(failure => live && setError(failure.message));
+            return () => { live = false; unsubscribe?.(); };
+        }, []);
+        const act = (action, id) => native.accounts(action, id).then(next => { setList(next); setError(""); },
+            failure => setError(failure.message));
+        return h("section", { className: "lowcord-chat-appearance" },
+            h("p", { className: "lowcord-chat-intro" }, "Each account opens in its own window and stays signed in. Extra windows use memory only while open."),
+            list ? h("div", { className: "lowcord-sleep-card" }, ...list.map((account, index) =>
+                h("div", { key: account.id, className: "lowcord-sleep-row", style: index ? undefined : { borderTop: 0 } },
+                    h("span", { className: "lowcord-sleep-label" }, h("strong", null, account.name),
+                        h("span", { className: "lowcord-chat-description" },
+                            account.current ? "This window" : account.open ? "Open in another window" : "Closed")),
+                    h("span", { className: "lowcord-updates-actions", style: { margin: 0 } },
+                        account.current ? null : h("button", { type: "button", className: "lowcord-button",
+                            onClick: () => act("open", account.id) }, account.open ? "Show" : "Open"),
+                        account.main ? null : h("button", { type: "button", className: "lowcord-button lowcord-button-danger",
+                            onClick: () => act("remove", account.id) }, "Remove"))))) : null,
+            h("div", { className: "lowcord-updates-actions" },
+                h("button", { type: "button", className: "lowcord-button lowcord-button-primary", disabled: !native?.accounts,
+                    onClick: () => act("new") }, "Add account")),
+            h("p", { className: "lowcord-chat-description" }, "Add account opens a new window where you can log in. Removing an account signs it out of OrbitCord on this computer."),
+            error ? h("p", { role: "alert" }, error) : null);
+    }
+
+    // Window titles, the tray and notifications name the account logged in here.
+    function reportAccount() {
+        const native = window.__LOWCORD_NATIVE__;
+        if (!native?.reportAccount) return;
+        let reported;
+        window.Lowcord.waitForStore("UserStore", store => {
+            const report = () => {
+                const name = store.getCurrentUser?.()?.username;
+                if (typeof name !== "string" || !name || name === reported) return;
+                reported = name;
+                native.reportAccount(name).catch(() => { reported = undefined; });
+            };
+            store.addChangeListener?.(report);
+            report();
+        });
+    }
+    reportAccount();
 
     function BackgroundPanel() {
         const { React } = window.Lowcord;

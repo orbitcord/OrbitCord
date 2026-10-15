@@ -152,7 +152,7 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(browser.peerConnection).toBe('function');
         expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true, extensions: 18, fetchHooked: true });
         expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
-            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'captureRegion', 'copyImage', 'saveImage'] });
+            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'captureRegion', 'copyImage', 'saveImage', 'reportAccount', 'accounts', 'onAccountsChanged'] });
         // Card media loads like <img>/<video> (no CORS) from the privileged scheme;
         // an unhandled scheme would reject instead of answering.
         expect(await page.evaluate(() => fetch('lowcord-media://media/0123456789abcdef01234567', { mode: 'no-cors' }).then(r => r.type))).toBe('opaque');
@@ -274,6 +274,59 @@ test('Rust saves window state across Electron restarts and quits with its parent
         app = await launch(dir);
         await (await app.firstWindow()).waitForLoadState('domcontentloaded');
         expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds().width)).toBe(900);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('account windows keep separate logins, badges and window state across restarts', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lowcord-accounts-'));
+    let app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForFunction(() => window.earlyInjection);
+        await page.evaluate(() => localStorage.setItem('lowcord-test-login', 'main'));
+        expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.accounts()))
+            .toEqual([{ id: 'main', name: 'Main account', main: true, current: true, open: true }]);
+        const [second] = await Promise.all([app.waitForEvent('window'), page.evaluate(() => window.__LOWCORD_NATIVE__.accounts('new'))]);
+        await second.waitForFunction(() => window.earlyInjection);
+        expect(await second.evaluate(() => localStorage.getItem('lowcord-test-login'))).toBeNull();
+        await second.evaluate(() => localStorage.setItem('lowcord-test-login', 'second'));
+        await page.evaluate(() => window.__LOWCORD_NATIVE__.reportAccount('main-user'));
+        await second.evaluate(() => window.__LOWCORD_NATIVE__.reportAccount('second-user'));
+        expect(JSON.parse(await readFile(join(dir, 'accounts.json'), 'utf8')))
+            .toEqual({ accounts: [{ id: 'main', label: 'main-user' }, { id: 'account-1', label: 'second-user' }] });
+        expect(await app.evaluate(({ BrowserWindow, session }) => BrowserWindow.getAllWindows().map(window => ({
+            title: window.getTitle(), main: window.webContents.session === session.defaultSession,
+            partition: window.webContents.session === session.fromPartition('persist:account-1') })).sort((a, b) => a.title.localeCompare(b.title))))
+            .toEqual([{ title: 'OrbitCord — main-user', main: true, partition: false }, { title: 'OrbitCord — second-user', main: false, partition: true }]);
+        // The badge adds up every account; a closed account window drops out.
+        await page.evaluate(() => window.__LOWCORD_NATIVE__.setBadge(2));
+        await second.evaluate(() => window.__LOWCORD_NATIVE__.setBadge(3));
+        expect(await app.evaluate(({ app }) => app.getBadgeCount())).toBe(5);
+        await app.evaluate(({ BrowserWindow, session }) => BrowserWindow.getAllWindows()
+            .find(window => window.webContents.session === session.fromPartition('persist:account-1')).setBounds({ width: 900, height: 650 }));
+        await expect.poll(async () => {
+            try { return JSON.parse(await readFile(join(dir, 'window-state-account-1.json'), 'utf8')).width; } catch { return 0; }
+        }).toBe(900);
+        await app.evaluate(({ BrowserWindow, session }) => BrowserWindow.getAllWindows()
+            .find(window => window.webContents.session === session.fromPartition('persist:account-1')).close());
+        await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+        expect(await app.evaluate(({ app }) => app.getBadgeCount())).toBe(2);
+        expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.accounts())).toEqual([
+            { id: 'main', name: 'main-user', main: true, current: true, open: true },
+            { id: 'account-1', name: 'second-user', main: false, current: false, open: false }]);
+    } finally { await app.close(); }
+    app = await launch(dir);
+    try {
+        // Extra accounts reopen only on demand, still logged in.
+        const page = await app.firstWindow();
+        await page.waitForFunction(() => window.earlyInjection);
+        expect(app.windows()).toHaveLength(1);
+        expect(await page.evaluate(() => localStorage.getItem('lowcord-test-login'))).toBe('main');
+        const [second] = await Promise.all([app.waitForEvent('window'), page.evaluate(() => window.__LOWCORD_NATIVE__.accounts('open', 'account-1'))]);
+        await second.waitForFunction(() => window.earlyInjection);
+        expect(await second.evaluate(() => localStorage.getItem('lowcord-test-login'))).toBe('second');
+        expect(await app.evaluate(({ BrowserWindow, session }) => BrowserWindow.getAllWindows()
+            .find(window => window.webContents.session === session.fromPartition('persist:account-1')).getBounds().width)).toBe(900);
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -441,7 +494,7 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
         await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
         expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
-            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'captureRegion', 'copyImage', 'saveImage']);
+            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'captureRegion', 'copyImage', 'saveImage', 'reportAccount', 'accounts', 'onAccountsChanged']);
         expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
     } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
 });

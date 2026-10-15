@@ -88,6 +88,13 @@ if (process.isMainFrame && location.protocol !== 'data:') {
         captureRegion: rect => ipcRenderer.invoke('lowcord:capture-region', rect),
         copyImage: bytes => ipcRenderer.invoke('lowcord:copy-image', bytes),
         saveImage: (bytes, name) => ipcRenderer.invoke('lowcord:save-image', bytes, name),
+        reportAccount: name => ipcRenderer.invoke('lowcord:account', name),
+        accounts: (action, id) => ipcRenderer.invoke('lowcord:accounts', action, id),
+        onAccountsChanged: callback => {
+            const listener = (_event, list) => callback(list);
+            ipcRenderer.on('lowcord:accounts-changed', listener);
+            return () => ipcRenderer.removeListener('lowcord:accounts-changed', listener);
+        },
     });
     contextBridge.executeInMainWorld({ func: function initializeLowcord(themesCSS, chatAppearanceCSS, lowcordUiCSS) {
         if (window.self !== window.top || window.__LOWCORD_INIT__) return;

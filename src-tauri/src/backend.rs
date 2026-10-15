@@ -40,6 +40,21 @@ impl Backend {
         }
     }
 
+    // The main window keeps window-state.json; each extra account window
+    // saves its own file next to it.
+    fn state_path(&self, args: &mut Value) -> Result<PathBuf, String> {
+        let account = match args.as_object_mut().and_then(|map| map.remove("account")) {
+            None | Some(Value::Null) => return Ok(self.state_path.clone()),
+            Some(Value::String(account)) => account,
+            Some(_) => return Err("invalid account".into()),
+        };
+        let number = account.strip_prefix("account-").unwrap_or_default();
+        if number.is_empty() || number.len() > 6 || !number.bytes().all(|b| b.is_ascii_digit()) {
+            return Err("invalid account".into());
+        }
+        Ok(self.state_path.with_file_name(format!("window-state-{account}.json")))
+    }
+
     pub fn respond(&mut self, line: &str) -> Value {
         let request: Request = match serde_json::from_str(line) {
             Ok(request) => request,
@@ -51,22 +66,24 @@ impl Backend {
         }
     }
 
-    fn execute(&mut self, command: &str, args: Value) -> Result<Value, String> {
+    fn execute(&mut self, command: &str, mut args: Value) -> Result<Value, String> {
         match command {
             "get_window_state" => {
-                let state = fs::read(&self.state_path)
+                let path = self.state_path(&mut args)?;
+                let state = fs::read(path)
                     .ok()
                     .and_then(|bytes| serde_json::from_slice::<WindowState>(&bytes).ok())
                     .filter(|state| state.validate().is_ok());
                 serde_json::to_value(state).map_err(|e| e.to_string())
             }
             "save_window_state" => {
+                let path = self.state_path(&mut args)?;
                 let state: WindowState = serde_json::from_value(args).map_err(|e| e.to_string())?;
                 state.validate()?;
-                let parent = self.state_path.parent().ok_or("invalid state path")?;
+                let parent = path.parent().ok_or("invalid state path")?;
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                 fs::write(
-                    &self.state_path,
+                    &path,
                     serde_json::to_vec(&state).map_err(|e| e.to_string())?,
                 )
                 .map_err(|e| e.to_string())?;
@@ -158,6 +175,29 @@ mod tests {
             backend.execute("get_window_state", Value::Null).unwrap(),
             Value::Null
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn account_windows_keep_separate_state() {
+        let dir = std::env::temp_dir().join(format!("lowcord-account-state-{}", std::process::id()));
+        let mut backend = Backend::new(dir.clone());
+        let main = json!({"x": 0, "y": 0, "width": 1280, "height": 800, "maximized": false});
+        let account = json!({"x": 40, "y": 40, "width": 900, "height": 700, "maximized": true});
+        backend.execute("save_window_state", main.clone()).unwrap();
+        let mut saved = account.clone();
+        saved["account"] = json!("account-2");
+        backend.execute("save_window_state", saved).unwrap();
+        assert_eq!(backend.execute("get_window_state", Value::Null).unwrap(), main);
+        assert_eq!(
+            backend.execute("get_window_state", json!({"account": "account-2"})).unwrap(),
+            account
+        );
+        for account in ["../x", "account-", "account-1/..", "main"] {
+            assert!(backend
+                .execute("get_window_state", json!({ "account": account }))
+                .is_err());
+        }
         fs::remove_dir_all(dir).unwrap();
     }
 
