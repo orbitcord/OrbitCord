@@ -154,10 +154,12 @@ function setupLowcordSettings() {
         if (!target) return;
         event.preventDefault();
         event.stopImmediatePropagation();
-        // The submenu closes when the pointer leaves it; keep Discord's own
-        // handler to switch this window afterwards.
-        const props = Object.entries(target.item).find(([key]) => key.startsWith("__reactProps$"))?.[1];
-        void chooseSwitch({ ...target, onClick: props?.onClick });
+        // The submenu closes when the pointer leaves it. Keep the menu item's
+        // own action (Discord's switch) to run afterwards; the DOM click
+        // handler needs a live React event and can't be replayed.
+        let fiber = Object.entries(target.item).find(([key]) => key.startsWith("__reactFiber$"))?.[1];
+        for (let depth = 0; fiber && depth < 8 && typeof fiber.memoizedProps?.action !== "function"; depth++) fiber = fiber.return;
+        void chooseSwitch({ ...target, action: fiber?.memoizedProps?.action });
     }
     window.addEventListener("click", interceptSwitch, true);
     window.addEventListener("keydown", interceptSwitch, true);
@@ -172,7 +174,7 @@ function setupLowcordSettings() {
         node.append(...children.filter(Boolean));
         return node;
     };
-    function chooseSwitch({ item, name, onClick }) {
+    function chooseSwitch({ item, name, action }) {
         if (document.querySelector(".lowcord-switch-backdrop")) return;
         const native = window.__LOWCORD_NATIVE__;
         const closeMenus = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true }));
@@ -180,9 +182,10 @@ function setupLowcordSettings() {
             close();
             switchingHere = true;
             try {
-                if (item.isConnected) item.click();
-                else onClick?.({ preventDefault() {}, stopPropagation() {}, currentTarget: item, target: item });
-            } finally { switchingHere = false; }
+                if (typeof action === "function") action();
+                else if (item.isConnected) item.click();
+            } catch (error) { console.error("[Lowcord] Switch account:", error); }
+            finally { switchingHere = false; }
         };
         const openWindow = () => {
             close();
