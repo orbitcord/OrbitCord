@@ -7,6 +7,7 @@ const { migrateProfile } = require('./profile.cjs');
 const { setupEmbedPlugins } = require('./embed-plugins.cjs');
 const { createSocialResolver } = require('./social-resolver.cjs');
 const { createSocialPosts, scheme: mediaScheme } = require('./social-posts.cjs');
+const { createRedgifs } = require('./redgifs.cjs');
 const { createUpdateController, latestRelease, macAsset, downloadMacInstaller } = require('./updates.cjs');
 const { createBackgroundSaver } = require('./background.cjs');
 
@@ -24,9 +25,9 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // Social card media is proxied through tokens minted in social-posts.cjs, so
 // Discord's CSP stays untouched and remote hosts never see Discord's origin.
 protocol.registerSchemesAsPrivileged([{ scheme: mediaScheme,
-    privileges: { standard: true, secure: true, bypassCSP: true, stream: true, supportFetchAPI: true } }]);
+    privileges: { standard: true, secure: true, bypassCSP: true, stream: true, supportFetchAPI: true, corsEnabled: true } }]);
 if (dev) app.commandLine.appendSwitch('remote-debugging-port', '9222');
-let mainWindow, tray, backend, socialPosts, socialResolver, autoUpdater, quitting = false, finished = false;
+let mainWindow, tray, backend, socialPosts, socialResolver, redgifs, autoUpdater, quitting = false, finished = false;
 let downloadedUpdate = null, updateDismissed = false, updateRestarting = false, updateError = null;
 // Every open Discord window by its webContents id. The main window uses the
 // default session; each extra account has a persistent partition of its own,
@@ -278,7 +279,8 @@ function configureSession(ses) {
     // Set the browser identity before creating WebContents: session changes
     // do not update an existing window's navigator.userAgent.
     ses.setUserAgent(ses.getUserAgent().replace(/\s(?:Electron|Lowcord|Datcord|OrbitCord)\/[\w.-]+/gi, ''));
-    ses.protocol.handle(mediaScheme, request => socialPosts.serve(request));
+    ses.protocol.handle(mediaScheme, request => new URL(request.url).hostname === 'redgifs'
+        ? redgifs.serve(request) : socialPosts.serve(request));
     // Discord delegates fullscreen to cross-origin video players through its
     // iframe policy. Chromium still requires that delegation and a user gesture;
     // requiring the player's URL to be discord.com makes its button do nothing.
@@ -346,6 +348,10 @@ async function createDiscordWindow(account) {
     });
     const contents = window.webContents;
     const id = contents.id;
+    contents.on('did-start-navigation', details => {
+        if (details.isMainFrame && !details.isInPlace) redgifs?.cancel(id);
+    });
+    contents.on('render-process-gone', () => redgifs?.cancel(id));
     const record = { account, window, badge: 0, stateTimer: undefined,
         embedPlugins: setupEmbedPlugins(contents),
         // LOWCORD_FAST_SLEEP counts sleep delays in seconds for manual testing.
@@ -423,6 +429,7 @@ async function createDiscordWindow(account) {
         else if (!main) void saveState(record).catch(console.error);
     });
     window.on('closed', () => {
+        redgifs?.cancel(id);
         clearTimeout(record.stateTimer);
         discordWindows.delete(id);
         if (window === mainWindow) mainWindow = null;
@@ -519,6 +526,23 @@ function registerIpc() {
         try { return await socialPosts.socialMedia(url, limit); }
         catch (error) { return { error: error.code ?? 'failed' }; }
     });
+    ipcMain.handle('lowcord:redgifs-search', async (event, query, page, options) => {
+        assertSender(event);
+        try { return await redgifs.search(event.sender.id, query, page, options); }
+        catch (error) { return { error: error.code ?? 'failed' }; }
+    });
+    ipcMain.handle('lowcord:redgifs-prepare', async (event, key, limit) => {
+        assertSender(event);
+        try { return await redgifs.prepare(event.sender.id, key, limit); }
+        catch (error) { return { error: error.code ?? 'failed' }; }
+    });
+    ipcMain.handle('lowcord:redgifs-cancel', (event, scope) => { assertSender(event); redgifs.cancel(event.sender.id, scope); });
+    ipcMain.handle('lowcord:redgifs-resolve', async (event, id) => {
+        assertSender(event);
+        try { return await redgifs.resolve(event.sender.id, id); }
+        catch (error) { return { error: error.code ?? 'failed' }; }
+    });
+    ipcMain.handle('lowcord:redgifs-release', (event, handle) => { assertSender(event); return redgifs.release(event.sender.id, handle); });
     // Chat screenshots. The page captures only its own window, one visible
     // screenful at a time; files are written only where the user picks.
     ipcMain.handle('lowcord:capture-region', async (event, rect) => {
@@ -606,6 +630,7 @@ async function start() {
         : join(__dirname, '..', '.lowcord', 'native', `lowcord-native${process.platform === 'win32' ? '.exe' : ''}`), userData);
     socialResolver = createSocialResolver();
     socialPosts = createSocialPosts();
+    redgifs = createRedgifs();
     if (testing && process.env.LOWCORD_TEST_UPDATER === '1') updates.initialize();
     registerIpc();
     Menu.setApplicationMenu(appMenu());
@@ -639,6 +664,7 @@ else {
         quitting = true;
         void saveAllStates().catch(console.error).finally(async () => {
             await socialPosts?.close().catch(console.error);
+            await redgifs?.close().catch(console.error);
             finished = true; backend?.close(); app.quit();
         });
     });

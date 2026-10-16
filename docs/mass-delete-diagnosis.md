@@ -1,0 +1,15 @@
+# Mass-delete diagnosis, 2026-10-16
+
+The old implementation only discovered messages through Discord search. `run()` moved its maximum message ID backwards after every page and finished on an empty search page. A message missing from the index never entered the deletion queue, even if it appeared in normal channel history. The code retried HTTP 202 indexing responses, but a successful HTTP 200 with incomplete results bypassed that handling.
+
+Reproduced in Chromium with the real injected extension and a REST fixture. Search omitted 60 newer own messages while history returned them among 120 newer messages. The old implementation left all 60 behind in DM, channel and server scopes. With every own message omitted from search, it returned `deleted: 0, failed: false` despite 62 deletable messages remaining.
+
+The fix keeps search for historical discovery, records the newest indexed ID per channel, then paginates normal history backwards to that boundary. When a channel has no indexed own messages, it walks history to the end. Server scope also discovers guild channels and active threads so channels without search hits are checked. Only the current user's messages enter the deletion queue. IDs already attempted through search are not attempted twice. Both discovery paths use an upper snowflake bound captured at job start to exclude messages sent while the job runs.
+
+History requests retry rate limits and transient failures. Unavailable histories produce an incomplete-check notice instead of an unqualified success. Stop is checked after each request and before deletion. Parallel work is awaited to completion even when one worker fails, so the status bar cannot disappear while another worker is still deleting.
+
+API reference: [Discord message history](https://github.com/discord/discord-api-docs/blob/main/developers/resources/message.mdx#get-channel-messages) supports `before` pagination and pages of up to 100 messages.
+
+Verification: the four new discovery regression cases failed before the fix. All ten mass-delete cases then passed, covering indexed and unindexed messages, more than one history page, empty search, server channels and active threads without search hits, author/scope filtering, duplicate prevention, skipped system messages, rate limits, stopping, messages sent after job start, and HTTP 403/500 history failures. The complete extensions suite passed all 30 tests. JavaScript syntax and diff whitespace checks also passed. No live-account deletion was used for verification.
+
+Risks: a server with long histories in channels without indexed own messages can require many history requests. Processing is bounded to four channels at a time and one page per channel. Archived threads absent from search and the active-thread listing remain undiscoverable through this fallback; archived threads present in search are still included. The fixtures reproduce incomplete search results; they do not establish the precise indexing state during the user's original incident.

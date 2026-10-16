@@ -1,5 +1,5 @@
 // Mass delete: finds every message the user sent in the open DM, channel or
-// whole server through Discord's own search, then deletes them one by one with
+// whole server through Discord's search and channel history, then deletes them with
 // Discord's REST client. Single deletes have no age limit, unlike bulk delete.
 // It paces itself below Discord's rate limits and keeps running while the user
 // moves around; one job at a time.
@@ -72,6 +72,77 @@
         }
     }
 
+    // History is authoritative for messages that haven't reached search yet.
+    // Use the same REST client and back off on rate limits, including global ones.
+    async function historyRequest(current, url, query) {
+        for (let attempt = 0; ; attempt++) {
+            await ready(current, { readyAt: 0 });
+            if (current.stopped) return null;
+            try {
+                const response = await window.Lowcord.RestAPI.get({ url, query, retries: 0 });
+                return response.body;
+            } catch (error) {
+                if (error?.status === 429) {
+                    if (bodyOf(error).global) current.pausedUntil = performance.now() + retryAfter(error);
+                    await wait(retryAfter(error));
+                    continue;
+                }
+                if (error?.status === 403 || error?.status === 404) {
+                    current.unchecked++;
+                    return null;
+                }
+                if (attempt < 3) { await wait(pacing.search * (attempt + 2)); continue; }
+                throw error;
+            }
+        }
+    }
+
+    // Don't finish a job while another channel still has requests in flight.
+    async function inParallel(queue, work) {
+        const results = await Promise.allSettled(Array.from({ length: Math.min(pacing.lanes, queue.length) }, work));
+        const failure = results.find(result => result.status === "rejected");
+        if (failure) throw failure.reason;
+    }
+
+    async function recentHistory(current, newest, seen) {
+        const channels = new Set([current.target.channelId, ...newest.keys()]);
+        if (current.scope === "server") {
+            const guild = current.target.guildId;
+            const listed = await historyRequest(current, `/guilds/${guild}/channels`);
+            const active = await historyRequest(current, `/guilds/${guild}/threads/active`);
+            if (current.stopped) return;
+            for (const channel of [...(listed ?? []), ...(active?.threads ?? [])]) {
+                // Categories, forums and media containers have no message history.
+                if ([0, 2, 5, 10, 11, 12, 13].includes(channel.type)) channels.add(channel.id);
+            }
+        }
+        current.remaining = 0;
+        const queue = [...channels];
+        await inParallel(queue, async () => {
+            while (queue.length && !current.stopped) {
+                const channelId = queue.shift(), boundary = newest.get(channelId);
+                let before = current.before;
+                while (!current.stopped) {
+                    const page = await historyRequest(current, `/channels/${channelId}/messages`, { limit: 100, before });
+                    if (page === null || current.stopped) break;
+                    if (!Array.isArray(page)) throw new Error("Unexpected channel history response");
+                    if (!page.length) break;
+                    const fresh = page.filter(message => message.author?.id === current.me
+                        && (!boundary || BigInt(message.id) > BigInt(boundary)) && !seen.has(message.id));
+                    for (const message of fresh) seen.add(message.id);
+                    await deleteAll(current, fresh);
+                    const oldest = page.reduce((id, message) => BigInt(message.id) < BigInt(id) ? message.id : id, page[0].id);
+                    // The indexed history is already handled. With no search hits,
+                    // walk to the end, including when search was entirely empty.
+                    if (page.length < 100 || (boundary && BigInt(oldest) <= BigInt(boundary))) break;
+                    if (before && BigInt(oldest) >= BigInt(before)) throw new Error("Channel history did not advance");
+                    before = oldest;
+                    await wait(pacing.search);
+                }
+            }
+        });
+    }
+
     function header(response, name) {
         const headers = response?.headers;
         const value = typeof headers?.get === "function" ? headers.get(name) : headers?.[name];
@@ -142,8 +213,8 @@
     }
 
     async function run(current) {
-        const seen = new Set();
-        let maxId, pending = searchPage(current);
+        const seen = new Set(), newest = new Map();
+        let maxId = current.before, pending = searchPage(current, maxId);
         while (!current.stopped) {
             const body = await pending;
             if (!body) break;
@@ -153,6 +224,9 @@
                 .filter(message => message?.author?.id === current.me && message.id)
                 .sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1));
             if (!page.length) break;
+            for (const message of page) {
+                if (!newest.has(message.channel_id)) newest.set(message.channel_id, message.id);
+            }
             const fresh = page.filter(message => !seen.has(message.id));
             // max_id moves past the oldest result, so a message search keeps
             // returning after it was deleted, or one that can't be, is passed.
@@ -168,10 +242,11 @@
                 byChannel.get(message.channel_id).push(message);
             }
             const queue = [...byChannel.values()];
-            await Promise.all(Array.from({ length: Math.min(pacing.lanes, queue.length) }, async () => {
+            await inParallel(queue, async () => {
                 while (queue.length && !current.stopped) await deleteAll(current, queue.shift());
-            }));
+            });
         }
+        if (!current.stopped) await recentHistory(current, newest, seen);
     }
 
     // ----- Status bar ---------------------------------------------------------
@@ -193,7 +268,9 @@
         const node = ui("div", { className: "lowcord-purge-bar", role: "status", "aria-label": "Deleting your messages" },
             ui("span", { className: "lowcord-toast-copy" }, title, detail), stopButton);
         const scopeLabel = scope === "server" ? target.guildName : target.channelName;
-        const current = job = { target, scope, me, scopeLabel, deleted: 0, skipped: 0, remaining: 0, lanes: new Map(), pausedUntil: 0, failures: 0,
+        const current = job = { target, scope, me, scopeLabel, deleted: 0, skipped: 0, remaining: 0, lanes: new Map(), pausedUntil: 0, failures: 0, unchecked: 0,
+            // A fixed upper bound keeps messages sent during the job out of it.
+            before: ((BigInt(Date.now()) - 1420070400000n) << 22n).toString(),
             stopped: false, indexing: false, bar: { node, title, detail } };
         document.body.append(node);
         render();
@@ -205,9 +282,10 @@
             const count = `${current.deleted.toLocaleString()} message${current.deleted === 1 ? "" : "s"}`;
             if (failure) toast(`Deleting stopped after ${count} because Discord didn’t respond. Try again later to continue.`, true);
             else if (current.stopped) toast(`Stopped after deleting ${count}.`);
+            else if (current.unchecked) toast(`Deleted ${count}. Some channel histories couldn’t be checked. Try again later to continue.`, true);
             else if (current.skipped) toast(`Deleted ${count}. ${current.skipped.toLocaleString()} couldn’t be deleted, such as system messages or archived threads.`);
             else toast(current.deleted ? `Deleted ${count}.` : `No messages of yours were found in ${scopeLabel}.`);
-            return { deleted: current.deleted, skipped: current.skipped, stopped: current.stopped, failed: Boolean(failure) };
+            return { deleted: current.deleted, skipped: current.skipped, stopped: current.stopped, failed: Boolean(failure), incomplete: current.unchecked > 0 };
         })();
         return current.promise;
     }

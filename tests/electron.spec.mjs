@@ -150,9 +150,13 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(browser.userAgent).not.toMatch(/(?:Electron|Lowcord|Datcord|OrbitCord)\//i);
         expect(browser.getUserMedia).toBe('function');
         expect(browser.peerConnection).toBe('function');
-        expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true, extensions: 18, fetchHooked: true });
+        expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true,
+            extensions: await page.evaluate(() => window.Lowcord.extensions.catalog.length), fetchHooked: true });
         expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
-            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'captureRegion', 'copyImage', 'saveImage', 'reportAccount', 'accounts', 'onAccountsChanged'] });
+            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'captureRegion', 'copyImage', 'saveImage', 'reportAccount', 'accounts', 'onAccountsChanged'] });
+        expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsSearch('fixture', -1))).toEqual({ error: 'invalid-search' });
+        expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsPrepare('not-a-token', 20_000_000))).toEqual({ error: 'expired' });
+        await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsCancel());
         // Card media loads like <img>/<video> (no CORS) from the privileged scheme;
         // an unhandled scheme would reject instead of answering.
         expect(await page.evaluate(() => fetch('lowcord-media://media/0123456789abcdef01234567', { mode: 'no-cors' }).then(r => r.type))).toBe('opaque');
@@ -180,6 +184,73 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         await page.evaluate(() => window.__LOWCORD_NATIVE__.setBadge(2));
         expect(await app.evaluate(({ app }) => app.getBadgeCount())).toBe(2);
         expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences().sandbox)).toBe(true);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('RedGIFs opaque preview proxy and prepared file cross the sandbox bridge in real Electron', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lowcord-redgifs-electron-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForFunction(() => window.earlyInjection);
+        await page.waitForLoadState('load');
+        await app.evaluate(async ({ BrowserWindow, ipcMain }, root) => {
+            const { readFile } = process.mainModule.require('node:fs/promises');
+            const { createRedgifs } = process.mainModule.require(`${root}/electron/redgifs.cjs`);
+            const bytes = await readFile(`${root}/tests/fixtures/media/sample.mp4`);
+            const service = global.redgifsTestService = createRedgifs({ fetchPage: async url => {
+                if (url.endsWith('/auth/temporary')) return new Response(JSON.stringify({ token: 'fixture' }));
+                if (url.includes('/niches/search?')) return new Response(JSON.stringify({ pages: 1, niches: [
+                    { id: 'neutral-animation', name: 'Neutral animation', gifs: 12, subscribers: 34 },
+                ] }));
+                if (url.includes('/gifs/search?') || url.includes('/niches/neutral-animation/gifs?')) return new Response(JSON.stringify({ pages: 1, gifs: [
+                    { id: 'NeutralFixture', type: 1, urls: { hd: 'https://media.redgifs.com/NeutralFixture.mp4' } },
+                ] }));
+                return new Response(bytes, { headers: { 'content-type': 'video/mp4', 'content-length': String(bytes.length) } });
+            } });
+            // Replace handlers only in this isolated test process. Production
+            // trusted-sender checks are exercised by the decoding test above.
+            for (const method of ['search', 'prepare', 'cancel', 'resolve', 'release']) {
+                const name = `lowcord:redgifs-${method}`;
+                ipcMain.removeHandler(name);
+                ipcMain.handle(name, (event, ...args) => service[method](event.sender.id, ...args));
+            }
+            const ses = BrowserWindow.getAllWindows()[0].webContents.session;
+            ses.protocol.unhandle('lowcord-media');
+            ses.protocol.handle('lowcord-media', async request => {
+                const response = await service.serve(request);
+                global.redgifsTestTrace = { method: request.method, range: request.headers.get('range'), status: response.status,
+                    headers: Object.fromEntries(response.headers) };
+                return response;
+            });
+        }, resolve('.'));
+        // Replacing a protocol in a fixture requires a fresh document because
+        // Chromium caches its loader factory at navigation time.
+        await page.reload();
+        const result = await page.evaluate(async () => {
+            const { items } = await __LOWCORD_NATIVE__.redgifsSearch('neutral', 1);
+            const prepared = await __LOWCORD_NATIVE__.redgifsPrepare(items[0].key, 20_000_000);
+            const niches = await __LOWCORD_NATIVE__.redgifsSearch('animation', 1, { mode: 'niches' });
+            const feed = await __LOWCORD_NATIVE__.redgifsSearch('', 1, { mode: 'videos', nicheId: niches.niches[0].id });
+            const preparedData = new Uint8Array(await (await fetch(prepared.url, { credentials: 'omit' })).arrayBuffer());
+            await __LOWCORD_NATIVE__.redgifsRelease(prepared.handle);
+            const player = document.createElement('video');
+            player.id = 'redgifs-proxy-test'; player.src = items[0].preview; player.muted = true;
+            document.body.append(player);
+            let playbackError;
+            try { await player.play(); } catch (error) { playbackError = error.message; }
+            return { type: prepared.type, name: prepared.name, bytes: preparedData.byteLength,
+                signature: String.fromCharCode(...preparedData.slice(4, 8)), preview: items[0].preview, playbackError,
+                nicheCount: niches.niches.length, nicheFeedCount: feed.items.length };
+        });
+        expect({ error: result.playbackError, protocol: await app.evaluate(() => global.redgifsTestTrace) }).toEqual({ error: undefined, protocol: expect.objectContaining({ status: 200 }) });
+        expect(result).toMatchObject({ type: 'video/mp4', name: 'redgifs-NeutralFixture.mp4', signature: 'ftyp', nicheCount: 1, nicheFeedCount: 1 });
+        expect(result.bytes).toBeGreaterThan(1000);
+        expect(result.preview).toMatch(/^lowcord-media:\/\/redgifs\//);
+        await expect.poll(() => page.$eval('#redgifs-proxy-test', video => video.currentTime)).toBeGreaterThan(0.1);
+        expect(await page.$eval('#redgifs-proxy-test', video => video.error)).toBeNull();
+        await page.evaluate(() => __LOWCORD_NATIVE__.redgifsCancel());
+        await app.evaluate(() => global.redgifsTestService.close());
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -499,7 +570,7 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
         await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
         expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
-            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'captureRegion', 'copyImage', 'saveImage', 'reportAccount', 'accounts', 'onAccountsChanged']);
+            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'captureRegion', 'copyImage', 'saveImage', 'reportAccount', 'accounts', 'onAccountsChanged']);
         expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
     } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
 });

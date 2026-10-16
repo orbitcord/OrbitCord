@@ -488,7 +488,7 @@ async function fakeMessages(page, { guild }) {
         const messages = [];
         for (let i = 1; i <= 70; i++) messages.push({ id: String(10_000 + i), channel_id: i % 7 === 0 && guild ? "501" : channelId,
             author: { id: i % 10 === 0 ? "2" : me }, type: i === 33 ? 3 : 0 });
-        window.purge = { searches: [], deletes: [], messages, rateLimited: false, indexed: false };
+        window.purge = { searches: [], history: [], deletes: [], messages, rateLimited: false, indexed: false };
         const stores = {
             UserStore: { getCurrentUser: () => ({ id: me }), getUser: () => ({ globalName: "Sam" }) },
             SelectedChannelStore: { getChannelId: () => channelId },
@@ -500,10 +500,20 @@ async function fakeMessages(page, { guild }) {
         Object.assign(Lowcord.massDelete.pacing, { search: 1, indexing: 1 });
         Object.defineProperty(Lowcord, "RestAPI", { configurable: true, value: {
             async get({ url, query }) {
+                if (url === "/guilds/900/channels") return { body: [{ id: "500", type: 0 }, { id: "501", type: 0 }, { id: "502", type: 0 }] };
+                if (url === "/guilds/900/threads/active") return { body: { threads: [{ id: "503", type: 11 }] } };
+                if (!url.endsWith("/search")) {
+                    purge.history.push({ url, query: { ...query } });
+                    const channelId = url.split("/")[2];
+                    const messages = purge.messages.filter(m => m.channel_id === channelId
+                        && (!query.before || BigInt(m.id) < BigInt(query.before)))
+                        .sort((a, b) => Number(b.id) - Number(a.id));
+                    return { body: messages.slice(0, query.limit) };
+                }
                 purge.searches.push({ url, query: { ...query } });
                 // Discord answers 202 while it indexes a channel for the first time.
                 if (!purge.indexed) { purge.indexed = true; return { status: 202, body: { retry_after: 0 } }; }
-                const hits = purge.messages.filter(m => m.author.id === query.author_id
+                const hits = purge.messages.filter(m => !m.unindexed && m.author.id === query.author_id
                     && (!query.channel_id || m.channel_id === query.channel_id)
                     && (!query.max_id || BigInt(m.id) <= BigInt(query.max_id)))
                     .sort((a, b) => Number(b.id) - Number(a.id));
@@ -537,10 +547,98 @@ test("mass delete removes every own message in a DM, past rate limits and indexi
     await expect(page.locator(".lowcord-purge-bar")).toHaveCount(0);
     const { searches, deletes } = await page.evaluate(() => window.purge);
     expect(searches[0]).toEqual({ url: "/channels/500/messages/search",
-        query: { author_id: "1", sort_by: "timestamp", sort_order: "desc", include_nsfw: true } });
+        query: { author_id: "1", sort_by: "timestamp", sort_order: "desc", include_nsfw: true, max_id: expect.stringMatching(/^\d+$/) } });
     expect(new Set(deletes).size).toBe(62);
     expect(deletes.every(url => url.startsWith("/channels/500/messages/"))).toBe(true);
 });
+
+for (const scope of ["dm", "channel", "server"]) {
+    test(`mass delete includes unindexed recent messages in ${scope} history`, async ({ page }) => {
+        await fakeMessages(page, { guild: scope !== "dm" });
+        const result = await page.evaluate(async scope => {
+            // More than one history page, including other people's messages.
+            for (let i = 1; i <= 120; i++) purge.messages.push({ id: String(20_000 + i), channel_id: "500",
+                author: { id: i % 2 ? "1" : "2" }, type: 0, unindexed: true });
+            // A channel and active thread with no indexed messages at all.
+            for (const channel_id of ["502", "503"]) purge.messages.push({ id: String(30_000 + Number(channel_id)),
+                channel_id, author: { id: "1" }, type: 0, unindexed: true });
+            const target = { channelId: "500", guildId: scope === "dm" ? null : "900", channelName: "general", guildName: "Test server" };
+            return Lowcord.massDelete.start(target, scope === "server" ? "server" : "channel");
+        }, scope);
+        const state = await page.evaluate(() => purge);
+        const expected = state.messages.filter(m => m.author.id === "1" && m.type !== 3
+            && (scope === "server" || m.channel_id === "500")).map(m => `/channels/${m.channel_id}/messages/${m.id}`);
+        expect([...state.deletes].sort()).toEqual(expected.sort());
+        expect(result.failed).toBe(false);
+        expect(state.history.filter(request => request.url === "/channels/500/messages").length).toBeGreaterThan(1);
+    });
+}
+
+test("mass delete finds recent messages when search is empty", async ({ page }) => {
+    await fakeMessages(page, { guild: false });
+    const result = await page.evaluate(async () => {
+        purge.messages.forEach(m => m.unindexed = true);
+        return Lowcord.massDelete.start({ channelId: "500", guildId: null, channelName: "Sam" }, "channel");
+    });
+    expect(result).toMatchObject({ deleted: 62, skipped: 1, failed: false });
+});
+
+test("mass delete history retries rate limits and keeps messages sent after it starts", async ({ page }) => {
+    await fakeMessages(page, { guild: false });
+    const result = await page.evaluate(async () => {
+        purge.messages.forEach(m => m.unindexed = true);
+        const get = Lowcord.RestAPI.get;
+        let attempts = 0;
+        Lowcord.RestAPI.get = async request => {
+            if (request.url === "/channels/500/messages" && ++attempts === 1) {
+                // Represents a message sent after the purge's fixed upper bound.
+                purge.messages.push({ id: "9999999999999999999", channel_id: "500", author: { id: "1" }, type: 0 });
+                throw { status: 429, body: { retry_after: 0.001, global: true } };
+            }
+            return get(request);
+        };
+        const result = await Lowcord.massDelete.start({ channelId: "500", guildId: null, channelName: "Sam" }, "channel");
+        return { result, attempts, deletes: purge.deletes };
+    });
+    expect(result.result).toMatchObject({ deleted: 62, skipped: 1, failed: false });
+    expect(result.attempts).toBe(2);
+    expect(result.deletes.some(url => url.endsWith("/9999999999999999999"))).toBe(false);
+});
+
+test("mass delete can stop while channel history is loading", async ({ page }) => {
+    await fakeMessages(page, { guild: false });
+    await page.evaluate(() => {
+        purge.messages.forEach(m => m.unindexed = true);
+        const get = Lowcord.RestAPI.get;
+        Lowcord.RestAPI.get = async request => {
+            if (request.url === "/channels/500/messages") {
+                Lowcord.massDelete.stop();
+                await new Promise(resolve => setTimeout(resolve, 20));
+            }
+            return get(request);
+        };
+    });
+    const result = await page.evaluate(() => Lowcord.massDelete.start({ channelId: "500", guildId: null, channelName: "Sam" }, "channel"));
+    expect(result).toMatchObject({ deleted: 0, stopped: true, failed: false });
+    expect(await page.evaluate(() => purge.deletes)).toEqual([]);
+});
+
+for (const status of [403, 500]) {
+    test(`mass delete reports an incomplete history check on HTTP ${status}`, async ({ page }) => {
+        await fakeMessages(page, { guild: false });
+        const result = await page.evaluate(async status => {
+            const get = Lowcord.RestAPI.get;
+            Lowcord.RestAPI.get = async request => {
+                if (request.url === "/channels/500/messages") throw { status };
+                return get(request);
+            };
+            return Lowcord.massDelete.start({ channelId: "500", guildId: null, channelName: "Sam" }, "channel");
+        }, status);
+        expect(result.deleted).toBe(62);
+        expect(result.failed || result.incomplete).toBe(true);
+        await expect(page.locator(".lowcord-toast")).toContainText("Try again later to continue");
+    });
+}
 
 test("mass delete in a server picks the channel or the whole server and can stop", async ({ page }) => {
     await fakeMessages(page, { guild: true });

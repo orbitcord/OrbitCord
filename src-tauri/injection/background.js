@@ -35,7 +35,7 @@
     };
     window.__lowcordBusy = () => {
         prune();
-        return calls.size > 0 || uploads > 0
+        return calls.size > 0 || uploads > 0 || window.Lowcord?.redgifs?.busy?.() === true
             || [...document.querySelectorAll("video, audio")].some(media => !media.paused && !media.ended);
     };
 })();
