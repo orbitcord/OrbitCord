@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { mkdtemp, readFile, readdir, rm, writeFile, stat } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
+const { runInNewContext } = require('node:vm');
 const { createRedgifs, MAX_BYTES } = require('../electron/redgifs.cjs');
 const { compressVideo } = require('../electron/video-compress.cjs');
 const sample = readFile(join(__dirname, 'fixtures/media/sample.mp4'));
@@ -12,13 +13,25 @@ const gif = { id: 'SampleVideo', type: 1, userName: 'fixture', urls: {
 } };
 const json = data => new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } });
 
-async function fixture(t, { media, gifs = [gif], compress, search, niches, nicheVideos } = {}) {
+test('malformed saved entries cannot prevent the picker from initializing', async () => {
+    const source = await readFile(join(__dirname, '../src-tauri/injection/redgifs.js'), 'utf8');
+    const window = { Lowcord: { extensions: { ui() {}, addComposerAction() {} }, storage: { getItem: () => JSON.stringify({
+        favorites: [null, {}, { id: 123 }, { id: 'ValidVideo', author: 'fixture' }],
+        niches: [null, {}, { id: 'valid-niche', name: 'Fixture' }],
+    }) } }, addEventListener() {} };
+    runInNewContext(source, { window });
+    assert.equal(typeof window.Lowcord.redgifs.open, 'function');
+});
+
+async function fixture(t, { media, gifs = [gif], compress, search, niches, nicheVideos, creators = [] } = {}) {
     const root = await mkdtemp(join(tmpdir(), 'redgifs-test-'));
     const calls = [];
     const service = createRedgifs({ tempRoot: root, compress, fetchPage: async (value, options) => {
         const url = new URL(value); calls.push({ url, options });
         if (url.pathname === '/v2/auth/temporary') return json({ token: 'fixture-token' });
-        if (url.pathname === '/v2/gifs/search') return search ? search(url, options) : json({ gifs, pages: 3 });
+        if (url.pathname === '/v2/gifs/search' || url.pathname === '/v2/feeds/trending/popular') return search ? search(url, options) : json({ gifs, pages: 3 });
+        if (url.pathname === '/v2/creators/search') return json({ items: creators, pages: 3 });
+        if (/^\/v2\/users\/[^/]+\/search$/.test(url.pathname)) return json({ gifs, pages: 2 });
         if (/^\/v2\/gifs\/[a-z0-9]+$/i.test(url.pathname)) return json({ gif: gifs[0] });
         if (url.pathname === '/v2/niches/search') return json({ niches: niches ?? [], pages: 2 });
         if (/^\/v2\/niches\/[^/]+\/gifs$/.test(url.pathname)) return json({ gifs: nicheVideos ?? gifs, pages: 3 });
@@ -42,6 +55,42 @@ test('search encodes text, paginates, reuses temporary auth and exposes only opa
     assert.equal(calls[1].options.headers.authorization, 'Bearer fixture-token');
     assert.equal(calls[1].options.credentials, 'omit');
     assert.equal(calls[1].options.redirect, 'error');
+});
+
+test('Trending, Explore, creator discovery and creator videos match the site routes', async t => {
+    const { service, calls } = await fixture(t, { creators: [{ username: 'neutral_creator', name: 'Neutral Creator',
+        publishedGifs: 12, followers: 34, verified: true, profileImageUrl: 'https://unsafe.test/image' }, null, { username: '../bad' }] });
+    await service.search(1);
+    assert.equal(calls.at(-1).url.pathname, '/v2/feeds/trending/popular');
+    assert.equal(calls.at(-1).url.searchParams.get('page'), '1');
+    await service.search(1, '', 2);
+    assert.equal(calls.at(-1).url.searchParams.get('page'), '2');
+    await service.search(1, '', 1, { mode: 'explore' });
+    assert.equal(calls.at(-1).url.pathname, '/v2/gifs/search');
+    assert.equal(calls.at(-1).url.searchParams.get('verified'), 'y');
+    assert.equal(calls.at(-1).url.searchParams.get('type'), 'g');
+    const result = await service.search(1, 'neutral', 2, { mode: 'creators' });
+    assert.deepEqual(result.creators, [{ id: 'neutral_creator', name: 'Neutral Creator', videos: 12, followers: 34, verified: true }]);
+    assert.equal(result.more, true);
+    assert.equal(calls.at(-1).url.pathname, '/v2/creators/search');
+    assert.equal(calls.at(-1).url.searchParams.get('query'), 'neutral');
+    assert.equal(calls.at(-1).url.searchParams.get('order'), 'best_match');
+    await service.search(1, '', 1, { mode: 'creators' });
+    assert.equal(calls.at(-1).url.searchParams.get('order'), 'trending');
+    assert.equal((await service.search(1, '', 2, { mode: 'creators', creator: 'neutral_creator' })).items.length, 1);
+    assert.equal(calls.at(-1).url.pathname, '/v2/users/neutral_creator/search');
+    assert.equal(calls.at(-1).url.searchParams.get('order'), 'latest');
+    assert.equal(calls.at(-1).url.searchParams.get('type'), 'g');
+    for (const options of [{ mode: 'creators', creator: '../bad' }, { mode: 'explore', creator: 'valid' }, { mode: 'creators', nicheId: 'valid' }]) {
+        await assert.rejects(service.search(1, '', 1, options), { code: 'invalid-search' });
+    }
+});
+
+test('filtered and malformed entries do not truncate pagination or crash resolution', async t => {
+    const { service } = await fixture(t, { gifs: [null, ...Array.from({ length: 23 }, () => ({ ...gif, type: 2 }))],
+        search: () => json({ gifs: [null, ...Array.from({ length: 23 }, () => ({ ...gif, type: 2 }))] }) });
+    assert.deepEqual(await service.search(1), { items: [], more: true });
+    await assert.rejects(service.resolve(1, 'missing'), { code: 'expired' });
 });
 
 test('topic search sends tags, removes a leading hash, and does not silently return an unfiltered feed', async t => {

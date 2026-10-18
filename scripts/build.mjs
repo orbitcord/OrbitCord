@@ -60,6 +60,10 @@ export async function buildPreload({ sourceRoot = root, output = join(sourceRoot
     const socialLinks = await readFile(join(sourceRoot, 'electron', 'social-links.cjs'), 'utf8');
     const musicLinks = await readFile(join(sourceRoot, 'electron', 'music-links.cjs'), 'utf8');
     const [redgifs, redgifsCSS] = await Promise.all(['redgifs.js', 'redgifs.css'].map(read));
+    const [reddit, redditCSS] = await Promise.all(['reddit.js', 'reddit.css'].map(read));
+    const [pictureInPicture, pictureInPictureCSS] = await Promise.all(['picture-in-picture.js', 'picture-in-picture.css'].map(read));
+    const [videoCompression, videoCompressionCSS] = await Promise.all(['video-compression.js', 'video-compression.css'].map(read));
+    const [mediaSources,mediaSourcesCSS]=await Promise.all(['media-sources.js','media-sources.css'].map(read));
     const contents = `const { contextBridge, ipcRenderer, webFrame } = require('electron');
 // The sleep page (a data: URL) gets no bridge or Discord hooks.
 if (process.isMainFrame && location.protocol !== 'data:') {
@@ -91,9 +95,18 @@ if (process.isMainFrame && location.protocol !== 'data:') {
         redgifsCancel: scope => ipcRenderer.invoke('lowcord:redgifs-cancel', scope),
         redgifsResolve: id => ipcRenderer.invoke('lowcord:redgifs-resolve', id),
         redgifsRelease: handle => ipcRenderer.invoke('lowcord:redgifs-release', handle),
+        reddit: (action, ...args) => ipcRenderer.invoke('lowcord:reddit', action, ...args),
+        videoCompression: (action, ...args) => ipcRenderer.invoke('lowcord:video-compression', action, ...args),
+        mediaSources: (action, ...args) => ipcRenderer.invoke('lowcord:media-sources', action, ...args),
+        onMediaSource: callback => {
+            const listener = (_event, value) => callback(value);
+            ipcRenderer.on('lowcord:media-source', listener);
+            return () => ipcRenderer.removeListener('lowcord:media-source', listener);
+        },
         captureRegion: rect => ipcRenderer.invoke('lowcord:capture-region', rect),
         copyImage: bytes => ipcRenderer.invoke('lowcord:copy-image', bytes),
         saveImage: (bytes, name) => ipcRenderer.invoke('lowcord:save-image', bytes, name),
+        downloadMedia: url => ipcRenderer.invoke('lowcord:download-media', url),
         reportAccount: name => ipcRenderer.invoke('lowcord:account', name),
         accounts: (action, id) => ipcRenderer.invoke('lowcord:accounts', action, id),
         onAccountsChanged: callback => {
@@ -106,13 +119,32 @@ if (process.isMainFrame && location.protocol !== 'data:') {
         if (window.self !== window.top || window.__LOWCORD_INIT__) return;
         window.__LOWCORD_INIT__ = true;
         // The theme is applied first, before Discord paints anything.
-        ${boot}\n${shim}\n${discord}\n${themes}\nsetupLowcordThemes();\n${socialLinks}\n${musicLinks}\n${extensions}\n${chatCapture}\n${massDelete}\n${mediaGallery}\n${dmQuickReply}\n${background}\n${gif}\n${musicEmbeds}\n${socialEmbeds}\n${appearance}\n
+        ${boot}\n${shim}\n${discord}\n${themes}\nsetupLowcordThemes();\n${socialLinks}\n${musicLinks}\n${videoCompression}\n${extensions}\n${chatCapture}\n${massDelete}\n${mediaGallery}\n${dmQuickReply}\n${background}\n${gif}\n${musicEmbeds}\n${socialEmbeds}\n${appearance}\n
         setupLowcordChatAppearance();
+        const compressionStyle = document.createElement('style');
+        compressionStyle.textContent = ${JSON.stringify(videoCompressionCSS)};
+        if (document.documentElement) document.documentElement.append(compressionStyle);
+        else document.addEventListener('DOMContentLoaded', () => document.documentElement.append(compressionStyle), { once: true });
         const redgifsStyle = document.createElement('style');
         redgifsStyle.textContent = ${JSON.stringify(redgifsCSS)};
         if (document.documentElement) document.documentElement.append(redgifsStyle);
         else document.addEventListener('DOMContentLoaded', () => document.documentElement.append(redgifsStyle), { once: true });
         ${redgifs}
+        const redditStyle = document.createElement('style');
+        redditStyle.textContent = ${JSON.stringify(redditCSS)};
+        if (document.documentElement) document.documentElement.append(redditStyle);
+        else document.addEventListener('DOMContentLoaded', () => document.documentElement.append(redditStyle), { once: true });
+        ${reddit}
+        const sourcesStyle=document.createElement('style');
+        sourcesStyle.textContent=${JSON.stringify(mediaSourcesCSS)};
+        if(document.documentElement)document.documentElement.append(sourcesStyle);
+        else document.addEventListener('DOMContentLoaded',()=>document.documentElement.append(sourcesStyle),{once:true});
+        ${mediaSources}
+        const pipStyle = document.createElement('style');
+        pipStyle.textContent = ${JSON.stringify(pictureInPictureCSS)};
+        if (document.documentElement) document.documentElement.append(pipStyle);
+        else document.addEventListener('DOMContentLoaded', () => document.documentElement.append(pipStyle), { once: true });
+        ${pictureInPicture}
         ${settings}\nsetupLowcordSettings();
         ${release ? '' : 'window.__LOWCORD_REPORT__();'}
     }, args: [${JSON.stringify(themesCSS)}, ${JSON.stringify(appearanceCSS)}, ${JSON.stringify(uiCSS)}] });

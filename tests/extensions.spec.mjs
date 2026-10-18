@@ -752,6 +752,15 @@ test("media gallery shows a DM's photos and videos by month and jumps to a messa
     await expect(menu).toHaveCount(0);
     await expect(pane).toBeVisible();
 
+    await page.evaluate(() => {
+        window.galleryDownloads = [];
+        window.__LOWCORD_NATIVE__ = { downloadMedia: async url => galleryDownloads.push(url) };
+    });
+    await pane.getByRole('button', { name: /^Video from Ada/ }).first().click({ button: 'right' });
+    await menu.getByRole('menuitem', { name: 'Download video…', exact: true }).click();
+    expect(await page.evaluate(() => galleryDownloads)).toEqual(['https://media.discordapp.net/attachments/1/a20025/x?ex=1&hm=2']);
+    await expect(menu).toHaveCount(0);
+
     // Only the user's own media can be deleted; the button shows on hover.
     await expect(pane.locator(".lowcord-media-delete")).toHaveCount(4);
     const own = pane.locator('.lowcord-media-cell[data-message="20028"]');

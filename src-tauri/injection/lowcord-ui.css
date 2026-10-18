@@ -1,5 +1,14 @@
 /* Lowcord's own dialogs, toasts and the message bar waveform. Colors come
    from Discord's theme variables so light and dark themes both work. */
+/* These menu layers initially measure space below their trigger. Using that
+   height cap collapses the account and message menus near the window bottom.
+   Let Discord shift the full menu upward, retaining a cap for short windows. */
+#switch-accounts-submenu,
+#message-actions[role="menu"],
+#message[role="menu"] {
+    max-height: calc(100dvh - var(--custom-menu-viewport-padding, 48px)) !important;
+}
+
 /* Discord's web client advertises its desktop app in the server rail.
    Hide the whole item, including its spacing and hover target. */
 [data-list-id="guildsnav"] [class*="downloadApp_"],
@@ -816,7 +825,8 @@
 .lowcord-dm-bubble {
     box-sizing: border-box; max-width: 80%; margin: 0; padding: 7px 12px; border: 0; border-radius: var(--lowcord-radius);
     font: inherit; font-size: 14px; line-height: 18px; text-align: start; white-space: pre-wrap; overflow-wrap: anywhere;
-    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden;
+    /* Long messages show in full; the message list scrolls. */
+    display: block; overflow: visible;
     background: var(--lowcord-incoming-color, var(--background-base-lower, #3a3a3c)); color: var(--lowcord-incoming-text, var(--text-normal, #fff));
     cursor: pointer; transition: filter 120ms;
 }

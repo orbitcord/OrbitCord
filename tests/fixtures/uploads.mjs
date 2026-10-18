@@ -2,8 +2,8 @@ window.prepared=[];
 window.receipts=[];
 let controller;
 // Discord's native prepare order: File array, compression metadata, then
-// draft/upload objects. Lowcord ships no upload interception, so the fixture
-// exercises that order directly with the caller's original File bytes.
+// draft/upload objects. Preparation must see the final File, so its native
+// metadata describes the bytes that actually reach Discord's uploader.
 async function prepare(files){
     const inputs=Array.from(files);
     const metadata=inputs.map(file=>({originalContentType:file.type,preCompressionSize:file.size}));
@@ -27,6 +27,7 @@ async function add(files) {
     }
     document.querySelector('#state').textContent="Ready";
 }
+window.fixtureAdd = add;
 document.querySelector('#files').onchange=event=>add(event.target.files);
 document.querySelector('#drop').ondragover=event=>event.preventDefault();
 document.querySelector('#drop').ondrop=event=>{event.preventDefault();void add(event.dataTransfer.files);};

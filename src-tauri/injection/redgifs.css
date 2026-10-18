@@ -19,6 +19,22 @@
     color-scheme: inherit;
 }
 .lowcord-redgifs header { display: flex; align-items: center; gap: 6px; flex-shrink: 0; min-width: 0; }
+.lowcord-redgifs-titlebar { cursor: grab; touch-action: none; user-select: none; }
+.lowcord-redgifs-titlebar h2 { flex: 1; }
+.lowcord-redgifs-body { display: flex; flex-direction: column; flex: 1; gap: 4px; min-width: 0; min-height: 0; }
+.lowcord-redgifs .lowcord-redgifs-drag { width: 18px; cursor: grab; }
+.lowcord-redgifs[data-gesture="move"] .lowcord-redgifs-titlebar,
+.lowcord-redgifs[data-gesture="move"] .lowcord-redgifs-drag { cursor: grabbing; }
+.lowcord-redgifs[data-gesture] { user-select: none; }
+.lowcord-redgifs[data-gesture] .lowcord-redgifs-results { pointer-events: none; }
+.lowcord-redgifs-resize {
+    position: absolute; display: grid; place-items: end; right: 2px; bottom: 2px; width: 20px; height: 20px;
+    padding: 1px; border: 0; border-radius: 4px; background: transparent; color: var(--text-muted, #b5b5c0);
+    cursor: nwse-resize; touch-action: none;
+}
+.lowcord-redgifs-resize:hover { color: var(--text-normal, #eee); }
+.lowcord-redgifs-resize svg { width: 16px; height: 16px; pointer-events: none; }
+.lowcord-redgifs-reset { display: block; margin-top: 8px !important; padding: 0; border: 0; background: transparent; color: var(--text-link, #82b7ff); font: inherit; cursor: pointer; }
 .lowcord-redgifs h2 { flex-shrink: 0; margin: 0 2px 0 0; font: inherit; font-size: 14px; font-weight: 750; letter-spacing: -.4px; }
 .lowcord-redgifs h2 span { color: var(--text-danger, #fa7287); }
 .lowcord-redgifs button { box-sizing: border-box; min-height: 0; margin: 0; }
@@ -30,7 +46,7 @@
 .lowcord-redgifs-icon svg { display: block; width: 14px; height: 14px; }
 .lowcord-redgifs-icon:hover { background: var(--background-modifier-hover, #ffffff0c); color: var(--text-normal, #eee); }
 .lowcord-redgifs-search {
-    display: flex; align-items: center; flex: 1; min-width: 0; gap: 4px; height: 30px; padding: 0 3px 0 9px; box-sizing: border-box;
+    display: flex; align-items: center; flex-shrink: 0; min-width: 0; gap: 4px; height: 30px; padding: 0 3px 0 9px; box-sizing: border-box;
     border: 1px solid var(--border-subtle, #ffffff18); border-radius: 7px; background: var(--input-background, #151518);
 }
 .lowcord-redgifs-search > svg { color: var(--text-muted, #b5b5c0); flex-shrink: 0; }
@@ -47,7 +63,7 @@
 .lowcord-redgifs :is(button, input):focus-visible { outline: 2px solid var(--text-link, #82b7ff); outline-offset: 3px; }
 .lowcord-redgifs-search input:focus-visible { outline: none; }
 .lowcord-redgifs button:disabled { opacity: .5; cursor: default; }
-.lowcord-redgifs-tabs { display: flex; flex-shrink: 0; gap: 16px; border-bottom: 1px solid var(--border-subtle, #ffffff18); }
+.lowcord-redgifs-tabs { display: flex; flex-shrink: 0; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--border-subtle, #ffffff18); }
 .lowcord-redgifs-tab {
     position: relative; padding: 2px 0 6px; border: 0; background: transparent;
     color: var(--text-muted, #b5b5c0); font: inherit; font-weight: 600; cursor: pointer;
@@ -59,6 +75,23 @@
 .lowcord-redgifs-back { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; width: fit-content; padding: 0; border: 0; background: transparent; color: var(--text-link, #82b7ff); font: inherit; font-size: 12px; cursor: pointer; }
 .lowcord-redgifs-results { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--background-modifier-selected, #ffffff20) transparent; }
 .lowcord-redgifs-grid { display: block; }
+.lowcord-redgifs-creators { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 8px; align-items: start; }
+.lowcord-redgifs-creators > .lowcord-redgifs-spacer { grid-column: 1 / -1; }
+.lowcord-redgifs-creators > .lowcord-redgifs-card { min-width: 0; }
+.lowcord-redgifs-creator {
+    display: flex; align-items: center; gap: 7px; width: 100%; height: 100%; min-width: 0; padding: 8px;
+    border: 1px solid var(--border-subtle, #ffffff18); border-radius: 9px;
+    background: var(--background-secondary, #303038); color: inherit; text-align: left; font: inherit; cursor: pointer;
+}
+.lowcord-redgifs-creator:hover { background: var(--background-modifier-hover, #ffffff0c); border-color: var(--text-link, #82b7ff); }
+.lowcord-redgifs-monogram { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; color: #fff; font-size: 11px; font-weight: 700; }
+.lowcord-redgifs-creator-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
+.lowcord-redgifs-creator-name { display: flex; align-items: center; gap: 3px; min-width: 0; }
+.lowcord-redgifs-creator-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
+.lowcord-redgifs-verified { display: flex; flex-shrink: 0; color: var(--text-link, #82b7ff); }
+.lowcord-redgifs-creator-stats { display: flex; flex-direction: column; color: var(--text-muted, #b5b5c0); font-size: 11px; line-height: 14px; }
+.lowcord-redgifs-creator-stats > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lowcord-redgifs-creator > svg { flex-shrink: 0; transform: rotate(180deg); color: var(--text-muted, #b5b5c0); }
 .lowcord-redgifs-thumb {
     position: relative; display: block; width: 100%; min-width: 0; aspect-ratio: var(--lowcord-redgifs-ratio, 9 / 16);
     max-height: 420px; overflow: hidden; padding: 0;
@@ -119,12 +152,24 @@
 .lowcord-redgifs-niche-card .lowcord-redgifs-star[aria-pressed="true"] { color: var(--text-link, #82b7ff); }
 .lowcord-redgifs-star:hover { background: #000c; }
 .lowcord-redgifs-niche-card .lowcord-redgifs-star:hover { background: var(--background-modifier-hover, #ffffff0c); }
+.lowcord-redgifs-favorites { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 8px; align-items: start; }
+.lowcord-redgifs-favorites > .lowcord-redgifs-spacer { grid-column: 1 / -1; }
+.lowcord-redgifs-favorites > .lowcord-redgifs-card { min-width: 0; margin-bottom: 6px; }
+.lowcord-redgifs-favorites .lowcord-redgifs-card > .lowcord-redgifs-thumb { height: calc(100% - 18px); border-radius: 7px; }
+.lowcord-redgifs-favorites .lowcord-redgifs-thumb img { object-fit: cover; }
+.lowcord-redgifs-favorite-author { display: block; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted, #b5b5c0); font-size: 11px; line-height: 14px; }
+.lowcord-redgifs-favorites .lowcord-redgifs-star { right: 4px; bottom: 22px; background: #0006; }
+.lowcord-redgifs-favorites .lowcord-redgifs-duration { top: 5px; right: 5px; padding: 2px 4px; font-size: 10px; }
+.lowcord-redgifs-favorites .lowcord-redgifs-progress { left: 5px; right: 32px; bottom: 5px; height: 2px; }
+.lowcord-redgifs-favorites .lowcord-redgifs-thumb:is([data-queued], [data-sending], [data-sent])::after { top: auto; bottom: 5px; left: 5px; padding: 2px 4px; font-size: 10px; }
+.lowcord-redgifs-favorites .lowcord-redgifs-unavailable { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 6px; color: var(--text-muted, #b5b5c0); text-align: center; font-size: 10px; }
+.lowcord-redgifs-favorites-help { flex-shrink: 0; margin: 0; padding: 3px 0 1px; text-align: center; color: var(--text-muted, #b5b5c0); font-size: 10px; line-height: 14px; }
 .lowcord-redgifs-queue { flex-shrink: 0; margin: 0; padding-top: 4px; border-top: 1px solid var(--border-subtle, #ffffff18); }
 .lowcord-redgifs-queue-bar { display: flex; align-items: center; gap: 4px; min-height: 28px; }
 .lowcord-redgifs-queue-toggle { display: flex; align-items: center; flex: 1; min-width: 0; gap: 7px; height: 28px; padding: 0 4px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted, #b5b5c0); font: inherit; cursor: pointer; }
 .lowcord-redgifs-queue-toggle:hover { background: var(--background-modifier-hover, #ffffff0c); }
 .lowcord-redgifs-queue-toggle > svg:first-child { color: var(--text-link, #82b7ff); }
-.lowcord-redgifs-queue-toggle[aria-expanded="true"] > svg:last-child { transform: rotate(180deg); }
+.lowcord-redgifs-queue-toggle[aria-expanded="false"] > svg:last-child { transform: rotate(180deg); }
 .lowcord-redgifs-queue-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-size: 11px; font-variant-numeric: tabular-nums; }
 .lowcord-redgifs-queue-count { min-width: 16px; padding: 1px 4px; border-radius: 4px; background: var(--background-modifier-selected, #ffffff12); color: var(--text-normal, #eee); font-size: 10px; line-height: 14px; }
 .lowcord-redgifs-queue-list { max-height: 114px; overflow-y: auto; scrollbar-width: thin; }
@@ -132,7 +177,7 @@
 .lowcord-redgifs-job-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; }
 .lowcord-redgifs-job-copy > strong { font-size: 12px; font-weight: 600; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lowcord-redgifs-job-copy > span { color: var(--text-muted, #b5b5c0); font-size: 11px; line-height: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lowcord-redgifs-options { position: absolute; z-index: 5; top: 46px; right: 10px; width: min(290px, calc(100% - 20px)); box-sizing: border-box; padding: 10px; border-radius: 8px; background: var(--background-floating, #202024); box-shadow: 0 0 0 1px var(--border-subtle, #ffffff18), 0 6px 18px #0005; }
+.lowcord-redgifs-options { position: absolute; z-index: 5; top: 74px; right: 10px; width: min(290px, calc(100% - 20px)); box-sizing: border-box; padding: 10px; border-radius: 8px; background: var(--background-floating, #202024); box-shadow: 0 0 0 1px var(--border-subtle, #ffffff18), 0 6px 18px #0005; }
 .lowcord-redgifs-preference { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--text-normal, #eee); cursor: pointer; }
 .lowcord-redgifs-preference input { flex-shrink: 0; width: 14px; height: 14px; margin: 0; accent-color: var(--text-link, #82b7ff); }
 .lowcord-redgifs-options p { margin: 8px 0 0; color: var(--text-muted, #b5b5c0); font-size: 10px; line-height: 1.5; }

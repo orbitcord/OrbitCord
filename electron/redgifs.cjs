@@ -60,6 +60,7 @@ function createRedgifs({ fetchPage = fetch, compress = compressVideo, tempRoot =
         return JSON.parse((await bytes(response, 4 * 1024 * 1024)).toString('utf8'));
     }
     function mint(gif, owner) {
+        if (!gif || typeof gif !== 'object' || typeof gif.id !== 'string') return null;
         const hd = mediaURL(gif.urls?.hd), sd = mediaURL(gif.urls?.sd);
         if (!/^[a-z0-9]{1,100}$/i.test(gif.id) || (!hd && !sd) || (gif.type != null && gif.type !== 1)) return null;
         const key = randomBytes(18).toString('hex');
@@ -77,9 +78,10 @@ function createRedgifs({ fetchPage = fetch, compress = compressVideo, tempRoot =
     async function search(owner, query = '', page = 1, options = {}) {
         if (typeof query !== 'string' || query.length > 200 || !Number.isInteger(page) || page < 1 || page > 1000) throw fail('invalid-search');
         if (!options || typeof options !== 'object' || Array.isArray(options)) throw fail('invalid-search');
-        const mode = options.mode ?? 'videos', nicheId = options.nicheId;
-        if (!['videos', 'niches'].includes(mode) || (nicheId != null && (mode !== 'videos' || typeof nicheId !== 'string'
-            || !/^[a-z0-9_-]{1,100}$/i.test(nicheId)))) throw fail('invalid-search');
+        const mode = options.mode ?? 'videos', nicheId = options.nicheId, creator = options.creator;
+        if (!['videos', 'explore', 'creators', 'niches'].includes(mode) || (nicheId != null && (mode !== 'videos' || typeof nicheId !== 'string'
+            || !/^[a-z0-9_-]{1,100}$/i.test(nicheId))) || (creator != null && (mode !== 'creators' || typeof creator !== 'string'
+            || !/^[a-z0-9_-]{1,100}$/i.test(creator)))) throw fail('invalid-search');
         browsing.get(owner)?.abort();
         const controller = new AbortController(); browsing.set(owner, controller);
         try {
@@ -93,8 +95,21 @@ function createRedgifs({ fetchPage = fetch, compress = compressVideo, tempRoot =
             } else if (nicheId) {
                 params.set('order', 'recent');
                 endpoint = `/v2/niches/${encodeURIComponent(nicheId)}/gifs`;
+            } else if (mode === 'creators') {
+                params.set('order', creator ? 'latest' : text ? 'best_match' : 'trending');
+                if (creator) {
+                    params.set('type', 'g');
+                    if (text) params.set('tags', text);
+                    endpoint = `/v2/users/${encodeURIComponent(creator)}/search`;
+                } else {
+                    if (text) params.set('query', text);
+                    endpoint = '/v2/creators/search';
+                }
+            } else if (mode === 'videos' && !text) {
+                endpoint = '/v2/feeds/trending/popular';
             } else {
                 params.set('type', 'g'); params.set('order', 'trending');
+                if (mode === 'explore') params.set('verified', 'y');
                 if (text) params.set('tags', text);
                 endpoint = '/v2/gifs/search';
             }
@@ -107,17 +122,28 @@ function createRedgifs({ fetchPage = fetch, compress = compressVideo, tempRoot =
             searches.delete(cacheKey); searches.set(cacheKey, cached);
             while (searches.size > 5) searches.delete(searches.keys().next().value);
             const result = cached.result;
+            if (mode === 'creators' && !creator) {
+                if (!Array.isArray(result.items)) throw fail('invalid-response');
+                const creators = result.items.slice(0, 24).filter(user => typeof user?.username === 'string'
+                    && /^[a-z0-9_-]{1,100}$/i.test(user.username)).map(user => ({
+                    id: user.username, name: String(user.name || user.username).slice(0, 160),
+                    videos: Number.isFinite(user.publishedGifs) && user.publishedGifs >= 0 ? user.publishedGifs : null,
+                    followers: Number.isFinite(user.followers) && user.followers >= 0 ? user.followers : null,
+                    verified: user.verified === true,
+                }));
+                return { creators, more: Number.isFinite(result.pages) ? page < result.pages : result.items.length === 24 };
+            }
             if (mode === 'niches') {
                 if (!Array.isArray(result.niches)) throw fail('invalid-response');
-                const niches = result.niches.slice(0, 24).filter(niche => typeof niche.id === 'string' && /^[a-z0-9_-]{1,100}$/i.test(niche.id))
+                const niches = result.niches.slice(0, 24).filter(niche => typeof niche?.id === 'string' && /^[a-z0-9_-]{1,100}$/i.test(niche.id))
                     .map(niche => ({ id: niche.id, name: String(niche.name ?? '').slice(0, 160),
                         videos: Number.isFinite(niche.gifs) && niche.gifs >= 0 ? niche.gifs : null,
                         subscribers: Number.isFinite(niche.subscribers) && niche.subscribers >= 0 ? niche.subscribers : null }));
-                return { niches, more: Number.isFinite(result.pages) ? page < result.pages : niches.length === 24 };
+                return { niches, more: Number.isFinite(result.pages) ? page < result.pages : result.niches.length === 24 };
             }
             if (!Array.isArray(result.gifs)) throw fail('invalid-response');
             const items = result.gifs.slice(0, 24).map(gif => mint(gif, owner)).filter(Boolean);
-            return { items, more: Number.isFinite(result.pages) ? page < result.pages : items.length === 24 };
+            return { items, more: Number.isFinite(result.pages) ? page < result.pages : result.gifs.length === 24 };
         } finally { if (browsing.get(owner) === controller) browsing.delete(owner); }
     }
     const entryFor = (key, owner) => {

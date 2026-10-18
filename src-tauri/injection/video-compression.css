@@ -1,0 +1,26 @@
+.lowcord-video-compression {
+    --lowcord-compression-half: min(180px, calc(var(--lowcord-compression-width, 360px) / 2), calc((100vw - 32px) / 2));
+    position: fixed; bottom: 96px;
+    left: clamp(calc(16px + var(--lowcord-compression-half)), var(--lowcord-compression-center, 50%), calc(100vw - 16px - var(--lowcord-compression-half)));
+    transform: translateX(-50%); z-index: 2147483646;
+    box-sizing: border-box; display: flex; align-items: center; gap: 12px;
+    width: 360px; max-width: min(var(--lowcord-compression-width, 360px), calc(100vw - 32px)); padding: 12px 16px; min-height: 62px;
+    border: 1px solid rgb(255 255 255 / .12); border-radius: 18px;
+    background: rgb(30 31 35 / .94); color: #f2f3f5;
+    -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+    box-shadow: 0 8px 24px #0003; font: 13px/1.4 var(--font-primary, sans-serif);
+}
+.lowcord-compression-copy { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.lowcord-video-compression strong { font-size: 14px; font-weight: 600; line-height: 18px; }
+.lowcord-video-compression span { color: #b5bac1; font-size: 12px; line-height: 16px; }
+.lowcord-compression-copy > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lowcord-compression-ring { flex: none; width: 28px; height: 28px; color: #b3a0ff; animation: lowcord-compression-spin 1.2s linear infinite; }
+.lowcord-compression-track { opacity: .22; transform: scale(.9); transform-origin: center; }
+.lowcord-video-compression button {
+    flex: none; margin: 0; padding: 7px 12px; min-height: 32px; border: 0; border-radius: 10px; cursor: pointer;
+    color: inherit; background: rgb(255 255 255 / .09); font: inherit; line-height: 18px;
+}
+.lowcord-video-compression button:hover { background: rgb(255 255 255 / .16); }
+.lowcord-video-compression button:focus-visible { outline: 2px solid #b3a0ff; outline-offset: 3px; }
+@keyframes lowcord-compression-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .lowcord-compression-ring { animation: none; } }

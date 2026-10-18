@@ -3,12 +3,12 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 
-async function launch(dataDir, { updater = false } = {}) {
+async function launch(dataDir, { updater = false, mediaSources = false } = {}) {
     const app = await electron.launch({ args: [resolve('.')], env: { ...process.env,
-        LOWCORD_TEST: '1', LOWCORD_TEST_UPDATER: updater ? '1' : '0', LOWCORD_TEST_URL: 'http://127.0.0.1:4319/electron', LOWCORD_TEST_DATA: dataDir } });
+        LOWCORD_TEST: '1', LOWCORD_TEST_UPDATER: updater ? '1' : '0', LOWCORD_TEST_MEDIA_SOURCES: mediaSources ? '1' : '0', LOWCORD_TEST_URL: 'http://127.0.0.1:4319/electron', LOWCORD_TEST_DATA: dataDir } });
     app.process().stderr.on('data', data => {
         const message = data.toString();
-        if (message.includes('[lowcord] Startup failed')) console.error(message);
+        if (message.includes('[lowcord] Startup failed')||message.includes('[media-sources]')) console.error(message);
     });
     return app;
 }
@@ -31,6 +31,171 @@ async function expectNativeFullscreen(app, fullscreen) {
         BrowserWindow.getAllWindows()[0].isFullScreen() === fullscreen
         && global.fullscreenTransitions.includes(fullscreen ? 'enter-full-screen' : 'leave-full-screen'), fullscreen)).toBe(true);
 }
+
+test('eight media sources resolve linked originals in isolated sessions and send cookie-protected media with one click',async()=>{
+    const dir=await mkdtemp(join(tmpdir(),'orbitcord-sources-'));
+    const app=await launch(dir,{mediaSources:true});
+    try{
+        const page=await app.firstWindow();await page.waitForLoadState('domcontentloaded');
+        await page.evaluate(()=>{
+            Lowcord.extensions.set('anonymiseFileNames',false);
+            const original=Lowcord.store;
+            Lowcord.store=name=>name==='SelectedChannelStore'?{getChannelId:()=> 'source-dm',addChangeListener(){},removeChangeListener(){}}
+                :name==='ChannelStore'?{getChannel:()=>({id:'source-dm',type:1,name:'Fixture chat'})}:original(name);
+            const composer=document.createElement('div');composer.className='channelTextArea_sources';
+            const editor=document.createElement('textarea');editor.value='Keep my message';editor.setAttribute('aria-label','Source message');
+            composer.append(editor);document.body.append(composer);
+            window.sourcePosts=[];
+            Object.defineProperty(Lowcord,'CloudUpload',{value:class{
+                constructor({file},channel){window.sourceAttachment=file;this.filename=file.name;this.uploadedFilename='fixture/'+file.name;this.handlers={};window.sourceUploadChannel=channel;}
+                on(type,fn){this.handlers[type]=fn;}async upload(){this.handlers.complete();}cancel(){}
+            }});
+            Object.defineProperty(Lowcord,'RestAPI',{value:{post:async request=>{sourcePosts.push(request);return{body:{id:'fixture-sent'}};}}});
+        });
+        await page.evaluate(()=>Lowcord.mediaSources.open());
+        await expect.poll(()=>app.windows().some(p=>p.url().endsWith('/media-browser.html'))).toBe(true);
+        const host=app.windows().find(p=>p.url().endsWith('/media-browser.html'));
+        await expect(host.getByLabel('Media source')).toHaveValue('shorts');
+        await expect(host.locator('#source option')).toHaveCount(8);
+        await page.getByRole('button',{name:'Open site for browsing or login'}).click();
+        await host.getByRole('button',{name:'Save page',exact:true}).click();
+        await expect(host.getByRole('button',{name:'Unsave page',exact:true})).toBeVisible();
+        await expect(host.locator('#saved option')).toHaveCount(2);
+        const remote=async expression=>app.evaluate(async({webContents},expression)=>{
+            const wc=webContents.getAllWebContents().find(w=>w.getURL().includes('/source-browser'));
+            return wc?wc.executeJavaScript(expression):null;
+        },expression);
+        await expect.poll(()=>remote('document.readyState')).toBe('complete');
+        expect(await remote('({node:typeof require,discord:typeof window.__LOWCORD_NATIVE__,toolbar:typeof window.mediaBrowser})'))
+            .toEqual({node:'undefined',discord:'undefined',toolbar:'undefined'});
+        await remote('document.querySelector("button").click()');
+        await expect.poll(()=>remote('document.querySelector("#account").textContent')).toBe('Signed in');
+        for(const id of ['gifreels','erome','sexcom','imagefap','xxxfollow','xxxtik','xfree']){
+            await host.getByLabel('Media source').selectOption(id);
+            await expect.poll(()=>remote('new URL(location.href).searchParams.get("source")')).toBe(id);
+            await expect.poll(()=>remote('document.readyState')).toBe('complete');
+            await expect.poll(()=>remote('document.querySelector("#account")?.textContent')).toBe('Signed out');
+        }
+        await host.getByLabel('Media source').selectOption('shorts');
+        await expect.poll(()=>remote('new URL(location.href).searchParams.get("source")')).toBe('shorts');
+        await expect.poll(()=>remote('document.querySelector("#account")?.textContent')).toBe('Signed in');
+        await expect(host.locator('#saved option')).toHaveCount(2);
+        await host.getByRole('button',{name:'Sign out',exact:true}).click();
+        await expect.poll(()=>remote('document.querySelector("#account")?.textContent')).toBe('Signed out');
+        await remote('document.querySelector("button").click()');
+        await host.getByRole('button',{name:'Use this page in picker',exact:true}).click();
+        const tile=page.getByRole('button',{name:'Send Open original fixture',exact:true});
+        await expect(tile).toBeVisible();
+        await expect.poll(()=>tile.locator('img').getAttribute('src')).toMatch(/^data:image\/jpeg;base64,/);
+        await page.screenshot({path:'/tmp/lowcord-media-sources-picker.png'});
+        await tile.click();
+        await expect.poll(()=>page.evaluate(()=>sourcePosts.length)).toBe(1);
+        await expect(page.getByLabel('Source message')).toHaveValue('Keep my message');
+        const bytes=await readFile(resolve('tests/fixtures/media/sample.mp4'));
+        expect(await page.evaluate(async()=>({type:sourceAttachment.type,size:sourceAttachment.size,header:Array.from(new Uint8Array(await sourceAttachment.slice(0,12).arrayBuffer()))})))
+            .toEqual({type:'video/mp4',size:bytes.length,header:Array.from(bytes.subarray(0,12))});
+        expect(await page.evaluate(()=>({channel:sourceUploadChannel,url:sourcePosts[0].url,nonce:sourcePosts[0].body.enforce_nonce})))
+            .toEqual({channel:'source-dm',url:'/channels/source-dm/messages',nonce:true});
+        await expect(tile).toBeDisabled();
+        expect(await page.evaluate(()=>Lowcord.mediaSources.busy())).toBe(false);
+        await expect(page.getByRole('dialog',{name:'Media sources picker'})).toBeVisible();
+        await page.evaluate(()=>__LOWCORD_NATIVE__.mediaSources('command','navigate','http://127.0.0.1:4319/source-worker'));
+        const workerTile=page.getByRole('button',{name:'Send Video',exact:true});await expect(workerTile).toBeVisible();await workerTile.click();
+        await expect.poll(()=>page.evaluate(()=>sourcePosts.length)).toBe(2);
+        expect(await page.evaluate(()=>sourceAttachment.type)).toBe('video/mp4');
+    }finally{await app.close();await rm(dir,{recursive:true,force:true});}
+});
+
+test('file-backed source blobs stream from their isolated page without exposing native APIs',async()=>{
+    const dir=await mkdtemp(join(tmpdir(),'orbitcord-blob-'));const app=await launch(dir);
+    try{
+        const page=await app.firstWindow();
+        const url=await page.evaluate(async()=>{const response=await fetch('/media/sample.mp4');return URL.createObjectURL(await response.blob());});
+        const result=await app.evaluate(async({BrowserWindow},url)=>{
+            const wc=BrowserWindow.getAllWindows()[0].webContents;
+            const {sourceBlobResponse}=process.mainModule.require(process.cwd()+'/electron/media-source-blob.cjs');
+            const response=await sourceBlobResponse(wc,url,new AbortController().signal);
+            const bytes=Buffer.from(await response.arrayBuffer());return{length:bytes.length,header:bytes.toString('ascii',4,8)};
+        },url);
+        expect(result).toEqual({length:(await readFile(resolve('tests/fixtures/media/sample.mp4'))).length,header:'ftyp'});
+    }finally{await app.close();await rm(dir,{recursive:true,force:true});}
+});
+
+test('cross-origin source downloads obey Chromium referrer policy instead of failing ERR_BLOCKED_BY_CLIENT',async()=>{
+    const dir=await mkdtemp(join(tmpdir(),'orbitcord-referrer-'));const app=await launch(dir);
+    try{
+        const result=await app.evaluate(async({session})=>{
+            const {createSourceFiles}=process.mainModule.require(process.cwd()+'/electron/media-source-files.cjs');
+            const files=createSourceFiles({validateURL:async value=>value});
+            try{
+                const result=await files.prepare(999,{url:'http://localhost:4319/media/sample.mp4',referer:'http://127.0.0.1:4319/source-browser?test=1',
+                    source:'shorts',channelId:'test',limit:20_000_000,fetch:(url,init)=>session.defaultSession.fetch(url,init)});
+                const bytes=await files.read(999,result.id,0);return{type:result.type,size:result.size,header:Buffer.from(bytes.subarray(4,8)).toString('ascii')};
+            }finally{await files.close();}
+        });
+        expect(result).toMatchObject({type:'video/mp4',header:'ftyp'});expect(result.size).toBeGreaterThan(0);
+    }finally{await app.close();await rm(dir,{recursive:true,force:true});}
+});
+
+for (const method of ['chooser', 'overlay drop']) test(`automatic video attachments cross the sandbox in bounded chunks and produce a decodable MP4 in the native composer (${method})`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-compress-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('domcontentloaded');
+        await page.evaluate(() => {
+            Lowcord.extensions.set('anonymiseFileNames', false);
+            const original = Lowcord.store;
+            Lowcord.store = name => name === 'SelectedChannelStore' ? { getChannelId: () => 'fixture-dm' }
+                : name === 'ChannelStore' ? { getChannel: () => ({ id: 'fixture-dm', type: 1 }) } : original(name);
+            const composer = document.createElement('div'); composer.className = 'channelTextArea_compression';
+            const input = document.createElement('input'); input.type = 'file'; input.setAttribute('aria-label', 'Compression input');
+            input.addEventListener('change', () => { window.compressedFile = input.files[0]; });
+            const editor = document.createElement('textarea');
+            editor.addEventListener('paste', event => { if (event.clipboardData.files[0]) window.compressedFile = event.clipboardData.files[0]; });
+            composer.append(input, editor); document.body.append(composer);
+            const overlay = document.createElement('div'); overlay.className = 'uploadArea_compression';
+            window.originalDropWarnings = 0; window.overlayCleaned = false;
+            overlay.addEventListener('drop', event => {
+                if ([...event.dataTransfer.files].some(file => file.size >= 20_000_000)) window.originalDropWarnings++;
+            });
+            document.body.append(overlay);
+            document.body.addEventListener('drop', event => { if (!event.dataTransfer.files.length) { overlay.remove(); window.overlayCleaned = true; } });
+        });
+        expect(await page.evaluate(() => __LOWCORD_NATIVE__.videoCompression('begin', { size: 40_000_000, limit: 999 }))).toEqual({ error: 'invalid-input' });
+        expect(await page.evaluate(() => __LOWCORD_NATIVE__.videoCompression('read', 'foreign-token', 0))).toEqual({ error: 'expired' });
+        expect(await page.evaluate(() => __LOWCORD_NATIVE__.videoCompression('__proto__'))).toEqual({ error: 'invalid-action' });
+        if (method === 'chooser') {
+            const source = await readFile(resolve('tests/fixtures/media/sample.mp4'));
+            const padded = Buffer.alloc(20_000_001); source.copy(padded);
+            await page.getByLabel('Compression input').setInputFiles({ name: 'SPOILER_hike.mov', mimeType: 'video/quicktime', buffer: padded });
+        } else {
+            await page.evaluate(async () => {
+                const source = new Uint8Array(await (await fetch('/media/sample.mp4')).arrayBuffer());
+                const padded = new Uint8Array(20_000_001); padded.set(source);
+                const data = new DataTransfer(); data.items.add(new File([padded], 'SPOILER_hike.mov', { type: 'video/quicktime' }));
+                document.querySelector('.uploadArea_compression').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }));
+            });
+            expect(await page.evaluate(() => window.overlayCleaned)).toBe(true);
+            expect(await page.evaluate(() => window.originalDropWarnings)).toBe(0);
+        }
+        await expect.poll(() => page.evaluate(() => window.compressedFile?.size ?? 0), { timeout: 30_000 }).toBeGreaterThan(0);
+        const info = await page.evaluate(async () => {
+            const file = window.compressedFile;
+            const video = document.createElement('video'); video.id = 'compressed-preview'; video.muted = true; video.controls = true;
+            video.src = URL.createObjectURL(file); document.body.append(video);
+            const loaded = new Promise((resolve, reject) => { video.onloadeddata = resolve; video.onerror = () => reject(new Error('Invalid MP4')); });
+            await loaded;
+            return { size: file.size, type: file.type, name: file.name, width: video.videoWidth, height: video.videoHeight };
+        });
+        expect(info).toMatchObject({ type: 'video/mp4', name: 'SPOILER_hike.mp4' });
+        expect(info.size).toBeLessThan(20_000_000); expect(info.width).toBeGreaterThan(0); expect(info.height).toBeGreaterThan(0);
+        expect(await page.evaluate(() => Lowcord.videoCompression.busy())).toBe(false);
+        // A foreign frame has no bridge or arbitrary-path/file access.
+        const frame = page.frames().find(frame => frame !== page.mainFrame());
+        if (frame) expect(await frame.evaluate(() => typeof window.__LOWCORD_NATIVE__)).toBe('undefined');
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
 
 test('Windows icon resources contain real images at every taskbar size and survive restart', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'orbitcord-icons-'));
@@ -135,6 +300,138 @@ test('Windows icon resources contain real images at every taskbar size and survi
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('native picture-in-picture opens from chat videos, switches sources and exits without a second player', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lowcord-pip-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('domcontentloaded');
+        await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].show(); });
+        await page.evaluate(() => {
+            for (const id of ['video', 'webm']) {
+                const video = document.getElementById(id);
+                const row = document.createElement('section'); row.id = `chat-messages-${id}`;
+                video.before(row); row.append(video); video.muted = true; video.loop = true;
+            }
+        });
+        await page.evaluate(async () => { const video = document.getElementById('video'); await video.play(); video.disablePictureInPicture = true; });
+        await page.locator('#video').hover();
+        await page.getByRole('button', { name: 'Picture-in-picture', exact: true }).click();
+        await expect.poll(() => page.evaluate(() => document.pictureInPictureElement?.id)).toBe('video');
+        await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].minimize(); });
+        expect(await page.evaluate(() => document.pictureInPictureElement?.id)).toBe('video');
+        await app.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; window.restore(); window.focus(); });
+        expect(await page.locator('#video').evaluate(video => video.disablePictureInPicture)).toBe(false);
+        await expect.poll(() => page.locator('#video').evaluate(video => video.currentTime)).toBeGreaterThan(.1);
+        await page.evaluate(() => document.getElementById('video').pause());
+        expect(await page.evaluate(() => window.__lowcordBusy())).toBe(true);
+        await page.locator('#video').hover();
+        await expect(page.getByRole('button', { name: 'Exit picture-in-picture', exact: true })).toBeVisible();
+        await page.getByRole('button', { name: 'Exit picture-in-picture', exact: true }).click();
+        await expect.poll(() => page.evaluate(() => document.pictureInPictureElement?.id ?? null)).toBeNull();
+        expect(await page.locator('#video').evaluate(video => video.disablePictureInPicture)).toBe(true);
+        await page.evaluate(() => document.getElementById('webm').play());
+        await page.locator('#webm').hover();
+        await page.keyboard.press('Alt+p');
+        await expect.poll(() => page.evaluate(() => document.pictureInPictureElement?.id)).toBe('webm');
+        await page.evaluate(() => Lowcord.extensions.set('pictureInPicture', false));
+        await expect.poll(() => page.evaluate(() => document.pictureInPictureElement?.id ?? null)).toBeNull();
+        await expect(page.locator('.lowcord-pip-button')).toHaveCount(0);
+        expect(await page.locator('video').count()).toBe(3);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('embedded video context menu requests native PiP inside its own frame', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lowcord-frame-pip-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('domcontentloaded');
+        await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].show(); });
+        const child = page.frames().find(frame => frame.url().endsWith('/electron-child'));
+        await expect.poll(() => page.frames().some(frame => frame.url().endsWith('/electron-child'))).toBe(true);
+        const frame = child || page.frames().find(frame => frame.url().endsWith('/electron-child'));
+        const source = await frame.evaluate(async () => {
+            const video = document.createElement('video'); video.id = 'embedded-video';
+            video.src = '/media/sample.mp4'; video.controls = true; video.muted = true; video.loop = true;
+            document.body.append(video); await video.play(); video.disablePictureInPicture = true;
+            return video.currentSrc;
+        });
+        await app.evaluate(({ BrowserWindow, Menu }, source) => {
+            const contents = BrowserWindow.getAllWindows()[0].webContents;
+            const frame = contents.mainFrame.framesInSubtree.find(frame => frame.url.endsWith('/electron-child'));
+            global.pipMenu = null;
+            global.originalPipMenu = Menu.buildFromTemplate;
+            Menu.buildFromTemplate = items => { global.pipMenu = items; return { popup() {} }; };
+            contents.emit('context-menu', {}, { mediaType: 'video', frame, pageURL: contents.getURL(), srcURL: source,
+                mediaFlags: { isShowingPictureInPicture: false } });
+        }, source);
+        await expect.poll(() => app.evaluate(() => global.pipMenu?.map(item => item.label))).toEqual(['Download video…', 'Picture-in-picture']);
+        await app.evaluate(({ Menu }) => { Menu.buildFromTemplate = global.originalPipMenu; global.pipMenu.find(item => item.label === 'Picture-in-picture').click(); });
+        await expect.poll(() => frame.evaluate(() => document.pictureInPictureElement?.id)).toBe('embedded-video');
+        expect(await frame.evaluate(() => typeof window.__LOWCORD_NATIVE__)).toBe('undefined');
+        await frame.evaluate(() => document.exitPictureInPicture());
+        expect(await frame.evaluate(() => document.querySelector('video').disablePictureInPicture)).toBe(true);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('linked video downloads save original bytes, support cancellation and reject non-media schemes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lowcord-video-download-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('domcontentloaded');
+        const path = join(dir, 'saved-video.mp4');
+        await app.evaluate(({ session }, path) => {
+            session.defaultSession.once('will-download', (_event, item) => {
+                global.videoDownloadUrl = item.getURL();
+                item.setSavePath(path);
+                item.once('done', (_event, state) => { global.videoDownloadState = state; });
+            });
+        }, path);
+        await page.evaluate(() => window.__LOWCORD_NATIVE__.downloadMedia(`${location.origin}/media/sample.mp4?signature=a%2Bb&ex=123`));
+        await expect.poll(() => app.evaluate(() => global.videoDownloadState)).toBe('completed');
+        expect(await app.evaluate(() => global.videoDownloadUrl)).toBe('http://127.0.0.1:4319/media/sample.mp4?signature=a%2Bb&ex=123');
+        expect(await readFile(path)).toEqual(await readFile('tests/fixtures/media/sample.mp4'));
+        await app.evaluate(({ session }) => {
+            global.videoDownloadState = undefined;
+            session.defaultSession.once('will-download', (_event, item) => {
+                item.once('done', (_event, state) => { global.videoDownloadState = state; }); item.cancel();
+            });
+        });
+        await page.evaluate(() => window.__LOWCORD_NATIVE__.downloadMedia(`${location.origin}/media/sample.mp4`));
+        await expect.poll(() => app.evaluate(() => global.videoDownloadState)).toBe('cancelled');
+        const cachedPath = join(dir, 'cached-video.mp4');
+        await app.evaluate(async ({ session }, { path, bytes }) => {
+            const ses = session.defaultSession;
+            await ses.protocol.unhandle('lowcord-media');
+            ses.protocol.handle('lowcord-media', () => new Response(Buffer.from(bytes, 'base64'), { headers: { 'content-type': 'video/mp4' } }));
+            global.videoDownloadState = undefined;
+            ses.once('will-download', (_event, item) => {
+                item.setSavePath(path);
+                item.once('done', (_event, state) => { global.videoDownloadState = state; });
+            });
+        }, { path: cachedPath, bytes: (await readFile('tests/fixtures/media/sample.mp4')).toString('base64') });
+        await page.evaluate(() => window.__LOWCORD_NATIVE__.downloadMedia('lowcord-media://media/0123456789abcdef01234567'));
+        await expect.poll(() => app.evaluate(() => global.videoDownloadState)).toBe('completed');
+        expect(await readFile(cachedPath)).toEqual(await readFile('tests/fixtures/media/sample.mp4'));
+        for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'data:text/html,test', 'blob:https://discord.com/mse', 'https://example.com/video.m3u8', 'https://example.com/video.mpd', 'https://user:pass@example.com/clip.mp4', 'lowcord-media://anything/token']) {
+            await expect(page.evaluate(url => window.__LOWCORD_NATIVE__.downloadMedia(url), url)).rejects.toThrow('downloadable media file');
+        }
+        await page.evaluate(() => {
+            const viewer = document.getElementById('image-viewer'); viewer.hidden = false;
+            const video = document.createElement('video'); video.id = 'viewer-clip'; video.src = '/media/sample.mp4'; video.controls = true;
+            video.width = 160; video.height = 90; viewer.append(video);
+        });
+        await app.evaluate(({ BrowserWindow, Menu }) => {
+            BrowserWindow.getAllWindows()[0].show();
+            Menu.prototype.popup = function () { global.videoMenu = this; };
+        });
+        await page.locator('#viewer-clip').click({ button: 'right' });
+        await expect.poll(() => app.evaluate(() => global.videoMenu?.items.map(item => item.label))).toEqual(['Download video…']);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'lowcord-electron-'));
     const app = await launch(dir);
@@ -153,7 +450,7 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true,
             extensions: await page.evaluate(() => window.Lowcord.extensions.catalog.length), fetchHooked: true });
         expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
-            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'captureRegion', 'copyImage', 'saveImage', 'reportAccount', 'accounts', 'onAccountsChanged'] });
+            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'reportAccount', 'accounts', 'onAccountsChanged'] });
         expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsSearch('fixture', -1))).toEqual({ error: 'invalid-search' });
         expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsPrepare('not-a-token', 20_000_000))).toEqual({ error: 'expired' });
         await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsCancel());
@@ -203,7 +500,14 @@ test('RedGIFs opaque preview proxy and prepared file cross the sandbox bridge in
                 if (url.includes('/niches/search?')) return new Response(JSON.stringify({ pages: 1, niches: [
                     { id: 'neutral-animation', name: 'Neutral animation', gifs: 12, subscribers: 34 },
                 ] }));
-                if (url.includes('/gifs/search?') || url.includes('/niches/neutral-animation/gifs?')) return new Response(JSON.stringify({ pages: 1, gifs: [
+                if (url.includes('/creators/search?')) return new Response(JSON.stringify({ pages: 1, items: [
+                    { username: 'neutral_creator', name: 'Neutral Creator', publishedGifs: 12, followers: 34 },
+                ] }));
+                if (url.endsWith('/gifs/NeutralFixture')) return new Response(JSON.stringify({ gif:
+                    { id: 'NeutralFixture', type: 1, urls: { hd: 'https://media.redgifs.com/NeutralFixture.mp4' } },
+                }));
+                if (url.includes('/gifs/search?') || url.includes('/feeds/trending/popular?')
+                    || url.includes('/users/neutral_creator/search?') || url.includes('/niches/neutral-animation/gifs?')) return new Response(JSON.stringify({ pages: 1, gifs: [
                     { id: 'NeutralFixture', type: 1, urls: { hd: 'https://media.redgifs.com/NeutralFixture.mp4' } },
                 ] }));
                 return new Response(bytes, { headers: { 'content-type': 'video/mp4', 'content-length': String(bytes.length) } });
@@ -232,6 +536,11 @@ test('RedGIFs opaque preview proxy and prepared file cross the sandbox bridge in
             const prepared = await __LOWCORD_NATIVE__.redgifsPrepare(items[0].key, 20_000_000);
             const niches = await __LOWCORD_NATIVE__.redgifsSearch('animation', 1, { mode: 'niches' });
             const feed = await __LOWCORD_NATIVE__.redgifsSearch('', 1, { mode: 'videos', nicheId: niches.niches[0].id });
+            const trending = await __LOWCORD_NATIVE__.redgifsSearch('', 1);
+            const explore = await __LOWCORD_NATIVE__.redgifsSearch('', 1, { mode: 'explore' });
+            const creators = await __LOWCORD_NATIVE__.redgifsSearch('', 1, { mode: 'creators' });
+            const creatorFeed = await __LOWCORD_NATIVE__.redgifsSearch('', 1, { mode: 'creators', creator: creators.creators[0].id });
+            const favorite = await __LOWCORD_NATIVE__.redgifsResolve(items[0].id);
             const preparedData = new Uint8Array(await (await fetch(prepared.url, { credentials: 'omit' })).arrayBuffer());
             await __LOWCORD_NATIVE__.redgifsRelease(prepared.handle);
             const player = document.createElement('video');
@@ -241,10 +550,13 @@ test('RedGIFs opaque preview proxy and prepared file cross the sandbox bridge in
             try { await player.play(); } catch (error) { playbackError = error.message; }
             return { type: prepared.type, name: prepared.name, bytes: preparedData.byteLength,
                 signature: String.fromCharCode(...preparedData.slice(4, 8)), preview: items[0].preview, playbackError,
-                nicheCount: niches.niches.length, nicheFeedCount: feed.items.length };
+                nicheCount: niches.niches.length, nicheFeedCount: feed.items.length,
+                trendingCount: trending.items.length, exploreCount: explore.items.length, creatorCount: creators.creators.length,
+                creatorFeedCount: creatorFeed.items.length, freshFavorite: favorite.key !== items[0].key };
         });
         expect({ error: result.playbackError, protocol: await app.evaluate(() => global.redgifsTestTrace) }).toEqual({ error: undefined, protocol: expect.objectContaining({ status: 200 }) });
-        expect(result).toMatchObject({ type: 'video/mp4', name: 'redgifs-NeutralFixture.mp4', signature: 'ftyp', nicheCount: 1, nicheFeedCount: 1 });
+        expect(result).toMatchObject({ type: 'video/mp4', name: 'redgifs-NeutralFixture.mp4', signature: 'ftyp', nicheCount: 1, nicheFeedCount: 1,
+            trendingCount: 1, exploreCount: 1, creatorCount: 1, creatorFeedCount: 1, freshFavorite: true });
         expect(result.bytes).toBeGreaterThan(1000);
         expect(result.preview).toMatch(/^lowcord-media:\/\/redgifs\//);
         await expect.poll(() => page.$eval('#redgifs-proxy-test', video => video.currentTime)).toBeGreaterThan(0.1);
@@ -570,7 +882,7 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
         await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
         expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
-            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'captureRegion', 'copyImage', 'saveImage', 'reportAccount', 'accounts', 'onAccountsChanged']);
+            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'reportAccount', 'accounts', 'onAccountsChanged']);
         expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
     } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
 });

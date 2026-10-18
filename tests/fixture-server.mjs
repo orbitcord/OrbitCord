@@ -22,9 +22,13 @@ const routes = {
     "/extensions-fixture.js": ["text/javascript", extensionsBundle.outputFiles[0].contents],
     "/electron": ["text/html", await readFile("tests/fixtures/electron.html")],
     "/electron-child": ["text/html", "<!doctype html><title>Child frame</title><p>No native bridge here</p>"],
+    "/source-worker": ["text/html", `<!doctype html><video controls width="320"></video><script>document.querySelector('video').src=URL.createObjectURL(new MediaSource());const worker=new Worker(URL.createObjectURL(new Blob(["fetch("+JSON.stringify(new URL('/source-gated.mp4',location.href).href)+").then(r=>r.arrayBuffer()).then(()=>postMessage('done'))"],{type:'text/javascript'})));</script>`],
+    "/source-original": ["text/html", `<!doctype html><meta charset="utf-8"><video src="/source-gated.mp4" controls width="320" poster="/media/sample.png"></video>`],
+    "/source-browser": ["text/html", `<!doctype html><meta charset="utf-8"><title>Neutral media source fixture</title><style>body{background:#17191e;color:white;font:16px system-ui;padding:24px}video,img{display:block;width:320px;margin:20px 0}button{padding:8px}</style><h1>Media source fixture</h1><p id="account"></p><button onclick="document.cookie='source_login=fixture; path=/; SameSite=Lax';document.getElementById('account').textContent='Signed in';document.querySelector('video').src='/source-gated.mp4'">Fixture sign in</button><a href="/source-browser?next=1">Next page</a><video src="/media/sample.mp4" controls preload="metadata"></video><a href="/source-original"><img src="/media/source-poster.png" width="320" alt="Open original fixture"></a><script>document.getElementById('account').textContent=document.cookie.includes('source_login=fixture')?'Signed in':'Signed out';</script>`],
     "/media/sample.mp4": ["video/mp4", await readFile("tests/fixtures/media/sample.mp4")],
     "/media/sample.m4a": ["audio/mp4", await readFile("tests/fixtures/media/sample.m4a")],
     "/media/sample.webm": ["video/webm", await readFile("tests/fixtures/media/sample.webm")],
+    "/media/source-poster.png": ["image/png", await readFile("tests/fixtures/media/source-poster.png")],
     "/media/sample.png": ["image/png", await readFile("tests/fixtures/media/sample.png")],
     "/media/dash-video.mp4": ["video/mp4", await readFile("tests/fixtures/media/dash-video.mp4")],
     "/media/dash-audio.mp4": ["video/mp4", await readFile("tests/fixtures/media/dash-audio.mp4")],
@@ -32,6 +36,9 @@ const routes = {
 };
 for (const file of ["discord.js", "extensions.js", "chat-capture.js", "mass-delete.js", "media-gallery.js", "redgifs.js", "redgifs.css", "background.js", "gif.js", "music-embeds.js", "social-embeds.js", "settings.js", "themes.js", "themes.css", "lowcord-ui.css"]) {
     routes[`/injection/${file}`] = [file.endsWith(".css") ? "text/css" : "text/javascript", await readFile(`src-tauri/injection/${file}`)];
+}
+for (const file of ['picture-in-picture.js', 'picture-in-picture.css', 'video-compression.js', 'video-compression.css','media-sources.js','media-sources.css', 'reddit.js', 'reddit.css']) {
+    routes[`/injection/${file}`] = [file.endsWith('.css') ? 'text/css' : 'text/javascript', await readFile(`src-tauri/injection/${file}`)];
 }
 // A stand-in Discord API that records exactly what reached the network.
 const received = [];
@@ -42,6 +49,10 @@ createServer((request, response) => {
         response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
         response.end(JSON.stringify(received));
         return;
+    }
+    if(url.pathname==='/source-gated.mp4'){
+        if(!request.headers.cookie?.includes('source_login=fixture')){response.writeHead(403,{'Content-Type':'text/html'});response.end('Sign in required');return;}
+        const bytes=routes['/media/sample.mp4'][1];response.writeHead(200,{'Content-Type':'video/mp4','Content-Length':bytes.length});response.end(bytes);return;
     }
     if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/error-reporting-proxy/")) {
         const parts = [];

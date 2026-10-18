@@ -8,6 +8,10 @@ const { setupEmbedPlugins } = require('./embed-plugins.cjs');
 const { createSocialResolver } = require('./social-resolver.cjs');
 const { createSocialPosts, scheme: mediaScheme } = require('./social-posts.cjs');
 const { createRedgifs } = require('./redgifs.cjs');
+const { createMediaSources, SOURCES: MEDIA_SOURCES } = require('./media-sources.cjs');
+const { createSourceFiles } = require('./media-source-files.cjs');
+const { createReddit } = require('./reddit.cjs');
+const { createVideoAttachments } = require('./video-attachments.cjs');
 const { createUpdateController, latestRelease, macAsset, downloadMacInstaller } = require('./updates.cjs');
 const { createBackgroundSaver } = require('./background.cjs');
 
@@ -27,7 +31,7 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 protocol.registerSchemesAsPrivileged([{ scheme: mediaScheme,
     privileges: { standard: true, secure: true, bypassCSP: true, stream: true, supportFetchAPI: true, corsEnabled: true } }]);
 if (dev) app.commandLine.appendSwitch('remote-debugging-port', '9222');
-let mainWindow, tray, backend, socialPosts, socialResolver, redgifs, autoUpdater, quitting = false, finished = false;
+let mainWindow, tray, backend, socialPosts, socialResolver, redgifs, reddit, videoAttachments, mediaSources, autoUpdater, quitting = false, finished = false;
 let downloadedUpdate = null, updateDismissed = false, updateRestarting = false, updateError = null;
 // Every open Discord window by its webContents id. The main window uses the
 // default session; each extra account has a persistent partition of its own,
@@ -51,6 +55,18 @@ const assertSender = event => {
     const record = recordFor(event.sender);
     if (!record || event.senderFrame !== event.sender.mainFrame || !trusted(event.senderFrame.url)) throw new Error('Untrusted native request');
     return record;
+};
+// A media download must be an actual resource, never a local file, executable
+// URL or a streaming manifest. Preserve signed query parameters verbatim.
+const mediaDownloadUrl = value => {
+    if (typeof value !== 'string' || value.length > 8192) return null;
+    try {
+        const url = new URL(value);
+        if (url.username || url.password || /\.(?:m3u8|mpd)$/i.test(url.pathname)) return null;
+        if (url.protocol === 'https:' || url.protocol === 'http:') return url.href;
+        if (/^lowcord-media:\/\/media\/[a-f0-9]{24}$/.test(value)) return value;
+    } catch {}
+    return null;
 };
 const showWindow = window => {
     if (!window || window.isDestroyed()) return;
@@ -279,8 +295,10 @@ function configureSession(ses) {
     // Set the browser identity before creating WebContents: session changes
     // do not update an existing window's navigator.userAgent.
     ses.setUserAgent(ses.getUserAgent().replace(/\s(?:Electron|Lowcord|Datcord|OrbitCord)\/[\w.-]+/gi, ''));
-    ses.protocol.handle(mediaScheme, request => new URL(request.url).hostname === 'redgifs'
-        ? redgifs.serve(request) : socialPosts.serve(request));
+    ses.protocol.handle(mediaScheme, request => {
+        const host = new URL(request.url).hostname;
+        return host === 'redgifs' ? redgifs.serve(request) : host === 'reddit' ? reddit.serve(request) : socialPosts.serve(request);
+    });
     // Discord delegates fullscreen to cross-origin video players through its
     // iframe policy. Chromium still requires that delegation and a user gesture;
     // requiring the player's URL to be discord.com makes its button do nothing.
@@ -349,9 +367,9 @@ async function createDiscordWindow(account) {
     const contents = window.webContents;
     const id = contents.id;
     contents.on('did-start-navigation', details => {
-        if (details.isMainFrame && !details.isInPlace) redgifs?.cancel(id);
+        if (details.isMainFrame && !details.isInPlace) { redgifs?.cancel(id); reddit?.cancel(id); void videoAttachments?.cancel(id); void mediaSources?.cancel(id); }
     });
-    contents.on('render-process-gone', () => redgifs?.cancel(id));
+    contents.on('render-process-gone', () => { redgifs?.cancel(id); reddit?.cancel(id); void videoAttachments?.cancel(id); void mediaSources?.cancel(id); });
     const record = { account, window, badge: 0, stateTimer: undefined,
         embedPlugins: setupEmbedPlugins(contents),
         // LOWCORD_FAST_SLEEP counts sleep delays in seconds for manual testing.
@@ -372,6 +390,42 @@ async function createDiscordWindow(account) {
     });
     contents.on('will-attach-webview', event => event.preventDefault());
     contents.on('context-menu', async (_event, params) => {
+        // Embedded players live in their own frames, outside the chat hover
+        // control's DOM. A native user action can request PiP in that frame
+        // without exposing Lowcord's bridge to third-party content.
+        if (params.mediaType === 'video' && params.frame && trusted(params.pageURL)) {
+            const frame = params.frame;
+            try {
+                const embedded = frame !== contents.mainFrame;
+                // Timeline actions join Discord's existing message menu.
+                if (!embedded && (!Number.isInteger(params.x) || !Number.isInteger(params.y)
+                    || !await contents.executeJavaScript(`Boolean(document.elementFromPoint(${params.x}, ${params.y})?.closest('[role="dialog"]'))`))) return;
+                const enabled = await contents.executeJavaScript('window.Lowcord?.extensions.state || {}');
+                if (contents.isDestroyed() || contents.getURL() !== params.pageURL || frame.detached) return;
+                const items = [];
+                const source = mediaDownloadUrl(params.srcURL);
+                if (enabled.downloadVideos && source) items.push({ label: 'Download video…', click: () => {
+                    if (!contents.isDestroyed()) contents.downloadURL(source);
+                } });
+                if (embedded && enabled.pictureInPicture) items.push({ label: params.mediaFlags.isShowingPictureInPicture ? 'Exit picture-in-picture' : 'Picture-in-picture',
+                    click: () => {
+                        if (contents.isDestroyed() || frame.detached) return;
+                        void frame.executeJavaScript(`(async () => {
+                            if (document.pictureInPictureElement) { await document.exitPictureInPicture(); return; }
+                            const source = ${JSON.stringify(params.srcURL)};
+                            const video = [...document.querySelectorAll('video')].find(video => video.currentSrc === source || video.src === source);
+                            if (!video || !video.videoWidth) return;
+                            const disabled = video.disablePictureInPicture;
+                            const restore = () => { video.removeEventListener('leavepictureinpicture', restore); video.disablePictureInPicture = disabled; };
+                            video.addEventListener('leavepictureinpicture', restore, { once: true });
+                            video.disablePictureInPicture = false;
+                            try { await video.requestPictureInPicture(); } catch (error) { restore(); throw error; }
+                        })()`, true).catch(error => console.error('[lowcord] Embedded picture-in-picture:', error.message));
+                    } });
+                if (items.length) Menu.buildFromTemplate(items).popup({ window });
+            } catch (error) { if (!contents.isDestroyed()) console.error('[lowcord] Embedded video menu:', error.message); }
+            return;
+        }
         // Discord handles its own menus; Electron has no default one for text,
         // so text fields and selections get a native edit menu.
         if ((params.isEditable || params.selectionText) && params.frame === contents.mainFrame && trusted(params.pageURL)) {
@@ -430,6 +484,9 @@ async function createDiscordWindow(account) {
     });
     window.on('closed', () => {
         redgifs?.cancel(id);
+        reddit?.cancel(id);
+        void videoAttachments?.cancel(id);
+        void mediaSources?.cancel(id);
         clearTimeout(record.stateTimer);
         discordWindows.delete(id);
         if (window === mainWindow) mainWindow = null;
@@ -462,6 +519,12 @@ function registerIpc() {
     });
     ipcMain.handle('lowcord:log', (event, message) => { assertSender(event); return backend.call('log', { message }); });
     ipcMain.handle('lowcord:open-external', (event, url) => { assertSender(event); return backend.call('open_external', { url }); });
+    ipcMain.handle('lowcord:download-media', (event, value) => {
+        assertSender(event);
+        const url = mediaDownloadUrl(value);
+        if (!url) throw new Error('This video does not expose a downloadable media file.');
+        event.sender.downloadURL(url);
+    });
     ipcMain.handle('lowcord:embed-preferences', (event, settings) => { assertSender(event).embedPlugins.set(settings); });
     ipcMain.handle('lowcord:background', (event, settings) => {
         const { background } = assertSender(event);
@@ -543,6 +606,33 @@ function registerIpc() {
         catch (error) { return { error: error.code ?? 'failed' }; }
     });
     ipcMain.handle('lowcord:redgifs-release', (event, handle) => { assertSender(event); return redgifs.release(event.sender.id, handle); });
+    ipcMain.handle('lowcord:reddit', async (event, action, ...args) => {
+        const record = assertSender(event);
+        if (!['account', 'login', 'logout', 'search', 'prepare', 'resolve', 'cancel', 'release'].includes(action)) return { error: 'invalid-action' };
+        try {
+            if (action === 'login') return { account: await redditLogin(record.window) };
+            if (action === 'logout') { await redditSession().clearStorageData(); reddit.signedOut(); return { account: null }; }
+            if (action === 'account') return { account: await reddit.account() };
+            return await reddit[action](event.sender.id, ...args) ?? null;
+        } catch (error) { return { error: error.code ?? 'failed' }; }
+    });
+    ipcMain.handle('lowcord:video-compression', async (event, action, ...args) => {
+        assertSender(event);
+        if (!['begin', 'append', 'finish', 'read', 'cancel'].includes(action)) return { error: 'invalid-action' };
+        try { return await videoAttachments[action](event.sender.id, ...args); }
+        catch (error) { return { error: error.code ?? 'failed' }; }
+    });
+    ipcMain.handle('lowcord:media-sources',async(event,action,...args)=>{
+        const record=assertSender(event);
+        try{
+            if(action==='open')return await mediaSources.open(event.sender,record.account.id,args[0]);
+            if(action==='command')return await mediaSources.command(event.sender.id,...args);
+            if(action==='read')return await mediaSources.read(event.sender.id,...args);
+            if(action==='release')return await mediaSources.release(event.sender.id,...args);
+            if(action==='close')return await mediaSources.cancel(event.sender.id);
+            return {error:'Unknown media source action'};
+        }catch(error){return {error:error.code||error.message||'Couldn’t open media sources'};}
+    });
     // Chat screenshots. The page captures only its own window, one visible
     // screenful at a time; files are written only where the user picks.
     ipcMain.handle('lowcord:capture-region', async (event, rect) => {
@@ -624,6 +714,44 @@ function registerIpc() {
     });
 }
 
+// Reddit has a session of its own: its cookies never mix with Discord's, and
+// signing out clears only this partition. Nothing here loads at startup.
+let redditSessionValue, redditLoginWindow, redditLoginWork;
+function redditSession() {
+    if (redditSessionValue) return redditSessionValue;
+    const ses = redditSessionValue = session.fromPartition('persist:orbitcord-reddit');
+    ses.setUserAgent(ses.getUserAgent().replace(/\s(?:Electron|Lowcord|Datcord|OrbitCord)\/[\w.-]+/gi, ''));
+    ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    ses.setPermissionCheckHandler(() => false);
+    return ses;
+}
+function redditLogin(parent) {
+    if (redditLoginWindow && !redditLoginWindow.isDestroyed()) { redditLoginWindow.focus(); return redditLoginWork; }
+    const ses = redditSession();
+    const window = redditLoginWindow = new BrowserWindow({ parent, width: 460, height: 720, minWidth: 360, minHeight: 480,
+        title: 'Log in to Reddit', autoHideMenuBar: true, backgroundColor: '#0e1113',
+        webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true } });
+    const https = url => { try { return new URL(url).protocol === 'https:'; } catch { return false; } };
+    // Sign in with Google or Apple opens a popup in this same session.
+    window.webContents.setWindowOpenHandler(({ url }) => https(url)
+        ? { action: 'allow', overrideBrowserWindowOptions: { parent: window, autoHideMenuBar: true } } : { action: 'deny' });
+    window.webContents.on('will-navigate', event => { if (!https(event.url)) event.preventDefault(); });
+    const signedIn = async () => (await ses.cookies.get({ name: 'reddit_session' }).catch(() => []))
+        .some(cookie => /(?:^|\.)reddit\.com$/.test(cookie.domain.replace(/^\./, '')));
+    const changed = (_event, cookie, _cause, removed) => {
+        if (!removed && cookie.name === 'reddit_session' && !window.isDestroyed()) window.close();
+    };
+    ses.cookies.on('changed', changed);
+    window.webContents.on('did-navigate', async () => { if (await signedIn() && !window.isDestroyed()) window.close(); });
+    redditLoginWork = new Promise(resolve => window.once('closed', () => {
+        ses.cookies.removeListener('changed', changed);
+        redditLoginWindow = undefined;
+        resolve(reddit.account(true).catch(() => null));
+    }));
+    void window.loadURL('https://www.reddit.com/login/');
+    return redditLoginWork;
+}
+
 async function start() {
     if (!testing) await migrateProfile(app.getPath('sessionData'));
     backend = new NativeBackend(app.isPackaged ? join(process.resourcesPath, 'native', `lowcord-native${process.platform === 'win32' ? '.exe' : ''}`)
@@ -631,6 +759,18 @@ async function start() {
     socialResolver = createSocialResolver();
     socialPosts = createSocialPosts();
     redgifs = createRedgifs();
+    reddit = createReddit({ fetchAccount: (url, init) => redditSession().fetch(url, { ...init, credentials: 'include' }) });
+    videoAttachments = createVideoAttachments();
+    const sourceFixture=testing&&process.env.LOWCORD_TEST_MEDIA_SOURCES==='1';
+    mediaSources=createMediaSources({
+        storageFile:join(userData,'media-source-pages.json'),
+        ...(sourceFixture?{
+            sources:MEDIA_SOURCES.map(source=>({...source,home:`${testURL.origin}/source-browser?source=${source.id}`})),
+            allowNavigation:(_source,value)=>{try{return new URL(value).origin===testURL.origin;}catch{return false;}},
+            files:createSourceFiles({validateURL:async value=>{if(new URL(value).origin!==testURL.origin)throw new Error('Invalid fixture URL');return value;}}),
+        }:{}),
+        onEvent:(owner,value)=>{if(!owner.isDestroyed()&&trusted(owner.getURL()))owner.send('lowcord:media-source',value);},
+    });
     if (testing && process.env.LOWCORD_TEST_UPDATER === '1') updates.initialize();
     registerIpc();
     Menu.setApplicationMenu(appMenu());
@@ -665,6 +805,9 @@ else {
         void saveAllStates().catch(console.error).finally(async () => {
             await socialPosts?.close().catch(console.error);
             await redgifs?.close().catch(console.error);
+            await reddit?.close().catch(console.error);
+            await videoAttachments?.close().catch(console.error);
+            await mediaSources?.close().catch(console.error);
             finished = true; backend?.close(); app.quit();
         });
     });

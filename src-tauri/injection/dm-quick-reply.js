@@ -26,6 +26,18 @@
     const listSelector = 'ul[aria-label="Direct Messages"]';
 
     const store = name => window.Lowcord.store(name);
+    // Discord module lookups scan its whole module cache, so a found module is
+    // kept, and one that isn't loaded yet is looked for again at most every few
+    // seconds rather than for every bubble.
+    const lookups = new Map();
+    function lookup(key, filter) {
+        const entry = lookups.get(key);
+        if (entry?.value) return entry.value;
+        if (entry && Date.now() - entry.at < 5000) return null;
+        const value = window.Lowcord.find(filter) ?? null;
+        lookups.set(key, { value, at: Date.now() });
+        return value;
+    }
     const svg = (path, size) => {
         const node = document.createElementNS("http://www.w3.org/2000/svg", "svg");
         node.setAttribute("viewBox", "0 0 24 24"); node.setAttribute("width", size); node.setAttribute("height", size);
@@ -35,7 +47,7 @@
     };
     const iconButton = (label, path, onClick, size = 20) =>
         ui("button", { type: "button", className: "lowcord-dm-icon", "aria-label": label, title: label, onClick }, svg(path, size));
-    const messageActions = () => window.Lowcord.find(window.Lowcord.filters.byProps("sendMessage", "editMessage", "getSendMessageOptionsForReply"));
+    const messageActions = () => lookup("actions", window.Lowcord.filters.byProps("sendMessage", "editMessage", "getSendMessageOptionsForReply"));
 
     // ----- Data ---------------------------------------------------------------
     // Names as Discord's DM list shows them: your nickname for a friend first,
@@ -93,7 +105,7 @@
         if (forwarded) text = `Forwarded${text ? `: ${text}` : ""}`;
         // The original markup is kept for Discord's own renderer.
         const content = source.content?.trim() ? source.content : null;
-        return { id: message.id, channelId: message.channel_id ?? message.channelId, authorId: message.author?.id,
+        return { raw: message, id: message.id, channelId: message.channel_id ?? message.channelId, authorId: message.author?.id,
             author: userName(message.author), text, content, forwarded: Boolean(forwarded), media, timestamp: new Date(message.timestamp) };
     }
     // Default (0) and reply (19) messages; joins, calls and pins are skipped.
@@ -111,7 +123,8 @@
     const fetched = new Map(), inflight = new Map();
     function loaded(channelId) {
         const cached = store("MessageStore")?.getMessages?.(channelId);
-        if (cached?.ready && cached._array?.length) return cached._array.filter(shown).slice(-previewCount).map(normal);
+        // A chat scrolled back into its history holds older messages; only its newest page is used.
+        if (cached?.ready && !cached.hasMoreAfter && cached._array?.length) return cached._array.filter(shown).slice(-previewCount).map(normal);
         const recent = fetched.get(channelId);
         return recent && Date.now() - recent.at < timing.cache ? recent.messages : null;
     }
@@ -143,8 +156,10 @@
     // mentions, links, spoilers and formatting look as they do in the chat.
     // Each bubble gets a small React root, unmounted on the next render.
     let textRoots = [];
-    const markdown = () => window.Lowcord.find(value => typeof value?.parse === "function" && typeof value?.parseTopic === "function");
-    const markupClass = () => window.Lowcord.find(value => typeof value?.markup === "string" && typeof value?.inlineFormat === "string")?.markup ?? "";
+    const markdown = () => lookup("markdown", value => typeof value?.parse === "function" && typeof value?.parseTopic === "function");
+    const markupClass = () => lookup("markup", value => typeof value?.markup === "string" && typeof value?.inlineFormat === "string")?.markup ?? "";
+    // Rendering synchronously keeps a bubble from showing up empty for a frame.
+    const reactDom = () => lookup("reactDom", value => typeof value?.flushSync === "function" && typeof value?.createPortal === "function");
     function unmountText() {
         for (const root of textRoots) { try { root.unmount(); } catch {} }
         textRoots = [];
@@ -157,8 +172,10 @@
             const nodes = parser.parse(message.content, true, { channelId: message.channelId ?? card.channelId, messageId: message.id,
                 allowLinks: true, allowEmojiLinks: false });
             const root = createRoot(node);
-            root.render(React.createElement(React.Fragment, null,
+            const draw = () => root.render(React.createElement(React.Fragment, null,
                 message.forwarded ? React.createElement("span", { className: "lowcord-dm-forwarded" }, "Forwarded") : null, nodes));
+            const flushSync = reactDom()?.flushSync;
+            if (flushSync) flushSync(draw); else draw();
             textRoots.push(root);
             return true;
         } catch (error) {
@@ -166,13 +183,15 @@
             return false;
         }
     }
-    function messageNodes(message, self, cluster) {
+    function messageNodes(message, self, cluster, markup) {
         const select = event => {
-            // Links, spoilers and mentions inside a bubble keep their own clicks.
+            // Links, spoilers and mentions inside a bubble keep their own clicks,
+            // and selecting text to copy it doesn't pick the message.
             if (event.target.closest?.("a, [role=button]:not(.lowcord-dm-bubble):not(.lowcord-dm-media), [class*=spoiler]")) return;
+            if (String(window.getSelection?.() ?? "").trim() && event.currentTarget.contains(window.getSelection().anchorNode)) return;
             setTarget(card.target?.id === message.id ? null : message);
         };
-        const props = { "data-self": String(message.authorId === self), "data-cluster": cluster, role: "button", tabindex: "0",
+        const props = { "data-id": message.id, "data-self": String(message.authorId === self), "data-cluster": cluster, role: "button", tabindex: "0",
             title: `${message.author}, ${when(message.timestamp)}. Click to reply.`, onClick: select,
             onKeyDown: event => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); select(event); } } };
         const pressed = card.target?.id === message.id ? { "aria-pressed": "true" } : {};
@@ -183,7 +202,7 @@
                 ui("img", { src: item.src, alt: "", loading: "lazy", decoding: "async", draggable: "false" })))));
         if (message.text) {
             const emoji = emojiOnly(message.content ?? message.text);
-            const bubble = ui("div", { className: `lowcord-dm-bubble ${markupClass()}`.trim(), ...props, ...pressed, ...(emoji ? { "data-emoji": "true" } : {}) });
+            const bubble = ui("div", { className: `lowcord-dm-bubble ${markup}`.trim(), ...props, ...pressed, ...(emoji ? { "data-emoji": "true" } : {}) });
             const text = ui("span", { className: "lowcord-dm-text" });
             bubble.append(text);
             if (!richText(text, message)) text.textContent = message.text;
@@ -196,6 +215,7 @@
         const self = store("UserStore")?.getCurrentUser?.()?.id;
         const { list, subtitle } = built.parts;
         const { messages } = card;
+        const markup = markupClass();
         unmountText();
         subtitle.textContent = messages?.length ? `Last message ${when(messages[messages.length - 1].timestamp)}` : "";
         list.dataset.state = card.error ? "error" : !messages ? "loading" : messages.length ? "ready" : "empty";
@@ -209,7 +229,7 @@
             // the corners they share are tightened.
             const before = messages[index - 1]?.authorId === message.authorId;
             const after = messages[index + 1]?.authorId === message.authorId;
-            return messageNodes(message, self, before ? (after ? "middle" : "end") : (after ? "start" : "single"));
+            return messageNodes(message, self, before ? (after ? "middle" : "end") : (after ? "start" : "single"), markup);
         }));
         // Discord's renderer and images fill the bubbles a little later; the
         // list stays at the newest message unless you've scrolled up.
@@ -223,7 +243,10 @@
         card.target = message;
         built.parts.target.hidden = !message;
         built.parts.targetText.textContent = message ? `Replying to ${message.author}` : "";
-        render(); position();
+        for (const node of built.parts.list.querySelectorAll("[data-id]")) {
+            if (message && node.dataset.id === message.id) node.setAttribute("aria-pressed", "true"); else node.removeAttribute("aria-pressed");
+        }
+        position();
         built.parts.input.focus();
     }
     // The card sits just past the DM list, its header level with the hovered row.
@@ -236,15 +259,52 @@
         node.style.left = `${Math.round(edge + 8)}px`;
         node.style.top = `${Math.round(Math.max(8, Math.min(top, innerHeight - node.offsetHeight - 8)))}px`;
     }
+    // Kept up to date while Discord runs, so a cached preview never misses a
+    // message, an edit or a deletion; the open card updates in place.
     function received({ message, channelId }) {
         if (!shown(message ?? {})) return;
         fetched.delete(channelId);
-        if (!card || channelId !== card.channelId || !card.messages) return;
+        if (card?.channelId !== channelId) return;
+        // Arriving while the card loads: added once the load finishes.
+        if (!card.messages) { card.early.push(message); return; }
         // Discord's own optimistic copy has the nonce as its id; the server copy replaces it.
         const index = card.messages.findIndex(item => item.id === message.id || (message.nonce && item.id === message.nonce));
         const item = normal(message);
         if (index >= 0) card.messages[index] = item; else card.messages = [...card.messages, item].slice(-previewCount);
         render();
+    }
+    function edited({ message }) {
+        const channelId = message?.channel_id;
+        if (!channelId) return;
+        fetched.delete(channelId);
+        const index = card?.channelId === channelId ? card.messages?.findIndex(item => item.id === message.id) ?? -1 : -1;
+        if (index < 0) return;
+        card.messages[index] = normal({ ...card.messages[index].raw, ...message });
+        render();
+    }
+    function deleted({ id, ids, channelId }) {
+        if (!channelId) return;
+        fetched.delete(channelId);
+        const gone = new Set(ids ?? [id]);
+        if (card?.channelId !== channelId || !card.messages?.some(item => gone.has(item.id))) return;
+        card.messages = card.messages.filter(item => !gone.has(item.id));
+        render();
+    }
+    let subscribed = false;
+    function subscribe() {
+        const dispatcher = window.Lowcord.Dispatcher;
+        if (subscribed || !dispatcher) return;
+        subscribed = true;
+        dispatcher.subscribe("MESSAGE_CREATE", received);
+        dispatcher.subscribe("MESSAGE_UPDATE", edited);
+        dispatcher.subscribe("MESSAGE_DELETE", deleted);
+        dispatcher.subscribe("MESSAGE_DELETE_BULK", deleted);
+    }
+    function withEarly(messages) {
+        let merged = messages;
+        for (const message of card.early) if (!merged.some(item => item.id === message.id || item.id === message.nonce)) merged = [...merged, normal(message)];
+        card.early = [];
+        return merged.slice(-previewCount);
     }
 
     // ----- Emoji ----------------------------------------------------------------
@@ -253,11 +313,11 @@
     // component, which is rendered here for chat messages instead.
     const source = value => { try { return Function.prototype.toString.call(value); } catch { return ""; } };
     function emojiPicker() {
-        const wrapper = window.Lowcord.find(value => typeof value === "function" && source(value).length < 600
+        const wrapper = lookup("reactionPicker", value => typeof value === "function" && source(value).length < 600
             && /pickerIntention:\w+\.EmojiIntention\.REACTION/.test(source(value)));
         let component;
         try { component = wrapper?.({})?.type; } catch {}
-        const intents = window.Lowcord.find(value => value?.EmojiIntention?.CHAT !== undefined)?.EmojiIntention;
+        const intents = lookup("emojiIntents", value => value?.EmojiIntention?.CHAT !== undefined)?.EmojiIntention;
         return component && intents ? { component, intent: intents.CHAT } : null;
     }
     // Discord's emoji button: a grey face that turns into a random coloured one on hover.
@@ -529,7 +589,8 @@
         if (switching) forgetFiles(card.files); else close(true);
         built ??= build();
         const { parts, node } = built;
-        card = { channelId, row, messages: loaded(channelId), error: false, target: null, files: [], picking: false, sending: false };
+        subscribe();
+        card = { channelId, row, messages: loaded(channelId), early: [], error: false, target: null, files: [], picking: false, sending: false };
         parts.title.textContent = info.name;
         const image = row.querySelector("img");
         parts.avatar.hidden = !image?.src;
@@ -552,7 +613,7 @@
             document.body.append(node);
             document.addEventListener("pointerdown", outside, true);
             document.addEventListener("scroll", scrolled, true);
-            window.Lowcord.Dispatcher?.subscribe("MESSAGE_CREATE", received);
+            window.addEventListener("resize", resized);
         }
         // Messages already loaded or prefetched render in the same frame the card opens.
         render(); position();
@@ -560,7 +621,7 @@
         const current = card;
         latest(channelId).then(messages => {
             if (card !== current) return;
-            card.messages = messages; render();
+            card.messages = withEarly(messages); render();
         }, failure => {
             console.warn("[lowcord] DM quick reply:", failure);
             if (card === current) { card.error = true; render(); }
@@ -579,7 +640,7 @@
         }
         document.removeEventListener("pointerdown", outside, true);
         document.removeEventListener("scroll", scrolled, true);
-        window.Lowcord.Dispatcher?.unsubscribe("MESSAGE_CREATE", received);
+        window.removeEventListener("resize", resized);
         if (node.contains(document.activeElement)) document.activeElement.blur();
         const remove = () => {
             unmountText(); built.sizes?.disconnect(); node.remove(); parts.list.replaceChildren(); parts.tray.replaceChildren();
@@ -597,9 +658,16 @@
     function outside(event) {
         if (card && !inCard(event.target)) close(!card.row.contains(event.target));
     }
+    // Only scrolling the DM list moves the row away from the card; other
+    // scrolling, such as the open chat receiving a message, leaves it be.
     function scrolled(event) {
-        if (!card || inCard(event.target)) return;
-        if (engaged()) position(); else close(true);
+        if (!card || inCard(event.target) || !(event.target instanceof Node) || !event.target.contains(card.row)) return;
+        if (engaged()) { position(); if (pickerOpen()) placePicker(); } else close(true);
+    }
+    function resized() {
+        if (!card) return;
+        position();
+        if (pickerOpen()) placePicker();
     }
 
     // ----- Hover intent ---------------------------------------------------------
@@ -622,7 +690,12 @@
         if (engaged()) return;
         cancelPending();
         const delay = card ? timing.switch : timing.open;
-        if (delay > timing.prefetch) prefetchTimer = setTimeout(() => { prefetchTimer = undefined; latest(hit.id).catch(() => {}); }, timing.prefetch);
+        if (delay > timing.prefetch) prefetchTimer = setTimeout(() => {
+            prefetchTimer = undefined;
+            // The first open's one-time module lookups happen here, before the card shows.
+            markdown(); reactDom(); markupClass(); messageActions();
+            latest(hit.id).catch(() => {});
+        }, timing.prefetch);
         openTimer = setTimeout(() => {
             openTimer = undefined;
             if (hit.row.isConnected && hit.row.matches(":hover")) open(hit.id, hit.row);

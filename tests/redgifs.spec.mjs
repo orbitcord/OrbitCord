@@ -33,6 +33,7 @@ test.beforeEach(async ({ page }) => {
                 fixture.searches.push({ query, page, ...options });
                 if (fixture.slowQuery === query) await new Promise(resolve => { fixture.searchDone = resolve; });
                 if (fixture.searchError) return { error: 'rate-limited' };
+                if (options.mode === 'creators' && !options.creator) return { creators: [{ id: 'neutral_creator', name: 'Neutral Creator', videos: 12, followers: 34, verified: true }], more: page < 2 };
                 if (options.mode === 'niches') return { niches: [{ id: 'neutral-animation', name: 'Neutral animation', videos: 128, subscribers: 2400 },
                     { id: 'neutral-art', name: 'Neutral art', videos: 32, subscribers: 400 }], more: false };
                 return { items: Array.from({ length: fixture.count || 3 }, (_, index) => ({ id: `${query || 'feed'}${page}${index}`, key: `key${page}${index}`,
@@ -196,7 +197,7 @@ test('topic search submits on Enter; niche search opens its videos and returns t
     await expect(page.getByRole('button', { name: /Send video by/ })).toHaveCount(3);
     await page.getByRole('button', { name: 'Load more' }).click();
     await expect(page.getByRole('button', { name: /Send video by/ })).toHaveCount(6);
-    expect(await page.evaluate(() => redgifsFixture.searches.at(-1))).toEqual({ query: 'animation', page: 2, mode: 'videos', nicheId: 'neutral-animation' });
+    expect(await page.evaluate(() => redgifsFixture.searches.at(-1))).toEqual({ query: '', page: 2, mode: 'videos', nicheId: 'neutral-animation' });
     await page.getByRole('button', { name: 'Back to niches' }).click();
     await expect(page.getByRole('button', { name: /Browse niche/ })).toHaveCount(2);
     await expect(page.getByRole('button', { name: 'Back to niches' })).toBeHidden();
@@ -218,6 +219,126 @@ test('picker stays 16px from window bottom-right across composer movement and re
     await expect(tile(page)).toBeVisible();
 });
 
+async function dragPickerControl(page, name, dx, dy) {
+    const box = await page.getByRole('button', { name, exact: true }).boundingBox();
+    const x = box.x + box.width / 2, y = box.y + box.height / 2;
+    await page.mouse.move(x, y); await page.mouse.down();
+    await page.mouse.move(x + dx, y + dy, { steps: 5 }); await page.mouse.up();
+}
+
+test('picker drag and resize persist, preserve chat drafts and reset without changing saved media', async ({ page }) => {
+    await open(page);
+    const picker = page.getByRole('dialog', { name: 'RedGIFs picker', exact: true });
+    const before = await picker.boundingBox();
+    await dragPickerControl(page, 'Move RedGIFs picker', -400, -40);
+    await expect.poll(async () => (await picker.boundingBox()).x).toBe(before.x - 400);
+    expect((await picker.boundingBox()).y).toBe(before.y - 40);
+    await dragPickerControl(page, 'Resize RedGIFs picker', 60, 40);
+    await expect.poll(async () => (await picker.boundingBox()).width).toBe(480);
+    const moved = await picker.boundingBox();
+    expect(moved.height).toBe(720);
+    expect(await page.evaluate(() => redgifsFixture.posts)).toEqual([]);
+    await expect(page.getByRole('textbox', { name: 'Message composer' })).toHaveText('draft stays here');
+    const stored = await page.evaluate(() => JSON.parse(Lowcord.storage.getItem('lowcord.redgifs.layout.v1')));
+    expect(stored).toEqual({ x: moved.x, y: moved.y, width: moved.width, height: moved.height });
+    await page.getByRole('button', { name: 'Close RedGIFs', exact: true }).click();
+    await open(page);
+    expect(await picker.boundingBox()).toEqual(moved);
+    await page.getByRole('button', { name: 'Picker options', exact: true }).click();
+    await page.getByRole('button', { name: 'Reset picker size and position', exact: true }).click();
+    await expect.poll(async () => (await picker.boundingBox()).width).toBe(420);
+    expect(await page.evaluate(() => Lowcord.storage.getItem('lowcord.redgifs.layout.v1'))).toBeNull();
+});
+
+test('collapse releases previews, retains browsing state and lets an active upload finish', async ({ page }) => {
+    await page.evaluate(() => { redgifsFixture.slowUpload = true; });
+    await open(page);
+    await page.getByRole('tab', { name: 'Explore', exact: true }).click();
+    await page.getByRole('searchbox').fill('forest');
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await tile(page).click();
+    await expect.poll(() => page.evaluate(() => Boolean(redgifsFixture.uploadDone))).toBe(true);
+    await page.getByRole('button', { name: 'Send video by fixture11', exact: true }).hover();
+    await expect(page.locator('.lowcord-redgifs video')).toHaveCount(1);
+    await page.getByRole('button', { name: 'Collapse RedGIFs picker', exact: true }).click();
+    const picker = page.getByRole('dialog', { name: 'RedGIFs picker', exact: true });
+    expect((await picker.boundingBox()).height).toBe(44);
+    expect((await picker.boundingBox()).width).toBe(220);
+    await expect(page.getByRole('searchbox')).toHaveCount(0);
+    await expect(page.locator('.lowcord-redgifs video')).toHaveCount(0);
+    expect(await page.evaluate(() => Lowcord.redgifs.busy())).toBe(true);
+    await page.getByRole('textbox', { name: 'Message composer' }).fill('Still typing while browsing is collapsed');
+    await page.evaluate(() => redgifsFixture.uploadDone());
+    await expect.poll(() => page.evaluate(() => redgifsFixture.posts.length)).toBe(1);
+    await page.getByRole('button', { name: 'Restore RedGIFs picker', exact: true }).click();
+    await expect(page.getByRole('searchbox')).toHaveValue('forest');
+    await expect(page.getByRole('tab', { name: 'Explore', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('textbox', { name: 'Message composer' })).toHaveText('Still typing while browsing is collapsed');
+});
+
+test('keyboard movement and resize remain reachable after window shrink and cancelled drags revert', async ({ page }) => {
+    await open(page);
+    const picker = page.getByRole('dialog', { name: 'RedGIFs picker', exact: true });
+    const move = page.getByRole('button', { name: 'Move RedGIFs picker', exact: true });
+    await move.press('Shift+ArrowLeft'); await move.press('ArrowUp');
+    expect((await picker.boundingBox()).x).toBe(524);
+    await page.getByRole('button', { name: 'Resize RedGIFs picker', exact: true }).press('ArrowLeft');
+    expect((await picker.boundingBox()).width).toBe(410);
+    const before = await picker.boundingBox(), grip = await move.boundingBox();
+    await page.mouse.move(grip.x + 8, grip.y + 8); await page.mouse.down();
+    await page.mouse.move(grip.x - 90, grip.y + 50);
+    await page.keyboard.press('Escape'); await page.mouse.up();
+    expect(await picker.boundingBox()).toEqual(before);
+    await expect(picker).not.toHaveAttribute('data-gesture');
+    await page.setViewportSize({ width: 360, height: 520 });
+    const small = await picker.boundingBox();
+    expect(small.x).toBeGreaterThanOrEqual(16); expect(small.y).toBeGreaterThanOrEqual(16);
+    expect(small.x + small.width).toBeLessThanOrEqual(344);
+    expect(small.y + small.height).toBeLessThanOrEqual(504);
+    await page.getByRole('button', { name: 'Collapse RedGIFs picker', exact: true }).click();
+    await move.press('Shift+ArrowRight'); await move.press('Shift+ArrowDown');
+    const collapsed = await picker.boundingBox();
+    expect(collapsed.x + collapsed.width).toBeLessThanOrEqual(344);
+    expect(collapsed.y + collapsed.height).toBeLessThanOrEqual(504);
+    await page.getByRole('button', { name: 'Restore RedGIFs picker', exact: true }).click();
+    await page.setViewportSize({ width: 1000, height: 800 });
+    await move.press('Home');
+    expect(await picker.boundingBox()).toEqual({ x: 564, y: 104, width: 420, height: 680 });
+});
+
+test('movable creator picker matches the selected floating layout and retains its grid after resizing', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.evaluate(() => {
+        const search = __LOWCORD_NATIVE__.redgifsSearch;
+        __LOWCORD_NATIVE__.redgifsSearch = async (query, page, options) => options.mode === 'creators' && !options.creator
+            ? { creators: ['wildframes', 'coastalnotes', 'trailandlight', 'foresthour', 'skyarchive', 'riverfilms', 'tinywild', 'nordicviews', 'mossandstone', 'oceanloops', 'goldenhour', 'fieldnotes']
+                .map((id, index) => ({ id, name: id, followers: 1200 + index * 54, videos: 86 + index, verified: false })), more: false }
+            : search(query, page, options);
+        const scene = document.createElement('div');
+        scene.style = 'position:absolute;inset:0;z-index:-1;display:flex;font:14px system-ui';
+        scene.innerHTML = '<aside style="width:200px;padding:20px;background:#202024"><strong>Weekend Club</strong><p># general</p><p># trail-plans</p><p># photos</p></aside><div style="flex:1;padding:30px 30px 80px 200px"><h3># general</h3><p><strong>Nora</strong></p><p>Finally picked a hike for this weekend! The views at the top look incredible.</p><p><strong>Alex</strong></p><p>That looks amazing! Want to meet at the trailhead around eight?</p></div>';
+        document.body.append(scene);
+    });
+    await open(page);
+    await page.getByRole('tab', { name: 'Creators', exact: true }).click();
+    await dragPickerControl(page, 'Move RedGIFs picker', -540, 16);
+    await dragPickerControl(page, 'Resize RedGIFs picker', -60, -100);
+    const picker = page.getByRole('dialog', { name: 'RedGIFs picker', exact: true });
+    await expect.poll(async () => (await picker.boundingBox()).height).toBe(580);
+    expect((await picker.boundingBox()).width).toBe(360);
+    const rows = await page.locator('.lowcord-redgifs-creator').evaluateAll(items => items.slice(0, 3).map(item => item.getBoundingClientRect().y));
+    expect(rows[0]).toBe(rows[1]); expect(rows[2]).toBeGreaterThan(rows[0]);
+    await page.screenshot({ path: '/tmp/lowcord-redgifs-movable.png' });
+    await picker.screenshot({ path: '/tmp/lowcord-redgifs-movable-panel.png' });
+    await page.getByRole('button', { name: 'Collapse RedGIFs picker', exact: true }).click();
+    await page.screenshot({ path: '/tmp/lowcord-redgifs-collapsed.png' });
+    await page.getByRole('button', { name: 'Restore RedGIFs picker', exact: true }).click();
+    await page.setViewportSize({ width: 360, height: 520 });
+    await picker.screenshot({ path: '/tmp/lowcord-redgifs-movable-narrow.png' });
+    expect(errors).toEqual([]);
+});
+
 test('late topic response cannot overwrite a newer search or niche mode', async ({ page }) => {
     await open(page);
     await page.evaluate(() => { redgifsFixture.slowQuery = 'old topic'; });
@@ -228,7 +349,8 @@ test('late topic response cannot overwrite a newer search or niche mode', async 
     await page.getByRole('tab', { name: 'Niches', exact: true }).click();
     await expect(page.getByRole('button', { name: /Browse niche/ })).toHaveCount(2);
     await page.evaluate(() => redgifsFixture.searchDone());
-    await expect(page.locator('.lowcord-redgifs-heading')).toHaveText('Niches for new topic');
+    await expect(page.locator('.lowcord-redgifs-heading')).toHaveText('Popular niches');
+    await expect(page.getByRole('searchbox')).toHaveValue('');
     await expect(page.getByRole('button', { name: /Send video by/ })).toHaveCount(0);
 });
 
@@ -492,6 +614,171 @@ test('favorites store only IDs/basic metadata and refresh media when opened; nic
     await expect(page.locator('.lowcord-redgifs-heading')).toHaveText('Neutral animation');
 });
 
+test('favorites, pinned niches and background preference persist after Discord deletes localStorage', async ({ page }) => {
+    await open(page);
+    await page.evaluate(() => {
+        redgifsFixture.toasts = [];
+        Lowcord.extensions.toast = (...args) => redgifsFixture.toasts.push(args);
+        delete window.localStorage;
+    });
+    await page.getByRole('button', { name: 'Save favorite fixture10', exact: true }).click();
+    await page.getByRole('tab', { name: 'Niches', exact: true }).click();
+    await page.getByRole('button', { name: 'Save pinned niche Neutral animation', exact: true }).click();
+    await page.getByRole('button', { name: 'Picker options', exact: true }).click();
+    await page.getByRole('checkbox', { name: 'Keep uploading when picker closes' }).check();
+    const saved = await page.evaluate(() => JSON.parse(Lowcord.storage.getItem('lowcord.redgifs.saved.v1')));
+    expect(saved).toEqual({ favorites: [{ id: 'feed10', author: 'fixture10' }],
+        niches: [{ id: 'neutral-animation', name: 'Neutral animation' }], background: true });
+    expect(await page.evaluate(() => redgifsFixture.toasts)).toEqual([]);
+});
+
+test('favorites do not inherit topic searches, and removing one updates the collection immediately', async ({ page }) => {
+    await open(page);
+    await page.evaluate(() => {
+        __LOWCORD_NATIVE__.redgifsResolve = async id => ({ id, key: 'fresh', author: 'fixture10', preview: '/media/sample.mp4' });
+    });
+    await page.getByRole('button', { name: 'Save favorite fixture10', exact: true }).click();
+    await page.getByRole('searchbox').fill('animation');
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await page.getByRole('tab', { name: 'Favorites', exact: true }).click();
+    await expect(page.getByRole('searchbox')).toHaveValue('');
+    await expect(tile(page)).toBeVisible();
+    await page.getByRole('button', { name: 'Remove favorite fixture10', exact: true }).click();
+    await expect(page.locator('.lowcord-redgifs-card')).toHaveCount(0);
+    await expect(status(page)).toContainText('No saved videos');
+    await page.getByRole('tab', { name: 'Trending', exact: true }).click();
+    await expect(page.getByRole('searchbox')).toHaveValue('animation');
+});
+
+test('failed favorites stay removable and retryable without hiding healthy favorites', async ({ page }) => {
+    await open(page);
+    await page.getByRole('button', { name: 'Save favorite fixture10', exact: true }).click();
+    await page.getByRole('button', { name: 'Save favorite fixture11', exact: true }).click();
+    await page.evaluate(() => {
+        __LOWCORD_NATIVE__.redgifsResolve = async id => {
+            if (id === 'feed10' && !redgifsFixture.recovered) throw new Error('network failure');
+            return { id, key: 'fresh', author: id === 'feed10' ? 'fixture10' : 'fixture11', preview: '/media/sample.mp4' };
+        };
+    });
+    await page.getByRole('tab', { name: 'Favorites', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Send video by fixture11', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Retry favorite fixture10', exact: true })).toBeVisible();
+    await page.evaluate(() => { redgifsFixture.recovered = true; });
+    await page.getByRole('button', { name: 'Retry favorite fixture10', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Send video by fixture10', exact: true })).toBeVisible();
+});
+
+test('compact creator grid keeps rows aligned through pagination, narrow windows and keyboard browsing', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.evaluate(() => {
+        const search = __LOWCORD_NATIVE__.redgifsSearch;
+        redgifsFixture.creatorPages = 0;
+        __LOWCORD_NATIVE__.redgifsSearch = async (query, page, options) => {
+            if (options.mode !== 'creators' || options.creator) return search(query, page, options);
+            redgifsFixture.creatorPages = page;
+            const names = ['wildframes', 'coastalnotes', 'trailandlight', 'foresthour', 'skyarchive', 'riverfilms', 'tinywild', 'nordicviews', 'mossandstone', 'oceanloops', 'goldenhour', 'fieldnotes', 'cloudwatch', 'pinefilms'];
+            return { creators: Array.from({ length: page === 4 ? 7 : 24 }, (_, index) => {
+                const rank = (page - 1) * 24 + index;
+                const id = names[rank] || (rank === 14 ? 'a_very_long_creator_handle_that_needs_truncation' : `creator${rank}`);
+                return { id, name: id, followers: rank === 14 ? null : 24800 + rank * 123, videos: rank === 14 ? null : 132 + rank, verified: rank % 3 === 0 };
+            }), more: page < 4 };
+        };
+    });
+    await open(page);
+    await page.getByRole('tab', { name: 'Creators', exact: true }).click();
+    await expect(page.locator('.lowcord-redgifs-heading')).toHaveText('Trending creators');
+    const metrics = () => page.locator('.lowcord-redgifs-creators').evaluate(grid => {
+        const boxes = [...grid.querySelectorAll('.lowcord-redgifs-creator')].map(node => node.getBoundingClientRect());
+        const viewport = grid.parentElement.getBoundingClientRect();
+        return { rows: boxes.slice(0, 3).map(box => box.y), height: boxes[0].height,
+            visible: boxes.filter(box => box.top >= viewport.top && box.bottom <= viewport.bottom).length,
+            overflow: grid.scrollWidth > grid.clientWidth || [...grid.querySelectorAll('button')].some(node => node.scrollWidth > node.clientWidth) };
+    });
+    let boxes = await metrics();
+    expect(boxes.rows[0]).toBe(boxes.rows[1]);
+    expect(boxes.rows[2]).toBeGreaterThan(boxes.rows[0]);
+    expect(boxes.height).toBe(72);
+    expect(boxes.visible).toBeGreaterThanOrEqual(12);
+    expect(boxes.overflow).toBe(false);
+    await expect(page.locator('.lowcord-redgifs-monogram').first()).toHaveCSS('width', '28px');
+    await expect(page.getByRole('button', { name: 'Browse creator wildframes', exact: true }).getByRole('img', { name: 'Verified' })).toBeVisible();
+    await page.locator('.lowcord-redgifs').screenshot({ path: '/tmp/lowcord-redgifs-creators-compact.png' });
+    await page.setViewportSize({ width: 360, height: 520 });
+    await expect.poll(async () => (await metrics()).overflow).toBe(false);
+    await page.locator('.lowcord-redgifs').screenshot({ path: '/tmp/lowcord-redgifs-creators-compact-narrow.png' });
+    for (const count of [2, 3, 4]) {
+        await page.locator('.lowcord-redgifs-results').evaluate(node => { node.scrollTop = node.scrollHeight; });
+        await expect.poll(() => page.evaluate(() => redgifsFixture.creatorPages)).toBeGreaterThanOrEqual(count);
+        await expect(page.locator('.lowcord-redgifs-results')).toHaveAttribute('aria-busy', 'false');
+    }
+    await page.locator('.lowcord-redgifs-results').evaluate(node => { node.scrollTop = node.scrollHeight; });
+    await expect(page.getByRole('button', { name: 'Browse creator creator78', exact: true })).toBeVisible();
+    expect(await page.locator('.lowcord-redgifs-creator').count()).toBeLessThan(36);
+    await expect(page.getByRole('button', { name: 'Browse creator wildframes', exact: true })).toHaveCount(0);
+    await page.locator('.lowcord-redgifs-results').evaluate(node => { node.scrollTop = 0; });
+    const first = page.getByRole('button', { name: 'Browse creator wildframes', exact: true });
+    await expect(first).toBeVisible();
+    await first.focus(); await first.press('Enter');
+    await expect(page.locator('.lowcord-redgifs-creators')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Send video by fixture10', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Back to creators', exact: true }).click();
+    await expect(first).toBeVisible();
+    expect(errors).toEqual([]);
+});
+
+test('Explore and Creators browse independently, creator pagination and back navigation retain the search', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await open(page);
+    await page.getByRole('tab', { name: 'Explore', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => redgifsFixture.searches.at(-1))).toEqual({ query: '', page: 1, mode: 'explore' });
+    await tile(page).focus();
+    await expect(tile(page).locator('video')).toHaveCount(1);
+    await page.getByRole('tab', { name: 'Creators', exact: true }).click();
+    await expect(page.locator('.lowcord-redgifs video')).toHaveCount(0);
+    await page.getByRole('searchbox').fill('neutral');
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Browse creator Neutral Creator', exact: true })).toContainText('34 followers');
+    await expect(page.getByRole('button', { name: 'Browse creator Neutral Creator', exact: true })).toContainText('12 videos');
+    await page.screenshot({ path: '/tmp/lowcord-redgifs-creators.png' });
+    await page.getByRole('button', { name: 'Browse creator Neutral Creator', exact: true }).click();
+    await expect(page.getByRole('tab', { name: 'Creators', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(tile(page)).toBeVisible();
+    await page.getByRole('button', { name: 'Load more', exact: true }).click();
+    expect(await page.evaluate(() => redgifsFixture.searches)).toContainEqual({ query: '', page: 2, mode: 'creators', creator: 'neutral_creator' });
+    await page.getByRole('button', { name: 'Back to creators', exact: true }).click();
+    await expect(page.getByRole('searchbox')).toHaveValue('neutral');
+    await expect(page.getByRole('button', { name: 'Browse creator Neutral Creator', exact: true })).toBeVisible();
+    await expect(page.locator('.lowcord-redgifs-star')).toHaveCount(0);
+    await page.getByRole('tab', { name: 'Creators', exact: true }).press('ArrowRight');
+    await expect(page.getByRole('tab', { name: 'Niches', exact: true })).toBeFocused();
+    await page.getByRole('tab', { name: 'Niches', exact: true }).press('End');
+    await expect(page.getByRole('tab', { name: 'Favorites', exact: true })).toBeFocused();
+    await page.getByRole('tab', { name: 'Favorites', exact: true }).press('ArrowRight');
+    await expect(page.getByRole('tab', { name: 'Trending', exact: true })).toBeFocused();
+    expect(errors).toEqual([]);
+});
+
+test('upload queue expands upward with matching chevrons, and tabs fit a narrow window', async ({ page }) => {
+    await open(page);
+    await page.setViewportSize({ width: 360, height: 520 });
+    const layout = await page.getByRole('tablist').evaluate(node => ({ width: node.clientWidth, content: node.scrollWidth }));
+    expect(layout.content).toBeLessThanOrEqual(layout.width);
+    await page.evaluate(() => { redgifsFixture.slowUpload = true; });
+    await tile(page).click();
+    const toggle = page.locator('.lowcord-redgifs-queue-toggle');
+    await expect(toggle).toBeVisible();
+    expect(await toggle.locator('svg').last().evaluate(node => getComputedStyle(node).transform)).toBe('matrix(-1, 0, 0, -1, 0, 0)');
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(await toggle.locator('svg').last().evaluate(node => getComputedStyle(node).transform)).toBe('none');
+    const row = await page.locator('.lowcord-redgifs-queue-list').boundingBox();
+    const bar = await page.locator('.lowcord-redgifs-queue-bar').boundingBox();
+    expect(row.y + row.height).toBeLessThanOrEqual(bar.y);
+    await page.screenshot({ path: '/tmp/lowcord-redgifs-queue-up.png' });
+});
+
 test('near-bottom scrolling fetches one next page and returning to top restores earlier clips', async ({ page }) => {
     await open(page);
     await page.evaluate(() => { redgifsFixture.count = 24; });
@@ -575,7 +862,7 @@ test('compact header, niche controls and collapsed uploads leave most space for 
                 bottom: box.bottom, right: box.right, scrolls: node.scrollHeight > node.clientHeight };
         });
         expect(bounds.header).toBeLessThanOrEqual(32);
-        expect(bounds.fraction).toBeGreaterThan(.77);
+        expect(bounds.fraction).toBeGreaterThan(viewport.height < 500 ? .69 : .82);
         expect(bounds.scrolls).toBe(false);
         expect(viewport.width - bounds.right).toBe(16); expect(viewport.height - bounds.bottom).toBe(16);
     }
@@ -593,14 +880,15 @@ test('compact header, niche controls and collapsed uploads leave most space for 
         expect(star.separated).toBe(true); expect(star.height).toBe(56);
     }
     await page.screenshot({ path: '/tmp/lowcord-redgifs-compact-niches.png' });
-    await page.getByRole('tab', { name: 'Videos', exact: true }).click();
+    await page.getByRole('tab', { name: 'Trending', exact: true }).click();
     await page.evaluate(() => { redgifsFixture.slowUpload = true; });
     await tile(page).click();
     await expect.poll(() => page.evaluate(() => redgifsFixture.uploads.length)).toBe(1);
     await expect(page.getByRole('button', { name: 'Show upload queue', exact: true })).toHaveAttribute('aria-expanded', 'false');
     expect((await page.locator('.lowcord-redgifs-queue').boundingBox()).height).toBeLessThanOrEqual(36);
     const fraction = await page.locator('.lowcord-redgifs').evaluate(node => node.querySelector('.lowcord-redgifs-results').clientHeight / node.clientHeight);
-    expect(fraction).toBeGreaterThan(.8);
+    // The dedicated draggable title bar adds a row above search.
+    expect(fraction).toBeGreaterThan(.77);
     await page.screenshot({ path: '/tmp/lowcord-redgifs-compact-upload.png' });
     await page.getByRole('button', { name: 'Show upload queue', exact: true }).click();
     await expect(page.locator('.lowcord-redgifs-job')).toBeVisible();
@@ -610,4 +898,99 @@ test('compact header, niche controls and collapsed uploads leave most space for 
     await page.keyboard.press('Escape');
     await expect(page.getByRole('button', { name: 'Picker options', exact: true })).toBeFocused();
     await expect(page.getByRole('dialog', { name: 'RedGIFs picker' })).toBeVisible();
+});
+
+test.describe('compact Favorites gallery', () => {
+    test.use({ storageState: { cookies: [], origins: [{ origin: 'http://127.0.0.1:4318', localStorage: [{
+        name: 'lowcord.redgifs.saved.v1', value: JSON.stringify({ favorites: Array.from({ length: 80 }, (_, index) => ({ id: `saved${index}`, author: `creator${index}` })) }),
+    }] }] } });
+
+    test.beforeEach(async ({ page }) => {
+        await page.evaluate(() => {
+            redgifsFixture.resolvedCount = 0;
+            __LOWCORD_NATIVE__.redgifsResolve = async id => {
+                redgifsFixture.resolvedCount++;
+                return { id, key: `fresh${id}`, author: `creator${id.slice(5)}`,
+                    width: Number(id.slice(5)) % 2 ? 640 : 360, height: Number(id.slice(5)) % 2 ? 360 : 640,
+                    duration: 2, preview: '/media/sample.mp4', poster: '/media/sample.png' };
+            };
+        });
+        await open(page);
+        await page.getByRole('tab', { name: 'Favorites', exact: true }).click();
+        await expect(page.locator('.lowcord-redgifs-results')).toHaveAttribute('aria-busy', 'false');
+    });
+
+    test('three compact columns, captions and saved count fit normal and narrow windows', async ({ page }) => {
+        await expect(page.locator('.lowcord-redgifs-heading')).toHaveText('80 saved');
+        const measure = () => page.locator('.lowcord-redgifs-favorites').evaluate(grid => {
+            const tiles = [...grid.querySelectorAll('.lowcord-redgifs-thumb')].map(tile => tile.getBoundingClientRect());
+            const viewport = grid.parentElement.getBoundingClientRect();
+            return { first: tiles.slice(0, 4).map(box => ({ x: box.x, y: box.y, width: box.width, height: box.height })),
+                visible: tiles.filter(box => box.top >= viewport.top && box.bottom <= viewport.bottom).length,
+                intersecting: tiles.filter(box => box.top < viewport.bottom && box.bottom > viewport.top).length,
+                overflow: grid.scrollWidth > grid.clientWidth };
+        });
+        let metrics = await measure();
+        expect(metrics.visible).toBeGreaterThanOrEqual(9);
+        expect(metrics.intersecting).toBeGreaterThanOrEqual(12);
+        for (const box of metrics.first) expect(box.width / box.height).toBeCloseTo(9 / 8, 2);
+        expect(metrics.first[0].y).toBe(metrics.first[1].y); expect(metrics.first[1].y).toBe(metrics.first[2].y);
+        expect(metrics.first[3].y).toBeGreaterThan(metrics.first[0].y);
+        await expect(page.locator('.lowcord-redgifs-favorite-author').first()).toHaveText('@creator0');
+        expect(await tile(page).locator('img').evaluate(node => getComputedStyle(node).objectFit)).toBe('cover');
+        await page.locator('.lowcord-redgifs').screenshot({ path: '/tmp/lowcord-redgifs-favorites-grid.png' });
+        await page.setViewportSize({ width: 360, height: 520 });
+        await expect.poll(async () => Math.max(...(await measure()).first.map(box => Math.abs(box.width / box.height - 9 / 8)))).toBeLessThan(.01);
+        metrics = await measure();
+        expect(metrics.overflow).toBe(false);
+        expect(metrics.first[0].width).toBeLessThan(100);
+        for (const box of metrics.first) expect(box.width / box.height).toBeCloseTo(9 / 8, 2);
+        await page.locator('.lowcord-redgifs').screenshot({ path: '/tmp/lowcord-redgifs-favorites-narrow.png' });
+        await page.getByRole('tab', { name: 'Trending', exact: true }).click();
+        await expect(page.locator('.lowcord-redgifs-favorites')).toHaveCount(0);
+        await expect(page.locator('.lowcord-redgifs-favorite-author')).toHaveCount(0);
+        expect((await tile(page).boundingBox()).height).toBeGreaterThan(250);
+    });
+
+    test('one inline preview scrubs, sends once, and stars remove without sending', async ({ page }) => {
+        const errors = [];
+        page.on('pageerror', error => errors.push(error.message));
+        page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+        await preview(page);
+        expect(await tile(page).locator('video').evaluate(node => getComputedStyle(node).objectFit)).toBe('contain');
+        const box = await tile(page).boundingBox();
+        await page.mouse.move(box.x + box.width * .8, box.y + box.height / 2);
+        await expect.poll(() => tile(page).locator('video').evaluate(node => node.currentTime)).toBeGreaterThan(1.2);
+        await page.getByRole('button', { name: 'Send video by creator1', exact: true }).focus();
+        await expect(page.locator('.lowcord-redgifs video')).toHaveCount(1);
+        await page.getByRole('button', { name: 'Send video by creator1', exact: true }).press('Enter');
+        await expect.poll(() => page.evaluate(() => redgifsFixture.posts.length)).toBe(1);
+        await expect(page.getByRole('button', { name: 'Send video by creator1', exact: true })).toHaveAttribute('data-sent', '');
+        await page.getByRole('button', { name: 'Remove favorite creator0', exact: true }).click();
+        await expect(page.getByRole('button', { name: 'Send video by creator0', exact: true })).toHaveCount(0);
+        await expect(page.locator('.lowcord-redgifs-heading')).toHaveText('79 saved');
+        expect(await page.evaluate(() => redgifsFixture.posts.length)).toBe(1);
+        await page.getByRole('searchbox').fill('creator7');
+        await page.getByRole('button', { name: 'Search', exact: true }).click();
+        await expect(page.locator('.lowcord-redgifs-heading')).toHaveText('11 saved matching this search');
+        await expect(page.locator('.lowcord-redgifs-thumb')).toHaveCount(11);
+        expect(errors).toEqual([]);
+    });
+
+    test('pagination virtualizes complete rows and restores earlier favorites after scrolling', async ({ page }) => {
+        for (const count of [48, 72, 80]) {
+            await page.locator('.lowcord-redgifs-results').evaluate(node => { node.scrollTop = node.scrollHeight; });
+            await expect.poll(() => page.evaluate(() => redgifsFixture.resolvedCount)).toBeGreaterThanOrEqual(count);
+            await expect(page.locator('.lowcord-redgifs-results')).toHaveAttribute('aria-busy', 'false');
+        }
+        await expect(page.getByRole('button', { name: 'Load more', exact: true })).toBeHidden();
+        await page.locator('.lowcord-redgifs-results').evaluate(node => { node.scrollTop = node.scrollHeight; });
+        await expect(page.getByRole('button', { name: 'Send video by creator79', exact: true })).toBeVisible();
+        expect(await page.locator('.lowcord-redgifs-card').count()).toBeLessThan(36);
+        await expect(page.getByRole('button', { name: 'Send video by creator0', exact: true })).toHaveCount(0);
+        await page.locator('.lowcord-redgifs-results').evaluate(node => { node.scrollTop = 0; });
+        await expect(page.getByRole('button', { name: 'Send video by creator0', exact: true })).toBeVisible();
+        const firstRow = await page.locator('.lowcord-redgifs-thumb').evaluateAll(tiles => tiles.slice(0, 3).map(tile => tile.getBoundingClientRect().y));
+        expect(new Set(firstRow).size).toBe(1);
+    });
 });

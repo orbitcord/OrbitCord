@@ -38,7 +38,13 @@ function createBackgroundSaver({ window, userData, trusted, minute = 60_000 }) {
     // through a hook installed before Discord's scripts run.
     async function busy() {
         if (contents.isCurrentlyAudible()) return true;
-        const answer = contents.executeJavaScript('window.__lowcordBusy?.() === true');
+        const answer = contents.executeJavaScript('window.__lowcordBusy?.() === true').then(async active => {
+            if (active) return true;
+            // An embedded player's paused/muted PiP belongs to its own
+            // document and must also keep the window from being unloaded.
+            const frames = contents.mainFrame.framesInSubtree.filter(frame => frame !== contents.mainFrame && !frame.detached);
+            return (await Promise.all(frames.map(frame => frame.executeJavaScript('Boolean(document.pictureInPictureElement)').catch(() => false)))).some(Boolean);
+        });
         const timeout = new Promise(resolve => setTimeout(resolve, 2000, false));
         return Promise.race([answer, timeout]).catch(() => false);
     }

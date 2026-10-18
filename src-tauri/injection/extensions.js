@@ -6,10 +6,15 @@
     const storageKey = "lowcord.extensions";
     const catalog = [
         { id: "anonymiseFileNames", title: "Anonymise file names", description: "Randomise upload names. Keep file types and spoiler tags." },
+        { id: "compressVideos", title: "Compress large videos", description: "Automatically shrink video attachments below 20 MB in DMs and 100 MB in servers. Requires FFmpeg." },
         { id: "voiceMessages", title: "Voice messages", description: "Use the waveform button to record a voice message." },
         { id: "redgifsPicker", title: "RedGIFs picker", description: "Browse and search RedGIFs, then send a video as an MP4 file." },
+        { id: "mediaSources", title: "Media sources", description: "Browse eight media sources and send original images or videos with one click." },
+        { id: "redditPicker", title: "Reddit picker", description: "Browse Reddit, optionally signed in, and send a post's media as files. Large videos are compressed below 20 MB." },
         { id: "chatCapture", title: "Chat screenshots", description: "Use the camera button to capture a range of messages in one image." },
         { id: "mediaGallery", title: "Media gallery", description: "Browse chat photos and videos from the header. Click to jump to a message." },
+        { id: "pictureInPicture", title: "Picture-in-picture", description: "Hover a chat video and use the pop-out button, or press Alt+P, to watch in a floating window." },
+        { id: "downloadVideos", title: "Download linked videos", description: "Right-click a linked or embedded video to save its media file." },
         { id: "copyMediaLink", title: "Copy media link", description: "Right-click a photo or video to copy its link." },
         { id: "massDelete", title: "Mass delete", description: "Use the trash button to delete all your messages in a DM, channel or server." },
         { id: "dmQuickReply", title: "DM quick reply", description: "Hover over a DM in the list to read and reply without switching chats." },
@@ -640,6 +645,7 @@
         event.preventDefault(); event.stopImmediatePropagation();
         const replay = make(data);
         replayed.add(replay);
+        window.Lowcord.videoCompression?.ignore(replay);
         event.target.dispatchEvent(replay);
     }
     window.addEventListener("change", event => {

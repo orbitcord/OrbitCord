@@ -408,6 +408,18 @@
         try { await navigator.clipboard.writeText(link); extensions.toast("Link copied"); }
         catch { extensions.toast("Couldn’t copy the link. Please try again.", true); }
     }
+    async function downloadVideo(link) {
+        try { await window.__LOWCORD_NATIVE__.downloadMedia(link); }
+        catch { extensions.toast('Couldn’t download this video. Please try again.', true); }
+    }
+    function downloadable(link) {
+        try {
+            const url = new URL(link);
+            return !url.username && !url.password && !/\.(?:m3u8|mpd)$/i.test(url.pathname)
+                && (/^https?:$/.test(url.protocol) || /^lowcord-media:\/\/media\/[a-f0-9]{24}$/.test(link));
+        } catch { return false; }
+    }
+    const videoFile = link => { try { return /\.(?:mp4|webm|mov|m4v|ogv|mkv)$/i.test(new URL(link).pathname); } catch { return false; } };
     function hideMenu() {
         if (!menu) return;
         menu.node.remove();
@@ -419,7 +431,10 @@
         hideMenu();
         const entry = (label, action) => ui("button", { type: "button", role: "menuitem", className: "lowcord-menu-item",
             onClick: () => { hideMenu(); action(); } }, label);
-        const items = [item.link && entry("Copy media link", () => copyLink(item.link)), entry("Jump to message", () => jump(item, button))].filter(Boolean);
+        const items = [item.link && entry("Copy media link", () => copyLink(item.link)),
+            extensions.enabled('downloadVideos') && item.video && downloadable(item.link) && (item.fileId || videoFile(item.link))
+                && entry('Download video…', () => downloadVideo(item.link)),
+            entry("Jump to message", () => jump(item, button))].filter(Boolean);
         const node = ui("div", { className: "lowcord-menu", role: "menu", "aria-label": "Media options" }, ...items);
         document.body.append(node);
         // Opens at the pointer, kept on screen.
@@ -503,14 +518,15 @@
         }
         return null;
     }
-    function addMenuItem(menu, link) {
-        if (menu.querySelector("#message-lowcord-copy-media")) return;
+    function addMenuItem(menu, link, download = false) {
+        const id = download ? 'message-lowcord-download-video' : 'message-lowcord-copy-media';
+        if (menu.querySelector(`#${id}`)) return;
         // Beside Copy Text, the other copy items; any plain item otherwise.
         const model = ["#message-copy-text", "#message-copy-link", '[role="menuitem"]:not([id*="quickreact"])']
             .map(selector => menu.querySelector(selector)).find(Boolean);
         if (!model) return;
         const item = model.cloneNode(true);
-        item.id = "message-lowcord-copy-media";
+        item.id = id;
         item.removeAttribute("aria-disabled");
         item.className = [...item.classList].filter(name => !/^(focused|disabled)_/.test(name)).join(" ") + " lowcord-copy-media";
         // Discord highlights the item its menu has focused, through a hashed
@@ -524,12 +540,15 @@
             menu.toggleAttribute("data-lowcord-media-hover", on);
         };
         const text = item.querySelector('[data-text-variant], [class*="label_"]');
-        if (text) text.textContent = "Copy Media Link"; else item.textContent = "Copy Media Link";
+        const label = download ? 'Download video…' : 'Copy Media Link';
+        item.removeAttribute('aria-labelledby');
+        item.setAttribute('aria-label', label);
+        if (text) text.textContent = label; else item.textContent = label;
         const icon = item.querySelector("svg");
-        if (icon) icon.innerHTML = `<path fill="currentColor" d="${linkPath}"/>`;
+        if (icon) icon.innerHTML = `<path fill="currentColor" d="${download ? 'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v3h14v-3H5z' : linkPath}"/>`;
         const choose = event => {
             event.preventDefault(); event.stopPropagation();
-            copyLink(link);
+            if (download) void downloadVideo(link); else void copyLink(link);
             // Discord's layer closes on Escape.
             document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true }));
         };
@@ -545,18 +564,46 @@
         menu.style.setProperty("--lowcord-menu-item-bg", plain.backgroundColor);
         menu.style.setProperty("--lowcord-menu-item-color", plain.color);
     }
+    function videoLink(target) {
+        if (!(target instanceof Element) || target.closest('[class*="reactions_"], .lowcord-redgifs')) return null;
+        const row = target.closest('[id^="chat-messages-"]');
+        if (!row) return null;
+        for (let node = target; node && node !== row; node = node.parentElement) {
+            const videos = node.matches('video') ? [node] : [...node.querySelectorAll('video')];
+            if (videos.length > 1) return null;
+            if (videos.length) {
+                const video = videos[0];
+                // currentSrc identifies the selected <source>. A blob/MSE
+                // player must not fall back to its surrounding web-page URL.
+                const source = video.currentSrc || video.src || video.querySelector('source')?.src;
+                return downloadable(source) ? source : null;
+            }
+            const link = node.closest('a[href]');
+            if (link && videoFile(link.href) && downloadable(link.href)) return link.href;
+        }
+        return null;
+    }
+    let mediaMenuRequest = 0;
     window.addEventListener("contextmenu", event => {
-        if (!extensions.enabled("copyMediaLink")) return;
-        const link = mediaLink(event.target);
-        if (!link) return;
+        const request = ++mediaMenuRequest;
+        document.querySelectorAll('#message-lowcord-copy-media, #message-lowcord-download-video').forEach(item => item.remove());
+        const link = extensions.enabled('copyMediaLink') && mediaLink(event.target);
+        const video = extensions.enabled('downloadVideos') && videoLink(event.target);
+        if (!link && !video) return;
         // The menu renders within a few frames of the click.
         let frames = 0;
         const look = () => {
+            if (request !== mediaMenuRequest) return;
             const menu = document.querySelector('#message[role="menu"]');
-            if (menu) addMenuItem(menu, link);
+            if (menu) {
+                if (link && extensions.enabled('copyMediaLink')) addMenuItem(menu, link);
+                if (video && extensions.enabled('downloadVideos')) addMenuItem(menu, video, true);
+            }
             else if (++frames < 30) requestAnimationFrame(look);
         };
-        requestAnimationFrame(look);
+        // Let Discord replace/reuse its previous menu before adding actions
+        // for this target; otherwise a second right-click can keep old URLs.
+        requestAnimationFrame(() => requestAnimationFrame(look));
     }, true);
 
     window.Lowcord.mediaGallery = { open, close: closePane, toggle, timing, get isOpen() { return Boolean(pane); } };
