@@ -60,7 +60,7 @@ async function compressVideo(input, directory, limit, signal, { general = false,
         const command = await findFFmpeg(signal);
         // Only self-contained media containers: playlists and network protocols
         // never reach a demuxer. RedGIFs keeps its explicit MP4 input contract.
-        const demux = general ? ['-format_whitelist', 'mov,matroska,webm,avi,mpeg,mpegts,asf,flv,ogg,gif,webp_pipe'] : ['-f', 'mp4'];
+        const demux = general ? ['-format_whitelist', 'mov,matroska,webm,avi,mpeg,mpegts,asf,flv,ogg,gif,apng,webp_pipe'] : ['-f', 'mp4'];
         const inputs = [...demux, '-i', input, ...(audioInput ? [...demux, '-i', audioInput] : [])];
         const maps = ['-map', '0:v:0', '-map', audioInput ? '1:a:0?' : '0:a:0?', '-sn', '-dn', '-map_metadata', '-1'];
         const probe = await run(command, ['-hide_banner', '-nostdin', '-protocol_whitelist', 'file', ...inputs], signal, 10_000);
@@ -99,4 +99,30 @@ async function compressVideo(input, directory, limit, signal, { general = false,
     } finally { if (waiting.length) waiting.shift().resolve(); else encoding = false; }
 }
 
-module.exports = { compressVideo };
+// Still images use PNG to retain transparency with FFmpeg’s built-in encoder.
+// Reduce dimensions only as needed; share the video queue to bound encoding work.
+async function compressImage(input, directory, limit, signal) {
+    await acquire(signal);
+    try {
+        signal?.throwIfAborted();
+        if (!Number.isSafeInteger(limit) || limit < 1000 || limit > 100_000_000) throw failure('invalid-limit');
+        const command = await findFFmpeg(signal);
+        const output = join(directory, 'compressed.png');
+        let edge = 4096;
+        for (let attempt = 0; attempt < 4; attempt++) {
+            const result = await run(command, ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+                '-protocol_whitelist', 'file', '-format_whitelist', 'image2,png_pipe,jpeg_pipe,webp_pipe,bmp_pipe,tiff_pipe,mov',
+                '-threads', '2', '-i', input, '-map', '0:v:0', '-frames:v', '1', '-an', '-sn', '-dn', '-map_metadata', '-1',
+                '-vf', `scale=w='min(${edge},iw)':h='min(${edge},ih)':force_original_aspect_ratio=decrease`,
+                '-c:v', 'png', '-compression_level', '6',
+                '-threads', '2', '-filter_threads', '1', output], signal);
+            if (result.code !== 0) throw failure('encode-failed');
+            const { size } = await stat(output);
+            if (size > 0 && size < limit) return output;
+            edge = Math.max(1, Math.floor(edge * Math.min(.8, Math.sqrt(limit * .85 / size))));
+        }
+        throw failure('too-large');
+    } finally { if (waiting.length) waiting.shift().resolve(); else encoding = false; }
+}
+
+module.exports = { compressVideo, compressImage };

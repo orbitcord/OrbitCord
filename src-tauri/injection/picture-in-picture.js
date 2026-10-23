@@ -8,7 +8,7 @@
     const enabled = () => extensions.enabled('pictureInPicture');
     function eligible(video) {
         return video instanceof HTMLVideoElement && video.isConnected && !video.srcObject
-            && Boolean(video.closest(scope)) && !video.closest('.lowcord-redgifs')
+            && Boolean(video.closest(scope)) && !video.closest('.lowcord-redgifs, .lowcord-media-sources, .lowcord-reddit-tile')
             && !(video.autoplay && video.loop && video.muted && !video.controls);
     }
     function hide() {
@@ -26,7 +26,8 @@
         // A scrolled-away video should not leave a floating button over chat.
         button.hidden = rect.width < 60 || rect.height < 45 || rect.bottom <= 0 || rect.top >= innerHeight || rect.right <= 0 || rect.left >= innerWidth;
         const size = button.offsetWidth || 28, inset = 8;
-        button.style.left = `${Math.round(Math.max(inset, Math.min(innerWidth - size - inset, rect.right - size - inset)))}px`;
+        // Keep Discord's download/action toolbar clear in the opposite corner.
+        button.style.left = `${Math.round(Math.max(inset, Math.min(innerWidth - size - inset, rect.left + inset)))}px`;
         button.style.top = `${Math.round(Math.max(inset, rect.top + inset))}px`;
         const active = document.pictureInPictureElement === target;
         const label = active ? 'Exit picture-in-picture' : 'Picture-in-picture';

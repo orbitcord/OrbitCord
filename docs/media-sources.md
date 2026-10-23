@@ -1,13 +1,18 @@
-# Eight-source media browser
+# Media sources browser
 
-User authorized all eight sources after the read-only feasibility investigation.
+XXXTik hover previews use the site's separate `preview.mp4` asset while sending
+retains the original `master.m3u8`. The preview streams through the isolated
+source session into the picker’s shared muted player and stops on pointer leave.
+Chromium picker checks and a real Electron fixture verify preview decoding,
+cleanup on pointer leave, and that hovering does not send a message.
+
+Supported sources are GifReels and XXXTik. All retired source adapters have been removed.
 Existing Electron feature, not a Toolcraft canvas application. Apply the existing
 dark picker language without changing Discord's attachment grid or settings.
 
 ## Behavior and implementation plan
 
-- Add a default-enabled “Media sources” composer action for GifReels, Erome,
-  Sex.com GIFs, ImageFap, XXXFollow, XXXTik, Shorts and XFree.
+- Add a default-enabled “Media sources” composer action for GifReels and XXXTik.
 - A resizable native browser uses the real source's navigation/search/login.
   One active remote WebContentsView, opened lazily; source sessions persist
   separately from Discord and from one another. No passwords enter Discord.
@@ -41,7 +46,7 @@ Cross-process feature tier: native sessions/windows + local media + renderer.
 1. `electron/media-source-files.cjs`: validated streamed preparation, HLS,
    conversion, bounded read/release/cancel and temporary-file lifecycle.
 2. `electron/media-sources.cjs`, `media-browser.html/js/css/preload.cjs`,
-   `media-source-scan.cjs`: eight configurations, isolated browser and host IPC,
+   `media-source-scan.cjs`: two configurations, isolated browser and host IPC,
    media scanning/context selection and explicit destination/status controls.
 3. `electron/main.cjs`, `scripts/build.mjs`: trusted Discord bridge, event delivery
    and native lifecycle. Existing `video-compress.cjs`: animated-image demuxers.
@@ -65,16 +70,16 @@ source video (max 2 GiB) plus one encoding job; typing/layout never triggers wor
 ## Limits to verify manually
 
 Source challenges and login providers can reject embedded Chromium. Providing a
-normal browser does not bypass them. All eight integrations must show failures
+normal browser does not bypass them. Both integrations must show failures
 clearly; authenticated accounts cannot be certified without user testing. Site
 DOM changes can require adapter updates. No speculative API is represented as a
 working integration and protected streams are not treated as downloadable files.
 
 ## Implementation and verification
 
-- Implemented all eight site configurations through their real source pages,
+- Implemented both site configurations through their real source pages,
   a sandboxed native browser and app-owned selection panel. This is a shared
-  site-browser integration, not eight unverified copies of the RedGIFs API UI.
+  site-browser integration, not unverified copies of the RedGIFs API UI.
 - Added per-account/per-source saved pages (up to 20), saved sessions and Sign out.
   Site pages get neither the Discord bridge nor the toolbar bridge; the local
   toolbar verifies its native sender separately. Third-party popups are limited
@@ -92,7 +97,7 @@ working integration and protected streams are not treated as downloadable files.
   five final source checks pass including the late-disable regression.
 - Five focused real Electron checks passed (source isolation/delivery, chooser,
   drop, codec decoding and settings IPC). The final source check also verifies
-  saved pages, sign-out, separate cookies for all eight provider configurations,
+  saved pages, sign-out, separate cookies for both provider configurations,
   and downloading a cookie-protected neutral fixture video into the native draft.
 - UI evidence: `/tmp/lowcord-media-sources.png` is the app-owned toolbar and media
   panel; `/tmp/lowcord-media-source-page.png` is its separate native source view.
@@ -136,7 +141,7 @@ fixture paste listener. No live message sends during automated verification.
 
 ### Correction outcome and evidence
 
-- Reproduced the actual live failure on Sex.com: Chromium rejected CDN requests
+- Reproduced a cross-origin media failure: Chromium rejected CDN requests
   with `net::ERR_BLOCKED_BY_CLIENT` and logged “invalid referrer”. The full source
   page Referer conflicted with strict-origin-when-cross-origin. Requests now keep
   the page URL only for same-origin requests, strip fragments and use the origin
@@ -159,17 +164,13 @@ fixture paste listener. No live message sends during automated verification.
   a file. File-backed blobs stream in bounded chunks in an isolated world; MSE
   blobs themselves and protected content are not treated as downloadable files.
 - Real public-source dry runs (no Discord sends, no account sign-in) prepared
-  GifReels MP4 (~3.5 MB), Sex.com WebP (~1.3 MB), Shorts MP4 (~11.1 MB), XFree MP4
-  (~5.8 MB), and XXXTik MP4 (~7.2 MB). ImageFap also exposed downloadable media;
-  full gallery selection still needs user validation. Erome showed a splash page
-  and XXXFollow timed out in this environment; their access/login flows cannot
-  be certified. Decorative splash graphics are excluded from the picker.
+  GifReels MP4 (~3.5 MB) and XXXTik MP4 (~7.2 MB).
 - Verification: 24 Node backend checks and 23 Chromium picker/Reddit/compression
-  checks pass. Native checks exercise eight isolated source configurations,
+  checks pass. Native checks exercise two isolated source configurations,
   cookie-protected linked originals, worker/MSE detection, chunk delivery into
   the uploader, draft preservation, file-backed blob reads and cross-origin
   referrer behavior. A separate neutral thumbnail fixture checks rendered cards.
 - Risks: source access challenges and changing site markup remain source-specific.
-  This integrates source pages rather than claiming eight documented API clones.
+  This integrates source pages rather than claiming documented API clones.
   Protected/live streams, separate-audio HLS, and unsupported players give clear
   failures; no thumbnail substitution and no live message was used for testing.

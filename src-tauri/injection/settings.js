@@ -314,6 +314,12 @@ function setupLowcordSettings() {
         const [state, setState] = React.useState(() => extensions.state);
         const [options, setOptions] = React.useState(() => extensions.options);
         const [error, setError] = React.useState("");
+        const [query, setQuery] = React.useState("");
+        const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+        const filtered = extensions.catalog.filter(({ title, description }) => {
+            const text = `${title} ${description}`.toLocaleLowerCase();
+            return terms.every(term => text.includes(term));
+        });
         React.useEffect(() => {
             const update = () => { setState(extensions.state); setOptions(extensions.options); };
             window.addEventListener(extensions.changeEvent, update);
@@ -329,21 +335,24 @@ function setupLowcordSettings() {
                 ...window.Lowcord.socialLinks.providers[site].map(host => h("option", { key: host, value: host }, host))));
         return h("section", { className: "lowcord-chat-appearance" },
             h("p", { className: "lowcord-chat-intro" }, "Built-in OrbitCord extensions. Changes apply immediately."),
-            h("div", { className: "lowcord-extension-list" }, ...extensions.catalog.map(({ id, title, description }) =>
+            h("input", { type: "search", className: "lowcord-extension-search", placeholder: "Search extensions…",
+                "aria-label": "Search extensions", value: query, onChange: event => setQuery(event.target.value) }),
+            filtered.length === 0 ? h("p", { className: "lowcord-chat-description", role: "status" }, "No extensions found. Try another search.") : null,
+            h("div", { className: "lowcord-extension-list" }, ...filtered.map(({ id, title, description }) =>
                 h("label", { key: id, className: "lowcord-chat-toggle" },
                     h("span", null, h("strong", null, title), h("span", { className: "lowcord-chat-description" }, description)),
                     h("input", { type: "checkbox", role: "switch", checked: state[id], onChange: event => {
                         try { extensions.set(id, event.target.checked); setError(""); } catch (failure) { setError(failure.message); }
                     } })))),
-            h("label", { className: "lowcord-volume-card" },
+            filtered.some(({ id }) => id === "musicEmbeds") ? h("label", { className: "lowcord-volume-card" },
                 h("span", { className: "lowcord-volume-text" }, h("strong", null, "Embed volume"),
                     h("span", { className: "lowcord-chat-description" }, "YouTube, Spotify and Apple Music. Defaults to 50%.")),
                 h("span", { className: "lowcord-volume-control" },
                     h("input", { type: "range", min: 0, max: 100, step: 1, value: options.musicVolume,
                         style: { "--lowcord-fill": `${options.musicVolume}%` },
                         "aria-label": "Embed volume", onChange: event => option("musicVolume", Number(event.target.value)) }),
-                    h("output", null, `${options.musicVolume}%`))),
-            state.socialEmbeds ? h("div", { className: "lowcord-embed-options" },
+                    h("output", null, `${options.musicVolume}%`))) : null,
+            state.socialEmbeds && filtered.some(({ id }) => id === "socialEmbeds") ? h("div", { className: "lowcord-embed-options" },
                 h("strong", { className: "lowcord-embed-heading" }, "Social embed providers"),
                 ...Object.entries(window.Lowcord.socialLinks.sites).filter(([, site]) => site.providers.length > 1)
                     .map(([id, site]) => providerControl(id, `${id === "twitter" ? "X / Twitter" : site.name} provider`)),

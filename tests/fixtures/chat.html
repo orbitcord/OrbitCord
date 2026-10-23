@@ -37,7 +37,8 @@
         .messageSnapshot_test img { width:120px; border-radius:6px; }
         .buttonContainer_test { position:absolute; right:0; top:0; width:0; height:0; padding:0 32px; }
         .buttons_test { position:absolute; right:0; top:-16px; transform:translateX(-4px); padding-left:16px; }
-        .buttonsInner_test { display:flex; gap:4px; background:var(--background-secondary); border-radius:6px; padding:4px; margin-left:20px; transform:translateX(8px); }
+        /* Discord lays its buttons out as a one-row grid. */
+        .buttonsInner_test { display:grid; grid-auto-flow:column; align-items:center; gap:4px; background:var(--background-secondary); border-radius:6px; padding:4px; margin-left:20px; transform:translateX(8px); }
         .buttonsInner_test button { flex-shrink:0; width:32px; height:32px; }
         /* Discord's toolbar visibility: hidden and click-through unless the message itself is hovered. */
         .buttons_test { opacity:0; pointer-events:none; }

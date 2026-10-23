@@ -20,6 +20,7 @@ test.beforeEach(async ({ page }) => {
         })[name];
         window.calls = []; window.jobs = new Map(); window.failure = null; window.hold = false;
         const sample = new Uint8Array(await (await fetch('/media/sample.mp4')).arrayBuffer());
+        const image = new Uint8Array(await (await fetch('/media/sample.png')).arrayBuffer());
         window.__LOWCORD_NATIVE__ = { videoCompression: async (action, ...args) => {
             window.calls.push({ action, options: action === 'begin' ? args[0] : undefined, length: action === 'append' ? args[1].length : undefined });
             if (action === 'begin') { const id = `job-${window.calls.length}`; window.jobs.set(id, { ...args[0], written: 0 }); return { id }; }
@@ -31,9 +32,10 @@ test.beforeEach(async ({ page }) => {
                 if (job.cancelled) return { error: 'cancelled' };
                 if (window.failure) return { error: window.failure };
                 if (job.written !== job.size) throw Error('Incomplete source');
-                return { size: sample.length };
+                job.output = job.kind === 'image' ? image : sample;
+                return { size: job.output.length, type: job.kind === 'image' ? 'image/png' : 'video/mp4', extension: job.kind === 'image' ? 'png' : 'mp4' };
             }
-            if (action === 'read') return sample.slice(args[1], args[1] + 1024 * 1024);
+            if (action === 'read') return job.output.slice(args[1], args[1] + 1024 * 1024);
         }};
         window.fixturePaste = event => { if (event.clipboardData.files.length) window.fixtureAdd([event.clipboardData.files[0]]); };
         editor.addEventListener('paste', window.fixturePaste);
@@ -147,6 +149,20 @@ test('pasted videos compress and attach without sending; small videos and docume
     await select(page, { method: 'change', size: 20_000_001, name: 'notes.bin', type: 'application/octet-stream' }); await ready(page, 5);
     expect(await page.evaluate(() => calls.filter(c => c.action === 'begin').length)).toBe(1);
     expect(await page.evaluate(() => prepared.slice(3).map(entry => entry.file.size))).toEqual([20,20_000_001]);
+});
+
+for (const item of [
+    { name: 'SPOILER_photo.png', type: 'image/png', kind: 'image', output: 'SPOILER_photo.png', mime: 'image/png' },
+    { name: 'animation.gif', type: 'image/gif', kind: 'gif', output: 'animation.mp4', mime: 'video/mp4' },
+    { name: 'animation.GIF', type: 'application/octet-stream', kind: 'gif', output: 'animation.mp4', mime: 'video/mp4' },
+]) test(`oversized ${item.name} compresses before native validation and keeps its correct output type`, async ({ page }) => {
+    await select(page, { name: item.name, type: item.type, method: 'paste' }); await ready(page);
+    expect(await page.evaluate(() => calls.find(c => c.action === 'begin').options.kind)).toBe(item.kind);
+    expect(await page.evaluate(() => ({ name: prepared[0].file.name, type: prepared[0].file.type, size: prepared[0].file.size })))
+        .toMatchObject({ name: item.output, type: item.mime });
+    expect(await page.evaluate(() => prepared[0].file.size)).toBeLessThan(20_000_000);
+    expect(await page.evaluate(() => receipts.length)).toBe(0);
+    await expect(page.getByLabel('Message')).toHaveValue('Keep this draft');
 });
 
 test('compression failure restores all original files once and explains missing FFmpeg', async ({ page }) => {

@@ -38,6 +38,7 @@
         return calls.size > 0 || uploads > 0 || Boolean(document.pictureInPictureElement) || window.Lowcord?.redgifs?.busy?.() === true
             || window.Lowcord?.videoCompression?.busy?.() === true
             || window.Lowcord?.mediaSources?.busy?.() === true
+            || window.Lowcord?.imageDrop?.busy?.() === true
             || [...document.querySelectorAll("video, audio")].some(media => !media.paused && !media.ended);
     };
 })();

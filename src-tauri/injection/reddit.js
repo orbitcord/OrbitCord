@@ -264,7 +264,8 @@
                 : `Send ${item.kind} from r/${item.subreddit}: ${item.title}`, title: item.title,
             onPointerenter: () => preview(state, item), onPointerleave: () => stopPreview(state, item),
             onFocus: () => preview(state, item), onBlur: () => stopPreview(state, item),
-            onClick: () => item.kind === 'gallery' ? openGallery(state, item) : send(state, item) },
+            onClick: () => item.kind === 'gallery' ? openGallery(state, item) : send(state, item),
+            onContextmenu: event => item.kind === 'gallery' && galleryMenu(state, event, item) },
             ...(item.poster ? [ui('img', { src: item.poster, alt: '', loading: 'lazy', decoding: 'async', draggable: 'false' })] : []),
             ui('span', { className: 'lowcord-reddit-badges' }, ...(item.nsfw ? [ui('span', { className: 'lowcord-reddit-nsfw' }, 'NSFW')] : []),
                 ...(badge ? [ui('span', {}, badge)] : [])),
@@ -305,51 +306,94 @@
         }, 160);
     }
 
-    // ----- Gallery: view each item, pick which to send --------------------------
+    // ----- Right-click menu ------------------------------------------------------
+    function closeMenu(state) { state.menu?.remove(); state.menu = null; }
+    function contextMenu(state, event, entries) {
+        event.preventDefault(); event.stopPropagation();
+        closeMenu(state);
+        const menu = state.menu = ui('div', { className: 'lowcord-reddit-menu', role: 'menu', onKeydown: keyEvent => {
+            const items = [...menu.querySelectorAll('button:not(:disabled)')], index = items.indexOf(document.activeElement);
+            if (keyEvent.key === 'ArrowDown' || keyEvent.key === 'ArrowUp') { keyEvent.preventDefault(); items[(index + (keyEvent.key === 'ArrowUp' ? items.length - 1 : 1)) % items.length]?.focus(); }
+            else if (keyEvent.key === 'Tab') closeMenu(state);
+        } }, ...entries.map(([label, action, disabled]) => ui('button', { type: 'button', role: 'menuitem', disabled: Boolean(disabled),
+            onClick: () => { closeMenu(state); action(); } }, label)));
+        state.node.append(menu);
+        const bounds = state.node.getBoundingClientRect();
+        menu.style.left = `${Math.max(4, Math.min(event.clientX - bounds.left, bounds.width - menu.offsetWidth - 4))}px`;
+        menu.style.top = `${Math.max(4, Math.min(event.clientY - bounds.top, bounds.height - menu.offsetHeight - 4))}px`;
+        menu.querySelector('button')?.focus({ preventScroll: true });
+    }
+    const sendLabel = (item, entry) => `Send this ${entry?.animated ? 'GIF' : entry?.type === 'video' ? 'video' : 'image'}`;
+    function sendSome(state, item, selection) {
+        if (!selection.length) return;
+        // A single item keeps the gallery open so more can be sent one by one.
+        if (selection.length > 1 && state.gallery?.item === item) closeGallery(state);
+        send(state, item, selection);
+        if (state.gallery?.item === item) status(state, `Sending item ${selection[0] + 1} of ${item.items.length}…`);
+    }
+    function galleryMenu(state, event, item) {
+        const first = item.items?.[0];
+        if (!first) return;
+        contextMenu(state, event, [
+            [sendLabel(item, first).replace('this', 'the first'), () => sendSome(state, item, [first.index])],
+            [`Send all ${Math.min(10, item.items.length)}`, () => sendSome(state, item, item.items.slice(0, 10).map(entry => entry.index))],
+            ['Open gallery', () => openGallery(state, item)],
+        ]);
+    }
+    function itemMenu(state, event, view, position) {
+        const entry = view.item.items[position], picked = view.picked.has(entry.index);
+        contextMenu(state, event, [
+            [sendLabel(view.item, entry), () => sendSome(state, view.item, [entry.index])],
+            [picked ? 'Remove from selection' : 'Add to selection', () => pick(state, view, entry.index), !picked && view.picked.size >= 10],
+            [`Send all ${Math.min(10, view.item.items.length)}`, () => sendSome(state, view.item, view.item.items.slice(0, 10).map(item => item.index))],
+        ]);
+    }
+
+    // ----- Gallery: view each item, send it or pick several --------------------
     // One media element at a time; the strip shows Reddit's small stills.
     function openGallery(state, item) {
         if (!alive(state) || !item.items?.length) return;
         closeGallery(state);
         stopPreview(state);
-        const view = { item, index: 0, picked: new Set(item.items.slice(0, 10).map(entry => entry.index)) };
-        view.stage = ui('div', { className: 'lowcord-reddit-stage' });
+        const view = { item, index: 0, picked: new Set() };
+        view.stage = ui('div', { className: 'lowcord-reddit-stage', onContextmenu: event => itemMenu(state, event, view, view.index) });
         view.counter = ui('span', { className: 'lowcord-reddit-counter' });
-        view.toggle = ui('button', { type: 'button', className: 'lowcord-reddit-pick', onClick: () => pick(state, view, view.index) });
+        view.toggle = ui('button', { type: 'button', className: 'lowcord-reddit-pick', onClick: () => pick(state, view, item.items[view.index].index) });
+        view.sendOne = ui('button', { type: 'button', className: 'lowcord-reddit-send-one', onClick: () => sendSome(state, item, [item.items[view.index].index]) });
         view.previous = ui('button', { type: 'button', className: 'lowcord-reddit-nav lowcord-reddit-previous', 'aria-label': 'Previous item',
             onClick: () => show(state, view, view.index - 1) }, icon('back', 18));
         view.next = ui('button', { type: 'button', className: 'lowcord-reddit-nav lowcord-reddit-next', 'aria-label': 'Next item',
             onClick: () => show(state, view, view.index + 1) }, icon('next', 18));
-        view.thumbs = item.items.map(entry => {
-            const check = ui('span', { className: 'lowcord-reddit-check', 'aria-hidden': 'true' }, icon('check', 12));
-            const button = ui('button', { type: 'button', role: 'option', className: 'lowcord-reddit-thumb', onClick: () => show(state, view, entry.index),
-                onDblclick: () => pick(state, view, entry.index) },
+        view.thumbs = item.items.map((entry, position) => {
+            const check = ui('span', { className: 'lowcord-reddit-check', title: 'Select', onClick: event => { event.stopPropagation(); pick(state, view, entry.index); } }, icon('check', 12));
+            const button = ui('button', { type: 'button', role: 'option', className: 'lowcord-reddit-thumb', onClick: event => {
+                    if (event.ctrlKey || event.metaKey || event.shiftKey) pick(state, view, entry.index);
+                    show(state, view, position);
+                }, onDblclick: () => sendSome(state, item, [entry.index]), onContextmenu: event => itemMenu(state, event, view, position) },
                 entry.thumb ? ui('img', { src: entry.thumb, alt: '', loading: 'lazy', draggable: 'false' }) : ui('span', { className: 'lowcord-reddit-thumb-empty' }, icon('play', 14)),
                 ...(entry.animated ? [ui('span', { className: 'lowcord-reddit-thumb-gif' }, 'GIF')] : []), check);
             return button;
         });
         view.strip = ui('div', { className: 'lowcord-reddit-strip', role: 'listbox', 'aria-label': 'Gallery items', 'aria-multiselectable': 'true' }, ...view.thumbs);
         view.all = ui('button', { type: 'button', className: 'lowcord-reddit-link', onClick: () => {
-            const everything = view.picked.size === Math.min(10, item.items.length);
-            view.picked = new Set(everything ? [] : item.items.slice(0, 10).map(entry => entry.index));
+            view.picked = new Set(view.picked.size ? [] : item.items.slice(0, 10).map(entry => entry.index));
             refresh(state, view);
         } });
         view.note = ui('span', { className: 'lowcord-reddit-gallery-note' });
         view.send = ui('button', { type: 'button', className: 'lowcord-reddit-send', onClick: () => {
-            const selection = [...view.picked].sort((a, b) => a - b);
-            if (!selection.length) return;
-            closeGallery(state);
-            send(state, item, selection);
+            sendSome(state, item, view.picked.size ? [...view.picked].sort((a, b) => a - b) : item.items.slice(0, 10).map(entry => entry.index));
         } });
         view.node = ui('div', { className: 'lowcord-reddit-gallery', role: 'group', 'aria-label': `Gallery: ${item.title}`, tabindex: '-1',
             onKeydown: event => {
-                if (event.target.closest('video')) return;
+                if (event.target.closest('video, .lowcord-reddit-menu')) return;
                 if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); show(state, view, view.index + (event.key === 'ArrowLeft' ? -1 : 1)); }
-                else if (event.key === ' ' && !event.target.closest('button')) { event.preventDefault(); pick(state, view, view.index); }
+                else if (event.key === ' ' && !event.target.closest('button')) { event.preventDefault(); pick(state, view, item.items[view.index].index); }
+                else if (event.key === 'Enter' && !event.target.closest('button')) { event.preventDefault(); sendSome(state, item, [item.items[view.index].index]); }
             } },
             ui('div', { className: 'lowcord-reddit-gallery-bar' },
                 ui('button', { type: 'button', className: 'lowcord-reddit-back', onClick: () => closeGallery(state) }, icon('back', 12), 'Back'),
                 ui('span', { className: 'lowcord-reddit-gallery-title', title: item.title }, item.title || 'Gallery'), view.counter),
-            ui('div', { className: 'lowcord-reddit-viewer' }, view.stage, view.previous, view.next, view.toggle),
+            ui('div', { className: 'lowcord-reddit-viewer' }, view.stage, view.previous, view.next, view.toggle, view.sendOne),
             view.strip,
             ui('div', { className: 'lowcord-reddit-gallery-actions' }, view.all, view.note, view.send));
         state.gallery = view;
@@ -360,6 +404,7 @@
     function closeGallery(state) {
         const view = state.gallery;
         if (!view) return;
+        closeMenu(state);
         state.gallery = null;
         const media = view.stage.firstChild;
         if (media?.tagName === 'VIDEO') { media.pause(); media.removeAttribute('src'); media.load(); }
@@ -390,19 +435,21 @@
         refresh(state, view);
     }
     function refresh(state, view) {
-        const items = view.item.items, on = view.picked.has(view.index);
+        const items = view.item.items, entry = items[view.index], on = view.picked.has(entry.index);
         view.counter.textContent = `${view.index + 1} / ${items.length}`;
         view.toggle.replaceChildren(icon('check', 12), on ? 'Selected' : 'Select');
         view.toggle.setAttribute('aria-pressed', String(on));
+        const single = transfer.jobs.get(`${state.channelId}:${view.item.id}:${entry.index}`), done = transfer.sent.has(`${state.channelId}:${view.item.id}:${entry.index}`);
+        view.sendOne.disabled = done || Boolean(single && single.phase !== 'failed');
+        view.sendOne.replaceChildren(icon(done ? 'check' : 'upload', 12), done ? 'Sent' : single && single.phase !== 'failed' ? 'Sending\u2026' : single ? 'Retry' : sendLabel(view.item, entry));
         view.thumbs.forEach((thumb, position) => {
             const picked = view.picked.has(items[position].index);
             thumb.setAttribute('aria-selected', String(picked));
             thumb.setAttribute('aria-label', `Item ${position + 1}${items[position].animated ? ', GIF' : ''}${picked ? ', selected' : ''}`);
         });
-        view.all.textContent = view.picked.size === Math.min(10, items.length) ? 'Clear selection' : items.length > 10 ? 'Select first 10' : 'Select all';
-        view.note.textContent = items.length > 10 ? 'Up to 10 per message' : '';
-        view.send.disabled = !view.picked.size;
-        view.send.textContent = view.picked.size ? `Send ${view.picked.size}` : 'Select items';
+        view.all.textContent = view.picked.size ? 'Clear selection' : items.length > 10 ? 'Select first 10' : 'Select all';
+        view.note.textContent = view.picked.size ? `${view.picked.size} selected` : 'Right-click an item for more';
+        view.send.textContent = view.picked.size ? `Send ${view.picked.size} selected` : `Send all ${Math.min(10, items.length)}`;
     }
 
     // ----- Sending ------------------------------------------------------------
@@ -415,6 +462,7 @@
         const sent = [...transfer.sent].some(mine);
         item.button.disabled = item.kind !== 'gallery' && (Boolean(job && job.phase !== 'failed') || sent);
         item.button.dataset.state = job ? job.phase : sent ? 'sent' : '';
+        if (state.gallery?.item === item) refresh(state, state.gallery);
     }
     function queueStatus() {
         const state = current;
@@ -609,7 +657,7 @@
             if (state.more.textContent === 'Retry' && !state.items.length) void search(state, true); else void search(state, false);
         } }, 'Load more');
         state.results = ui('div', { className: 'lowcord-reddit-results', id: 'lowcord-reddit-results', role: 'tabpanel', tabindex: '-1', onScroll: () => {
-            stopPreview(state);
+            stopPreview(state); closeMenu(state);
             if (!state.loading && !state.more.hidden && state.more.textContent !== 'Retry'
                 && state.results.scrollHeight - state.results.scrollTop - state.results.clientHeight < 600) void search(state, false);
         } }, state.grid, state.more);
@@ -643,6 +691,7 @@
             drag, ui('h2', {}, 'Reddit'), state.accountButton, optionsButton,
             ui('button', { type: 'button', className: 'lowcord-reddit-icon', 'aria-label': 'Close Reddit', title: 'Close', onClick: close }, icon('close', 16)));
         state.node = ui('section', { className: 'lowcord-reddit', role: 'dialog', 'aria-label': 'Reddit picker', onPointerdown: event => {
+            if (state.menu && !state.menu.contains(event.target)) closeMenu(state);
             if (!state.options.hidden && !state.options.contains(event.target) && !event.target.closest('[aria-controls="lowcord-reddit-options"]')) state.options.hidden = true;
         } }, header, form, ui('div', { className: 'lowcord-reddit-tabs', role: 'tablist', 'aria-label': 'Reddit feeds' }, ...state.tabs),
             ui('div', { className: 'lowcord-reddit-result-heading' }, state.back, state.heading, state.pin), state.pins,
@@ -650,7 +699,8 @@
         state.key = event => {
             if (event.key !== 'Escape') return;
             event.preventDefault(); event.stopImmediatePropagation();
-            if (!state.options.hidden) state.options.hidden = true; else if (state.gallery) closeGallery(state); else close();
+            if (state.menu) { closeMenu(state); state.gallery?.node.focus({ preventScroll: true }); }
+            else if (!state.options.hidden) state.options.hidden = true; else if (state.gallery) closeGallery(state); else close();
         };
         state.channelChanged = () => { if (selectedChannel() !== channelId) close(); };
         state.channelStore = window.Lowcord.store('SelectedChannelStore');

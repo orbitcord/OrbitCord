@@ -11,33 +11,36 @@ function setupLowcordThemes() {
     // face with the closest one Windows ships, then a Linux fallback.
     const system = '-apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif';
     const systemMono = 'Menlo, Consolas, "DejaVu Sans Mono", monospace';
+    // Contrast: text and muted text reach 4.5:1 on every surface they sit on.
+    // Outgoing bubbles are a deep shade of the accent with light text, so
+    // yellow emoji (#ffcc4d) still stand out at 3:1 inside them.
     const themes = [
         { id: "fjord", name: "Fjord", scheme: "dark", blurb: "Slate blues and a frost accent. Cool and calm.",
             fonts: { ui: `"Helvetica Neue", "Segoe UI Variable Text", "Segoe UI", Helvetica, Arial, sans-serif`, code: systemMono }, radius: 10,
             palette: { frame: "#1a1e26", sidebar: "#20252e", chat: "#252a34", surface: "#2d333f", raised: "#303744", border: "#3a4252",
-                selection: "#3b4f66", mention: "#26323f", text: "#e5e9f0", muted: "#8f99ab", accent: "#88c0d0", accentHover: "#a3d0dd",
+                selection: "#3b4f66", mention: "#26323f", text: "#e5e9f0", muted: "#a0a8b8", accent: "#88c0d0", accentHover: "#a3d0dd",
                 onAccent: "#132029", link: "#8fcbdb", success: "#a3be8c", warning: "#ebcb8b", danger: "#d27b84", code: "#1f242d",
-                bubbleOut: "#5e81ac", bubbleOutText: "#f4f7fb", bubbleIn: "#353c4a", bubbleInText: "#e5e9f0" } },
+                bubbleOut: "#4f6c90", bubbleOutText: "#f4f7fb", bubbleIn: "#353c4a", bubbleInText: "#e5e9f0" } },
         { id: "ember", name: "Ember", scheme: "dark", blurb: "Warm charcoal lit by a low amber glow.",
             fonts: { ui: `"Gill Sans", "Gill Sans MT", Calibri, ${system}`, code: systemMono }, radius: 10,
             palette: { frame: "#141211", sidebar: "#1a1816", chat: "#1f1c1a", surface: "#282421", raised: "#2c2825", border: "#38322d",
                 selection: "#5a4024", mention: "#2c2218", text: "#ece4da", muted: "#9c9189", accent: "#e8a25c", accentHover: "#f0b679",
                 onAccent: "#1c1208", link: "#f0b679", success: "#a9bf7e", warning: "#e8c46b", danger: "#e07b6a", code: "#191715",
-                bubbleOut: "#e8a25c", bubbleOutText: "#1c1208", bubbleIn: "#2f2a26", bubbleInText: "#ece4da" } },
+                bubbleOut: "#905a2b", bubbleOutText: "#fbf1e6", bubbleIn: "#2f2a26", bubbleInText: "#ece4da" } },
         { id: "moss", name: "Moss", scheme: "dark", blurb: "Soft forest greens with sage and wheat.",
             fonts: { ui: `"Trebuchet MS", ${system}`, code: systemMono }, radius: 10,
             palette: { frame: "#191d1a", sidebar: "#1f2420", chat: "#242a26", surface: "#2c332e", raised: "#303832", border: "#39433c",
-                selection: "#44523b", mention: "#2e3024", text: "#d9ddd0", muted: "#909a8d", accent: "#a7c080", accentHover: "#bcd39a",
+                selection: "#44523b", mention: "#2e3024", text: "#d9ddd0", muted: "#9ca59a", accent: "#a7c080", accentHover: "#bcd39a",
                 onAccent: "#172013", link: "#b5cd8f", success: "#a7c080", warning: "#dbbc7f", danger: "#e67e80", code: "#1e2320",
-                bubbleOut: "#a7c080", bubbleOutText: "#172013", bubbleIn: "#323a34", bubbleInText: "#d9ddd0" } },
+                bubbleOut: "#5a6f3f", bubbleOutText: "#f1f5e9", bubbleIn: "#323a34", bubbleInText: "#d9ddd0" } },
         { id: "velvet", name: "Velvet Dusk", scheme: "dark", blurb: "Soft dusk purples with rose and gold.",
             fonts: { ui: `"Figtree", ${system}`, display: `"Fraunces", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif`,
                 code: `"Fira Code", ${systemMono}` },
             radius: 10,
             palette: { frame: "#191724", sidebar: "#1f1d2e", chat: "#232136", surface: "#2a273f", raised: "#2a273f", border: "#393552",
-                selection: "#44415a", mention: "#392d41", text: "#e0def4", muted: "#908caa", accent: "#c4a7e7", accentHover: "#d6c2f1",
+                selection: "#44415a", mention: "#392d41", text: "#e0def4", muted: "#a4a1b9", accent: "#c4a7e7", accentHover: "#d6c2f1",
                 onAccent: "#191724", link: "#c4a7e7", success: "#9ccfd8", warning: "#f6c177", danger: "#eb6f92", code: "#1f1d2e",
-                bubbleOut: "#c4a7e7", bubbleOutText: "#191724", bubbleIn: "#393552", bubbleInText: "#e0def4" } },
+                bubbleOut: "#755e95", bubbleOutText: "#f6f2fc", bubbleIn: "#393552", bubbleInText: "#e0def4" } },
         { id: "phosphor", name: "Phosphor", scheme: "dark", blurb: "Monospace everything, one cobalt accent.",
             fonts: { ui: systemMono, code: systemMono },
             radius: 0, xHeight: .44,
@@ -88,6 +91,12 @@ function setupLowcordThemes() {
         const shade = amount => mix(background, "#000000", dark ? amount : amount / 5);
         const lift = amount => mix(background, text, amount);
         const onAccent = contrast(accent, "#ffffff") >= 3 ? "#ffffff" : mix("#000000", accent, .2);
+        // A light accent would hide yellow emoji in the outgoing bubble, so the
+        // bubble deepens until they, and its white text, stand out.
+        let bubbleOut = accent;
+        for (let step = 1; contrast(bubbleOut, "#ffcc4d") < 3 || contrast(bubbleOut, "#ffffff") < 4.5; step++) {
+            bubbleOut = mix(accent, "#000000", step * .05);
+        }
         return { id: "custom", name: "Custom", scheme: dark ? "dark" : "light", blurb: "Your own colors. Make it below.",
             radius: custom.radius, bubbleCorners: bubbleCorners[custom.radius],
             palette: { frame: shade(.32), sidebar: shade(.16), chat: background, surface: lift(.06), raised: lift(.08), border: lift(.15),
@@ -95,7 +104,7 @@ function setupLowcordThemes() {
                 accent, accentHover: mix(accent, dark ? "#ffffff" : "#000000", .16), onAccent,
                 link: mix(accent, dark ? "#ffffff" : "#000000", .2),
                 success: dark ? "#6fbf8a" : "#2f8a4f", warning: dark ? "#e3b55b" : "#a8740f", danger: dark ? "#e0787c" : "#c6383f",
-                code: shade(.2), bubbleOut: accent, bubbleOutText: onAccent, bubbleIn: lift(.1), bubbleInText: text } };
+                code: shade(.2), bubbleOut, bubbleOutText: "#ffffff", bubbleIn: lift(.1), bubbleInText: text } };
     }
 
     // System fonts offered for all of Discord. Only the ones this computer

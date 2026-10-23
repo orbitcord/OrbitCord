@@ -77,6 +77,14 @@
 .lowcord-settings-body {
     flex: 1; min-height: 0; overflow-y: auto; padding: 20px 40px 32px;
 }
+.lowcord-extension-search {
+    display: block; box-sizing: border-box; width: 100%; min-width: 0; margin: 0 0 16px; padding: 10px 12px;
+    border: 1px solid var(--border-subtle, #ffffff1a); border-radius: 8px;
+    background: var(--input-background, var(--background-secondary, #2b2d31)); color: var(--text-normal, #f2f3f5);
+    font: inherit;
+}
+.lowcord-extension-search::placeholder { color: var(--text-muted, #949ba4); }
+.lowcord-extension-search:focus-visible { outline: 2px solid var(--text-link, #82b7ff); outline-offset: 2px; }
 .lowcord-extension-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .lowcord-extension-list .lowcord-chat-toggle {
     align-items: center; gap: 16px; padding: 16px; border-radius: 8px;
@@ -692,7 +700,13 @@
     padding: 2px 6px 2px 5px; border-radius: 6px; background: rgb(0 0 0 / .62); color: #fff;
     font-size: 11px; line-height: 14px; font-weight: 600; font-variant-numeric: tabular-nums; pointer-events: none;
 }
-.lowcord-media-tile[data-spoiler] img { filter: blur(18px) brightness(.8); transform: scale(1.15); }
+/* The sender's face in the top-left corner, as on Discord's mobile app. */
+.lowcord-media-tile img.lowcord-media-avatar {
+    position: absolute; top: 5px; left: 5px; width: 22px; height: 22px; border-radius: 50%; opacity: 1;
+    object-fit: cover; box-shadow: 0 0 0 1.5px rgb(0 0 0 / .45); pointer-events: none;
+}
+.lowcord-media-tile:hover img.lowcord-media-avatar { filter: none; }
+.lowcord-media-tile[data-spoiler] img:not(.lowcord-media-avatar) { filter: blur(18px) brightness(.8); transform: scale(1.15); }
 .lowcord-media-spoiler {
     position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
     font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #fff;

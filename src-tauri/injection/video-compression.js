@@ -7,11 +7,13 @@
     let active;
     const extensions = () => window.Lowcord.extensions;
     const channelId = () => window.Lowcord.store('SelectedChannelStore')?.getChannelId?.();
-    const isVideo = file => /^video\//i.test(file.type) || /\.(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg|ts|mts|m2ts|wmv|flv|ogv)$/i.test(file.name);
+    const mediaKind = file => /^image\/gif$/i.test(file.type) || /\.gif$/i.test(file.name) ? 'gif'
+        : /^video\//i.test(file.type) || /\.(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg|ts|mts|m2ts|wmv|flv|ogv)$/i.test(file.name) ? 'video'
+        : /^image\/(?:png|apng|jpeg|webp|avif|bmp|tiff)$/i.test(file.type) || /\.(png|apng|jpe?g|webp|avif|bmp|tiff?)$/i.test(file.name) ? 'image' : null;
     function status(batch) {
         const { ui } = extensions();
-        const title = ui('strong', {}, 'Preparing video…');
-        const detail = ui('span', {}, `MP4 · under ${batch.limit / 1_000_000} MB`);
+        const title = ui('strong', {}, 'Preparing media…');
+        const detail = ui('span', {}, `Under ${batch.limit / 1_000_000} MB`);
         // Lucide circle + loader-circle (ISC); geometry kept from the library.
         const ring = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         for (const [key, value] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
@@ -21,7 +23,7 @@
         const arc = document.createElementNS(ring.namespaceURI, 'path');
         arc.setAttribute('d', 'M21 12a9 9 0 1 1-6.219-8.56');
         ring.append(track, arc);
-        const button = ui('button', { type: 'button', onClick: () => cancel('Video compression cancelled. Attach the files again when ready.') }, 'Cancel');
+        const button = ui('button', { type: 'button', onClick: () => cancel('Media compression cancelled. Attach the files again when ready.') }, 'Cancel');
         const root = ui('div', { className: 'lowcord-video-compression', role: 'status', 'aria-live': 'polite' },
             ring, ui('div', { className: 'lowcord-compression-copy' }, title, detail), button);
         document.body.append(root);
@@ -60,11 +62,13 @@
     }
     async function compress(file, batch, index, total) {
         check(batch);
-        const headline = total === 1 ? 'Compressing 1 video' : `Compressing video ${index} of ${total}`;
-        batch.status.update(headline, `MP4 · under ${batch.limit / 1_000_000} MB`, file.name);
+        const kind = mediaKind(file), label = kind === 'gif' ? 'GIF' : kind;
+        const headline = total === 1 ? `Compressing 1 ${label}` : `Compressing media ${index} of ${total}`;
+        const detail = `${kind === 'image' ? 'PNG' : kind === 'gif' ? 'GIF → MP4' : 'MP4'} · under ${batch.limit / 1_000_000} MB`;
+        batch.status.update(headline, detail, file.name);
         let id;
         try {
-            ({ id } = await native('begin', { size: file.size, limit: batch.limit }));
+            ({ id } = await native('begin', { size: file.size, limit: batch.limit, kind }));
             batch.id = id; check(batch);
             for (let offset = 0; offset < file.size; offset += chunkSize) {
                 check(batch);
@@ -72,10 +76,13 @@
                 check(batch); await native('append', id, bytes);
             }
             check(batch);
-            batch.status.update(headline, `MP4 · under ${batch.limit / 1_000_000} MB`, file.name);
+            batch.status.update(headline, detail, file.name);
             const result = await native('finish', id);
             check(batch);
             if (!Number.isSafeInteger(result.size) || result.size < 12 || result.size >= batch.limit) throw new Error('invalid-output');
+            const type = result.type || 'video/mp4';
+            const extension = { 'video/mp4': 'mp4', 'image/png': 'png' }[type];
+            if (!extension || result.extension && result.extension !== extension) throw new Error('invalid-output');
             const parts = [];
             for (let offset = 0; offset < result.size; offset += chunkSize) {
                 check(batch);
@@ -86,8 +93,8 @@
                 // buffer off the JS heap and can be shared by the final File.
                 parts.push(new Blob([bytes]));
             }
-            const name = file.name.replace(/\.[^.]*$/, '') + '.mp4';
-            return new File(parts, name, { type: 'video/mp4', lastModified: file.lastModified });
+            const name = file.name.replace(/\.[^.]*$/, '') + '.' + extension;
+            return new File(parts, name, { type, lastModified: file.lastModified });
         } finally {
             if (id) await native('cancel', id).catch(() => {});
             if (batch.id === id) batch.id = null;
@@ -105,41 +112,41 @@
         if (message) extensions()?.toast(message, true);
     }
     function errorMessage(error) {
-        if (error.code === 'ffmpeg-missing') return 'Install FFmpeg and restart Lowcord to compress large videos. Original files were kept.';
-        if (error.code === 'unsupported-duration') return 'Couldn’t read this video or it exceeds six hours. Original files were kept.';
-        if (error.code === 'encode-timeout') return 'Video compression took too long. Original files were kept.';
-        return 'Couldn’t compress this video. Original files were kept; you can retry or choose another file.';
+        if (error.code === 'ffmpeg-missing') return 'Install FFmpeg and restart Lowcord to compress media. Original files were kept.';
+        if (error.code === 'unsupported-duration') return 'Couldn’t read this video or animation, or it exceeds six hours. Original files were kept.';
+        if (error.code === 'encode-timeout') return 'Media compression took too long. Original files were kept.';
+        return 'Couldn’t compress this media. Original files were kept; you can retry or choose another file.';
     }
     function intercept(event, files, replay) {
         if (ignored.has(event) || event.defaultPrevented || !extensions()?.enabled('compressVideos') || !window.__LOWCORD_NATIVE__?.videoCompression) return;
         const id = channelId(), limit = targetLimit(id);
-        if (!id || !limit || !files.some(file => isVideo(file) && file.size >= limit)) return;
+        if (!id || !limit || !files.some(file => mediaKind(file) && file.size >= limit)) return;
         event.preventDefault(); event.stopImmediatePropagation();
-        if (active) { active.status.update('A video is still being prepared…', 'Wait or cancel before attaching more files.'); return true; }
-        if (files.some(file => isVideo(file) && file.size > maximumSource)) {
-            extensions().toast('Videos above 2 GB need to be trimmed first. Original files were kept.', true);
+        if (active) { active.status.update('Media is still being prepared…', 'Wait or cancel before attaching more files.'); return true; }
+        if (files.some(file => mediaKind(file) && file.size > maximumSource)) {
+            extensions().toast('Media above 2 GB needs to be reduced first. Original files were kept.', true);
             replay(files); return true;
         }
         const batch = { channel: id, limit, cancelled: false };
         active = batch;
         batch.status = status(batch);
         const store = window.Lowcord.store('SelectedChannelStore');
-        const changed = () => { if (channelId() !== id) cancel('Video compression cancelled because you switched chats.'); };
+        const changed = () => { if (channelId() !== id) cancel('Media compression cancelled because you switched chats.'); };
         if (typeof store?.addChangeListener === 'function') {
             store.addChangeListener(changed);
             batch.unsubscribe = () => store.removeChangeListener?.(changed);
         }
         void (async () => {
             try {
-                const output = [], count = files.filter(file => isVideo(file) && file.size >= limit).length;
+                const output = [], count = files.filter(file => mediaKind(file) && file.size >= limit).length;
                 let index = 0;
-                for (const file of files) output.push(isVideo(file) && file.size >= limit ? await compress(file, batch, ++index, count) : file);
+                for (const file of files) output.push(mediaKind(file) && file.size >= limit ? await compress(file, batch, ++index, count) : file);
                 check(batch);
                 if (replay(output) === false) {
                     extensions().toast('The attachment composer closed. Please attach the files again.', true);
                     return;
                 }
-                extensions().toast('Videos compressed and attached. Review them, then press Send.');
+                extensions().toast('Media compressed and attached. Review it, then press Send.');
             } catch (error) {
                 if (!batch.cancelled && channelId() === id && extensions()?.enabled('compressVideos')) {
                     const attached = replay(files);
@@ -213,7 +220,7 @@
     window.addEventListener('keydown', event => {
         if (active && !active.cancelled && event.key === 'Enter' && !event.shiftKey && event.target instanceof Element && event.target.closest(composerSelector)) {
             event.preventDefault(); event.stopImmediatePropagation();
-            active.status.update('Video compression is still running…', 'Wait for it to finish, or cancel before sending.');
+            active.status.update('Media compression is still running…', 'Wait for it to finish, or cancel before sending.');
         }
     }, true);
     window.addEventListener('submit', event => {
@@ -222,7 +229,7 @@
         }
     }, true);
     window.addEventListener('lowcord-extensions-change', () => {
-        if (!extensions()?.enabled('compressVideos')) cancel('Video compression cancelled.');
+        if (!extensions()?.enabled('compressVideos')) cancel('Media compression cancelled.');
     });
     window.addEventListener('pagehide', () => cancel());
     window.Lowcord.videoCompression = { ignore: event => ignored.add(event), busy: () => Boolean(active) };

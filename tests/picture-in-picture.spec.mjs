@@ -37,11 +37,11 @@ test('DM and server videos share a pop-out control without changing attachment l
     const geometry = await button.evaluate(node => {
         const button = node.getBoundingClientRect(), glyph = node.querySelector('svg').getBoundingClientRect();
         const video = document.querySelector('#dm-video').getBoundingClientRect();
-        return { width: button.width, height: button.height, insetTop: button.top - video.top, insetRight: video.right - button.right,
+        return { width: button.width, height: button.height, insetTop: button.top - video.top, insetLeft: button.left - video.left,
             centerX: glyph.x + glyph.width / 2 - (button.x + button.width / 2),
             centerY: glyph.y + glyph.height / 2 - (button.y + button.height / 2) };
     });
-    expect(geometry).toEqual({ width: 28, height: 28, insetTop: 8, insetRight: 8, centerX: 0, centerY: 0 });
+    expect(geometry).toEqual({ width: 28, height: 28, insetTop: 8, insetLeft: 8, centerX: 0, centerY: 0 });
     await page.screenshot({ path: '/tmp/lowcord-picture-in-picture-control.png' });
     await button.click();
     await expect.poll(() => page.evaluate(() => pipFixture.requests)).toEqual([{ id: 'dm-video', disabled: false, time: .5, volume: .4 }]);
@@ -76,6 +76,39 @@ test('shortcut skips typing, errors allow retry, and disabling cleans up and exi
     await page.evaluate(() => { pipFixture.fail = false; });
     await page.getByRole('button', { name: 'Picture-in-picture', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Exit picture-in-picture', exact: true })).toBeEnabled();
+});
+
+test('the PiP surface stays opaque across hover, active and disabled states', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.locator('#dm-video').hover();
+    const button = page.locator('.lowcord-pip-button');
+    const appearance = () => button.evaluate(node => {
+        const style = getComputedStyle(node);
+        return { opacity: style.opacity, background: style.backgroundColor, color: style.color,
+            fill: getComputedStyle(node.querySelector('svg')).fill };
+    });
+    const solid = async () => {
+        const style = await appearance();
+        expect(style.opacity).toBe('1');
+        expect(style.background).toMatch(/^rgb\(/);
+        expect(style.fill).toBe('none');
+        return style;
+    };
+    await solid();
+    await button.hover(); await solid();
+    await button.click(); await solid();
+    await expect(button).toHaveCSS('color', 'rgb(130, 183, 255)');
+    // Metadata loading must dim the glyph, not fade the entire surface over media.
+    await page.locator('#dm-video').evaluate(video => {
+        Object.defineProperty(video, 'readyState', { configurable: true, value: 0 });
+        video.dispatchEvent(new Event('loadedmetadata'));
+    });
+    await expect(button).toBeDisabled();
+    await solid();
+    const disabled = await appearance();
+    await page.locator('#dm-video').hover();
+    expect(await appearance()).toEqual(disabled);
+    await expect(button).toHaveCSS('transition-duration', '0s');
 });
 
 test('viewer videos work; removed sources, GIF loops and RedGIFs picker previews do not leave controls', async ({ page }) => {

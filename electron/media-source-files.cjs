@@ -4,7 +4,7 @@ const { isIP } = require('node:net');
 const { mkdtemp, open, rm, stat, readdir } = require('node:fs/promises');
 const { join } = require('node:path');
 const { tmpdir } = require('node:os');
-const { compressVideo } = require('./video-compress.cjs');
+const { compressVideo, compressImage } = require('./video-compress.cjs');
 const fail = code => Object.assign(new Error(code), { code });
 const CHUNK = 1024 * 1024, MAX_SOURCE = 2 * 1024 ** 3;
 
@@ -37,7 +37,7 @@ function identify(bytes) {
         return { type: 'video/mp4', ext: 'mp4', convert: brand === 'qt  ' };
     }
     if (bytes.subarray(0,4).equals(Buffer.from('1a45dfa3','hex'))) return { type: 'video/webm', ext: 'webm', convert: true };
-    if (bytes.subarray(0,8).equals(Buffer.from('89504e470d0a1a0a','hex'))) return { type: 'image/png', ext: 'png' };
+    if (bytes.subarray(0,8).equals(Buffer.from('89504e470d0a1a0a','hex'))) return { type: 'image/png', ext: 'png', ...(bytes.includes(Buffer.from('acTL')) ? { animated: true } : {}) };
     if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return { type: 'image/jpeg', ext: 'jpg' };
     if (/^GIF8[79]a/.test(bytes.toString('ascii',0,6))) return { type: 'image/gif', ext: 'gif', animated: true };
     if (bytes.toString('ascii',0,4) === 'RIFF' && bytes.toString('ascii',8,12) === 'WEBP') return { type: 'image/webp', ext: 'webp', animated: bytes.includes(Buffer.from('ANIM')) };
@@ -71,7 +71,7 @@ function requestReferer(page,value){
     const referer=new URL(page),target=new URL(value);referer.hash='';
     return referer.origin===target.origin?referer.href:referer.origin+'/';
 }
-function createSourceFiles({ directory = tmpdir(), validateURL = publicURL, compress = compressVideo } = {}) {
+function createSourceFiles({ directory = tmpdir(), validateURL = publicURL, compress = compressVideo, imageCompress = compressImage } = {}) {
     const jobs = new Map(); let root, closed = false;
     async function folder() {
         return root ??= (async () => {
@@ -239,11 +239,11 @@ function createSourceFiles({ directory = tmpdir(), validateURL = publicURL, comp
             let media = hls ? {type:'video/mp4',ext:'mp4',convert:true} : identify(bytes.subarray(0,headerSize));
             let path = input;
             if (media.convert || job.downloaded>=limit) {
-                if (!media.type.startsWith('video/')&&(!media.animated||media.type==='image/webp')) throw fail('image-too-large');
+                const image=media.type.startsWith('image/')&&!media.animated;
                 onState('Compressing media…');
-                path = await compress(input,job.folder,limit,job.controller.signal,{general:true,audioInput:job.audioInput,remux:hls});
-                if(path!==join(job.folder,'compressed.mp4'))throw fail('invalid-output');
-                media={type:'video/mp4',ext:'mp4'};
+                path = await (image?imageCompress:compress)(input,job.folder,limit,job.controller.signal,{general:true,audioInput:job.audioInput,remux:hls});
+                media=image?{type:'image/png',ext:'png'}:{type:'video/mp4',ext:'mp4'};
+                if(path!==join(job.folder,`compressed.${media.ext}`))throw fail('invalid-output');
             }
             job.controller.signal.throwIfAborted();
             const info = await stat(path);

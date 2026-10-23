@@ -377,7 +377,12 @@
     padding: 0 !important;
     transform: none !important;
 }
+/* Discord lays the buttons out as a one-row grid, which spills past the bar
+   (and out of a narrow chat) instead of wrapping. A wrapping flex row keeps
+   every button on the bar's background and inside the chat. */
 [data-lowcord-actions] > :not([id]) > * > [class*="buttonsInner_"] {
+    display: flex !important;
+    align-items: center;
     box-sizing: border-box;
     position: relative !important;
     inset: auto !important;

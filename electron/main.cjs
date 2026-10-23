@@ -12,6 +12,7 @@ const { createMediaSources, SOURCES: MEDIA_SOURCES } = require('./media-sources.
 const { createSourceFiles } = require('./media-source-files.cjs');
 const { createReddit } = require('./reddit.cjs');
 const { createVideoAttachments } = require('./video-attachments.cjs');
+const { downloadImage } = require('./image-drop.cjs');
 const { createUpdateController, latestRelease, macAsset, downloadMacInstaller } = require('./updates.cjs');
 const { createBackgroundSaver } = require('./background.cjs');
 
@@ -297,7 +298,7 @@ function configureSession(ses) {
     ses.setUserAgent(ses.getUserAgent().replace(/\s(?:Electron|Lowcord|Datcord|OrbitCord)\/[\w.-]+/gi, ''));
     ses.protocol.handle(mediaScheme, request => {
         const host = new URL(request.url).hostname;
-        return host === 'redgifs' ? redgifs.serve(request) : host === 'reddit' ? reddit.serve(request) : socialPosts.serve(request);
+        return host === 'redgifs' ? redgifs.serve(request) : host === 'reddit' ? reddit.serve(request) : host === 'sources' ? mediaSources.serve(request) : socialPosts.serve(request);
     });
     // Discord delegates fullscreen to cross-origin video players through its
     // iframe policy. Chromium still requires that delegation and a user gesture;
@@ -501,6 +502,11 @@ async function createDiscordWindow(account) {
 }
 
 function registerIpc() {
+    ipcMain.handle('lowcord:download-dropped-image', async (event, url) => {
+        assertSender(event);
+        try { return await downloadImage(url, { fetchPage: (url, init) => net.fetch(url, init) }); }
+        catch (error) { return { error: error.code ?? 'download-failed' }; }
+    });
     ipcMain.handle('lowcord:app-icon', async (event, id) => {
         assertSender(event);
         if (id === undefined) return readAppIcon();
@@ -762,12 +768,13 @@ async function start() {
     reddit = createReddit({ fetchAccount: (url, init) => redditSession().fetch(url, { ...init, credentials: 'include' }) });
     videoAttachments = createVideoAttachments();
     const sourceFixture=testing&&process.env.LOWCORD_TEST_MEDIA_SOURCES==='1';
+    const sourceFixtureURL=async value=>{if(new URL(value).origin!==testURL.origin)throw new Error('Invalid fixture URL');return value;};
     mediaSources=createMediaSources({
         storageFile:join(userData,'media-source-pages.json'),
         ...(sourceFixture?{
             sources:MEDIA_SOURCES.map(source=>({...source,home:`${testURL.origin}/source-browser?source=${source.id}`})),
             allowNavigation:(_source,value)=>{try{return new URL(value).origin===testURL.origin;}catch{return false;}},
-            files:createSourceFiles({validateURL:async value=>{if(new URL(value).origin!==testURL.origin)throw new Error('Invalid fixture URL');return value;}}),
+            files:createSourceFiles({validateURL:sourceFixtureURL}),validateURL:sourceFixtureURL,
         }:{}),
         onEvent:(owner,value)=>{if(!owner.isDestroyed()&&trusted(owner.getURL()))owner.send('lowcord:media-source',value);},
     });

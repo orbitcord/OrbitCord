@@ -52,35 +52,79 @@
             return url.href;
         } catch { return null; }
     }
-    function itemsOf(message) {
+    // Older attachments can lack a content type; their name still tells.
+    function kindOf(file) {
+        const type = file.content_type ?? "";
+        if (type.startsWith("video/") || type.startsWith("image/")) return type.split("/")[0];
+        if (/\.(?:mp4|webm|mov|m4v|ogv|mkv)$/i.test(file.filename ?? "")) return "video";
+        if (/\.(?:png|jpe?g|gif|webp|avif|bmp|heic|heif)$/i.test(file.filename ?? "")) return "image";
+        return null;
+    }
+    // The sender's face for a tile's corner: their server avatar when the
+    // client has it, else their account avatar or Discord's default one.
+    function avatarOf(author, guildId) {
+        if (!author?.id) return null;
+        try {
+            const url = store("UserStore")?.getUser?.(author.id)?.getAvatarURL?.(guildId ?? undefined, 64);
+            if (typeof url === "string" && url) return url;
+        } catch {}
+        if (author.avatar) return `https://cdn.discordapp.com/avatars/${author.id}/${author.avatar}.${author.avatar.startsWith("a_") ? "gif" : "webp"}?size=64`;
+        try {
+            const index = author.discriminator && author.discriminator !== "0" ? Number(author.discriminator) % 5 : Number((BigInt(author.id) >> 22n) % 6n);
+            return `https://cdn.discordapp.com/embed/avatars/${index}.png`;
+        } catch { return null; }
+    }
+    // The media of every gallery (component type 12) in a component tree.
+    function galleryItems(components, found = []) {
+        for (const component of Array.isArray(components) ? components : []) {
+            if (component?.type === 12) for (const item of component.items ?? []) {
+                const type = item.media?.content_type ?? "";
+                if (!item.spoiler && (type.startsWith("image/") || type.startsWith("video/"))) found.push(item.media);
+            }
+            galleryItems(component?.components, found);
+        }
+        return found;
+    }
+    function itemsOf(message, guildId) {
         const items = [];
         // Shared by every tile of one message, so deleting one keeps the rest right.
         const post = { id: message.id, channelId: message.channel_id, content: message.content ?? "",
             own: message.author?.id === store("UserStore")?.getCurrentUser?.()?.id,
             files: new Set((message.attachments ?? []).map(file => file.id)) };
         for (const file of message.attachments ?? []) {
-            const type = file.content_type ?? "";
-            const video = type.startsWith("video/");
-            if (!video && !type.startsWith("image/")) continue;
+            const kind = kindOf(file);
+            if (!kind) continue;
+            const video = kind === "video";
             const thumb = thumbnail(file.proxy_url || file.url, file.width, file.height, video);
             if (!thumb) continue;
-            items.push({ key: file.id, fileId: file.id, deletable: post.own, thumb, video, gif: type === "image/gif", duration: file.duration_secs ?? null,
+            items.push({ key: file.id, fileId: file.id, deletable: post.own, thumb, video, gif: file.content_type === "image/gif" || /\.gif$/i.test(file.filename ?? ""), duration: file.duration_secs ?? null,
                 spoiler: /^SPOILER_/.test(file.filename ?? "") || Boolean(file.flags & 8), name: file.filename, link: file.url || file.proxy_url });
         }
+        // A link preview goes only with its message, and only when the
+        // message is nothing but links.
+        const linksOnly = !post.files.size && (!post.content.trim() || post.content.trim().split(/\s+/).every(word => /^<?https?:\/\/\S+>?$/.test(word)));
+        const preview = (key, media, kind, embed, link, poster = media) => {
+            const thumb = poster?.proxy_url && thumbnail(poster.proxy_url, poster.width, poster.height, poster === media && kind === "video");
+            if (thumb) items.push({ key, fileId: null, deletable: post.own && linksOnly, thumb, video: kind === "video", gif: kind === "gifv",
+                duration: null, spoiler: false, name: embed.title || embed.provider?.name || "", link: link || media.url || media.proxy_url });
+        };
         for (const [index, embed] of (message.embeds ?? []).entries()) {
-            if (!["image", "gifv", "video"].includes(embed.type)) continue;
-            const media = embed.thumbnail ?? embed.image;
-            const thumb = media?.proxy_url && thumbnail(media.proxy_url, media.width, media.height, false);
-            if (!thumb) continue;
-            // A link preview goes only with its message, and only when the
-            // message is nothing but links.
-            const linksOnly = !post.files.size && (!post.content.trim() || post.content.trim().split(/\s+/).every(word => /^<?https?:\/\/\S+>?$/.test(word)));
-            items.push({ key: `${message.id}:${index}`, fileId: null, deletable: post.own && linksOnly, thumb, video: embed.type === "video", gif: embed.type === "gifv",
-                duration: null, spoiler: false, name: embed.title || embed.provider?.name || "",
-                link: embed.url || embed.video?.url || media.url || media.proxy_url });
+            const key = `${message.id}:${index}`;
+            if (["image", "gifv", "video"].includes(embed.type)) {
+                const media = embed.thumbnail ?? embed.image;
+                if (media) preview(key, media, embed.type, embed, embed.url || embed.video?.url);
+            // Social previews (fxtwitter and the like) are rich embeds that
+            // carry their post's video or picture; a lone thumbnail is only
+            // an article's icon.
+            } else if (embed.video?.proxy_url) preview(key, embed.video, "video", embed, embed.video.url, embed.thumbnail ?? embed.image ?? embed.video);
+            else if (embed.image?.proxy_url) preview(key, embed.image, "image", embed, embed.image.url);
+            // Newer previews lay out as components with a media gallery.
+            else if (embed.type === "components") galleryItems(embed.components).forEach((media, n) =>
+                preview(`${key}:${n}`, media, media.content_type?.startsWith("video/") ? "video" : "image", embed, media.url));
         }
         return items.map(item => ({ ...item, post, messageId: message.id, channelId: message.channel_id,
-            author: message.author?.global_name || message.author?.username || "", time: new Date(message.timestamp) }));
+            author: message.author?.global_name || message.author?.username || "", avatar: avatarOf(message.author, guildId),
+            time: new Date(message.timestamp) }));
     }
     async function searchPage(state, maxId) {
         const { target } = state;
@@ -118,7 +162,11 @@
             if (!messages.length) { state.done = true; return; }
             for (const message of messages) state.seen.add(message.id);
             state.maxId = (BigInt(messages[messages.length - 1].id) - 1n).toString();
-            append(messages.flatMap(itemsOf));
+            // Search matches whole messages: a message with a photo and a
+            // video comes back under either filter, so keep only the kind asked for.
+            const kinds = filters.find(([id]) => id === state.filter)[2];
+            append(messages.flatMap(message => itemsOf(message, state.target.guildId))
+                .filter(item => kinds.includes(item.video ? "video" : "image")));
             await wait(timing.search);
         } catch (error) {
             console.warn("[lowcord] Media gallery:", error);
@@ -143,8 +191,10 @@
         const label = `${what}${item.author ? ` from ${item.author}` : ""}, ${dayFormat.format(item.time)}`;
         const badge = item.video ? ui("span", { className: "lowcord-media-badge" }, svg(playPath, 12), item.duration ? duration(item.duration) : null)
             : item.gif ? ui("span", { className: "lowcord-media-badge" }, "GIF") : null;
+        const face = item.avatar ? ui("img", { className: "lowcord-media-avatar", alt: "", loading: "lazy", decoding: "async", draggable: "false",
+            src: item.avatar, onError: () => face.remove() }) : null;
         const button = ui("button", { type: "button", className: "lowcord-media-tile", "aria-label": `${label}. Jump to message`, title: label,
-            onClick: () => jump(item, button), onContextmenu: event => showMenu(event, item, button) }, image, badge, item.spoiler ? ui("span", { className: "lowcord-media-spoiler" }, "Spoiler") : null);
+            onClick: () => jump(item, button), onContextmenu: event => showMenu(event, item, button) }, image, face, badge, item.spoiler ? ui("span", { className: "lowcord-media-spoiler" }, "Spoiler") : null);
         if (item.spoiler) button.setAttribute("data-spoiler", "");
         const cell = ui("div", { role: "listitem", className: "lowcord-media-cell", "data-message": item.messageId }, button);
         if (item.deletable) cell.append(ui("button", { type: "button", className: "lowcord-media-delete", "aria-label": `Delete ${what.toLowerCase()}`,

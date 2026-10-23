@@ -64,6 +64,7 @@ export async function buildPreload({ sourceRoot = root, output = join(sourceRoot
     const [pictureInPicture, pictureInPictureCSS] = await Promise.all(['picture-in-picture.js', 'picture-in-picture.css'].map(read));
     const [videoCompression, videoCompressionCSS] = await Promise.all(['video-compression.js', 'video-compression.css'].map(read));
     const [mediaSources,mediaSourcesCSS]=await Promise.all(['media-sources.js','media-sources.css'].map(read));
+    const imageDrop = await read('image-drop.js');
     const contents = `const { contextBridge, ipcRenderer, webFrame } = require('electron');
 // The sleep page (a data: URL) gets no bridge or Discord hooks.
 if (process.isMainFrame && location.protocol !== 'data:') {
@@ -107,6 +108,7 @@ if (process.isMainFrame && location.protocol !== 'data:') {
         copyImage: bytes => ipcRenderer.invoke('lowcord:copy-image', bytes),
         saveImage: (bytes, name) => ipcRenderer.invoke('lowcord:save-image', bytes, name),
         downloadMedia: url => ipcRenderer.invoke('lowcord:download-media', url),
+        downloadDroppedImage: url => ipcRenderer.invoke('lowcord:download-dropped-image', url),
         reportAccount: name => ipcRenderer.invoke('lowcord:account', name),
         accounts: (action, id) => ipcRenderer.invoke('lowcord:accounts', action, id),
         onAccountsChanged: callback => {
@@ -140,6 +142,7 @@ if (process.isMainFrame && location.protocol !== 'data:') {
         if(document.documentElement)document.documentElement.append(sourcesStyle);
         else document.addEventListener('DOMContentLoaded',()=>document.documentElement.append(sourcesStyle),{once:true});
         ${mediaSources}
+        ${imageDrop}
         const pipStyle = document.createElement('style');
         pipStyle.textContent = ${JSON.stringify(pictureInPictureCSS)};
         if (document.documentElement) document.documentElement.append(pipStyle);

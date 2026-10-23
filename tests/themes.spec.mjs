@@ -78,7 +78,7 @@ test("theme typefaces and bubble colors can be turned off", async ({ page }) => 
     });
     const bubble = () => page.locator("#bubble").evaluate(node => getComputedStyle(node).getPropertyValue("--lowcord-bubble-color").trim());
     const font = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--font-primary"));
-    await expect.poll(bubble).toBe("#c4a7e7");
+    await expect.poll(bubble).toBe("#755e95");
     expect(await font()).toContain("Figtree");
     await page.evaluate(() => window.__lowcordOpenSettings("themes"));
     await page.getByRole("switch", { name: /Theme chat bubbles/ }).uncheck();
@@ -120,7 +120,7 @@ test("editing bubble colors during a theme takes the theme's colors over", async
     await page.getByLabel("Your messages text color").fill("#ffffff");
     await expect.poll(() => page.evaluate(() => window.__lowcordThemes.state.bubbles)).toBe(false);
     expect(await page.evaluate(() => window.__lowcordChatAppearance.options)).toMatchObject({
-        outgoingColor: "#c4a7e7", outgoingTextColor: "#ffffff", incomingColor: "#393552", incomingTextColor: "#e0def4" });
+        outgoingColor: "#755e95", outgoingTextColor: "#ffffff", incomingColor: "#393552", incomingTextColor: "#e0def4" });
     await expect(page.getByText("Showing Velvet Dusk’s colors")).toHaveCount(0);
 });
 

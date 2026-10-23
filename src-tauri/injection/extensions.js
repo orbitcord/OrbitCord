@@ -6,10 +6,10 @@
     const storageKey = "lowcord.extensions";
     const catalog = [
         { id: "anonymiseFileNames", title: "Anonymise file names", description: "Randomise upload names. Keep file types and spoiler tags." },
-        { id: "compressVideos", title: "Compress large videos", description: "Automatically shrink video attachments below 20 MB in DMs and 100 MB in servers. Requires FFmpeg." },
+        { id: "compressVideos", title: "Compress media", description: "Shrink large images, videos and GIFs below 20 MB in DMs and 100 MB in servers. Images retain transparency; GIFs become MP4. Requires FFmpeg." },
         { id: "voiceMessages", title: "Voice messages", description: "Use the waveform button to record a voice message." },
         { id: "redgifsPicker", title: "RedGIFs picker", description: "Browse and search RedGIFs, then send a video as an MP4 file." },
-        { id: "mediaSources", title: "Media sources", description: "Browse eight media sources and send original images or videos with one click." },
+        { id: "mediaSources", title: "Media sources", description: "Browse GifReels and XXXTik and send original images or videos with one click." },
         { id: "redditPicker", title: "Reddit picker", description: "Browse Reddit, optionally signed in, and send a post's media as files. Large videos are compressed below 20 MB." },
         { id: "chatCapture", title: "Chat screenshots", description: "Use the camera button to capture a range of messages in one image." },
         { id: "mediaGallery", title: "Media gallery", description: "Browse chat photos and videos from the header. Click to jump to a message." },

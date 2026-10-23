@@ -32,7 +32,42 @@ async function expectNativeFullscreen(app, fullscreen) {
         && global.fullscreenTransitions.includes(fullscreen ? 'enter-full-screen' : 'leave-full-screen'), fullscreen)).toBe(true);
 }
 
-test('eight media sources resolve linked originals in isolated sessions and send cookie-protected media with one click',async()=>{
+test('browser image drop crosses the sandbox, bypasses CORS, and attaches original bytes without sending', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-image-drop-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
+        await page.evaluate(() => {
+            Lowcord.extensions.set('anonymiseFileNames', false);
+            const original = Lowcord.store;
+            Lowcord.store = name => name === 'SelectedChannelStore' ? { getChannelId: () => 'image-dm' } : original(name);
+            const composer = document.createElement('div'); composer.className = 'channelTextArea_image';
+            const editor = document.createElement('textarea'); editor.value = 'Keep my draft'; editor.setAttribute('aria-label', 'Image draft');
+            composer.append(editor); document.querySelector('main').append(composer);
+            window.imageAttachments = [];
+            editor.addEventListener('paste', event => { imageAttachments.push(...event.clipboardData.files); });
+            const data = new DataTransfer();
+            // localhost differs from the fixture's 127.0.0.1 origin and the
+            // server supplies no Access-Control-Allow-Origin header.
+            data.setData('text/uri-list', 'http://localhost:4319/media/sample.png');
+            data.setData('text/html', '<img src="http://localhost:4319/media/sample.png">');
+            composer.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }));
+        });
+        await expect.poll(() => page.evaluate(() => window.imageAttachments.length)).toBe(1);
+        await expect(page.getByLabel('Image draft')).toHaveValue('Keep my draft');
+        const bytes = await readFile(resolve('tests/fixtures/media/sample.png'));
+        expect(await page.evaluate(async () => ({
+            type: imageAttachments[0].type, name: imageAttachments[0].name,
+            bytes: Array.from(new Uint8Array(await imageAttachments[0].arrayBuffer())),
+        }))).toEqual({ type: 'image/png', name: 'sample.png', bytes: Array.from(bytes) });
+        expect(await page.evaluate(() => Lowcord.imageDrop.busy())).toBe(false);
+        expect(await page.evaluate(() => __LOWCORD_NATIVE__.downloadDroppedImage('file:///etc/passwd'))).toEqual({ error: 'invalid-url' });
+        expect(await page.evaluate(() => __LOWCORD_NATIVE__.downloadDroppedImage('http://localhost:4319/electron'))).toEqual({ error: 'not-image' });
+        expect(await page.frames().find(frame => frame.url().includes('/electron-child')).evaluate(() => typeof window.__LOWCORD_NATIVE__)).toBe('undefined');
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('GifReels and XXXTik resolve linked originals in isolated sessions and send cookie-protected media with one click',async()=>{
     const dir=await mkdtemp(join(tmpdir(),'orbitcord-sources-'));
     const app=await launch(dir,{mediaSources:true});
     try{
@@ -55,8 +90,9 @@ test('eight media sources resolve linked originals in isolated sessions and send
         await page.evaluate(()=>Lowcord.mediaSources.open());
         await expect.poll(()=>app.windows().some(p=>p.url().endsWith('/media-browser.html'))).toBe(true);
         const host=app.windows().find(p=>p.url().endsWith('/media-browser.html'));
-        await expect(host.getByLabel('Media source')).toHaveValue('shorts');
-        await expect(host.locator('#source option')).toHaveCount(8);
+        await expect(host.getByLabel('Media source')).toHaveValue('gifreels');
+        await expect(host.locator('#source option')).toHaveText(['GifReels','XXXTik']);
+        await expect(page.getByRole('tab')).toHaveText(['GifReels','XXXTik']);
         await page.getByRole('button',{name:'Open site for browsing or login'}).click();
         await host.getByRole('button',{name:'Save page',exact:true}).click();
         await expect(host.getByRole('button',{name:'Unsave page',exact:true})).toBeVisible();
@@ -70,20 +106,32 @@ test('eight media sources resolve linked originals in isolated sessions and send
             .toEqual({node:'undefined',discord:'undefined',toolbar:'undefined'});
         await remote('document.querySelector("button").click()');
         await expect.poll(()=>remote('document.querySelector("#account").textContent')).toBe('Signed in');
-        for(const id of ['gifreels','erome','sexcom','imagefap','xxxfollow','xxxtik','xfree']){
+        for(const id of ['xxxtik']){
             await host.getByLabel('Media source').selectOption(id);
             await expect.poll(()=>remote('new URL(location.href).searchParams.get("source")')).toBe(id);
             await expect.poll(()=>remote('document.readyState')).toBe('complete');
             await expect.poll(()=>remote('document.querySelector("#account")?.textContent')).toBe('Signed out');
         }
-        await host.getByLabel('Media source').selectOption('shorts');
-        await expect.poll(()=>remote('new URL(location.href).searchParams.get("source")')).toBe('shorts');
+        // The original HLS is deliberately absent: hovering must use the MP4 preview.
+        await remote(`document.body.innerHTML='<img src="/cdn/production/media/0312/fixture123/thumbnail.webp" width="240" height="320" alt="XXXTik hover fixture">'`);
+        await host.getByRole('button',{name:'Back to picker',exact:true}).click();
+        const previewTile=page.getByRole('button',{name:'Send XXXTik hover fixture',exact:true});
+        await expect(previewTile).toBeVisible();
+        await previewTile.hover();
+        await expect(previewTile).toHaveAttribute('data-previewing','true');
+        await expect.poll(()=>previewTile.locator('video').evaluate(video=>!video.paused&&video.muted&&video.videoWidth>0).catch(()=>false)).toBe(true);
+        expect(await page.evaluate(()=>sourcePosts.length)).toBe(0);
+        await page.mouse.move(1,1);
+        await expect(previewTile.locator('video')).toHaveCount(0);
+        await page.getByRole('button',{name:'Open site for browsing or login'}).click();
+        await host.getByLabel('Media source').selectOption('gifreels');
+        await expect.poll(()=>remote('new URL(location.href).searchParams.get("source")')).toBe('gifreels');
         await expect.poll(()=>remote('document.querySelector("#account")?.textContent')).toBe('Signed in');
         await expect(host.locator('#saved option')).toHaveCount(2);
         await host.getByRole('button',{name:'Sign out',exact:true}).click();
         await expect.poll(()=>remote('document.querySelector("#account")?.textContent')).toBe('Signed out');
         await remote('document.querySelector("button").click()');
-        await host.getByRole('button',{name:'Use this page in picker',exact:true}).click();
+        await host.getByRole('button',{name:'Back to picker',exact:true}).click();
         const tile=page.getByRole('button',{name:'Send Open original fixture',exact:true});
         await expect(tile).toBeVisible();
         await expect.poll(()=>tile.locator('img').getAttribute('src')).toMatch(/^data:image\/jpeg;base64,/);
@@ -129,7 +177,7 @@ test('cross-origin source downloads obey Chromium referrer policy instead of fai
             const files=createSourceFiles({validateURL:async value=>value});
             try{
                 const result=await files.prepare(999,{url:'http://localhost:4319/media/sample.mp4',referer:'http://127.0.0.1:4319/source-browser?test=1',
-                    source:'shorts',channelId:'test',limit:20_000_000,fetch:(url,init)=>session.defaultSession.fetch(url,init)});
+                    source:'gifreels',channelId:'test',limit:20_000_000,fetch:(url,init)=>session.defaultSession.fetch(url,init)});
                 const bytes=await files.read(999,result.id,0);return{type:result.type,size:result.size,header:Buffer.from(bytes.subarray(4,8)).toString('ascii')};
             }finally{await files.close();}
         });
@@ -195,6 +243,51 @@ for (const method of ['chooser', 'overlay drop']) test(`automatic video attachme
         const frame = page.frames().find(frame => frame !== page.mainFrame());
         if (frame) expect(await frame.evaluate(() => typeof window.__LOWCORD_NATIVE__)).toBe('undefined');
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+for (const kind of ['image', 'gif']) test(`automatic ${kind} compression attaches a decodable file below the limit through the native chooser`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-media-compress-'));
+    let app;
+    try {
+        let source;
+        if (kind === 'gif') {
+            const { execFile } = await import('node:child_process'); const { promisify } = await import('node:util');
+            const path = join(dir, 'animation.gif');
+            await promisify(execFile)('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', resolve('tests/fixtures/media/sample.mp4'), '-vf', 'scale=64:36,fps=8', '-t', '1', path]);
+            source = await readFile(path);
+        } else source = await readFile(resolve('tests/fixtures/media/sample.png'));
+        app = await launch(dir);
+        const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
+        await page.evaluate(() => {
+            Lowcord.extensions.set('anonymiseFileNames', false);
+            const original = Lowcord.store;
+            Lowcord.store = name => name === 'SelectedChannelStore' ? { getChannelId: () => 'fixture-dm' }
+                : name === 'ChannelStore' ? { getChannel: () => ({ id: 'fixture-dm', type: 1 }) } : original(name);
+            const composer = document.createElement('div'); composer.className = 'channelTextArea_compression';
+            const input = document.createElement('input'); input.type = 'file'; input.setAttribute('aria-label', 'Media compression input');
+            input.addEventListener('change', () => { window.compressedFile = input.files[0]; });
+            composer.append(input); document.body.append(composer);
+        });
+        const padded = Buffer.alloc(20_000_001); source.copy(padded);
+        await page.getByLabel('Media compression input').setInputFiles({ name: kind === 'gif' ? 'SPOILER_animation.gif' : 'SPOILER_picture.png', mimeType: kind === 'gif' ? 'image/gif' : 'image/png', buffer: padded });
+        await expect.poll(() => page.evaluate(() => window.compressedFile?.size ?? 0), { timeout: 30_000 }).toBeGreaterThan(0);
+        const output = await page.evaluate(async kind => {
+            const file = window.compressedFile, url = URL.createObjectURL(file);
+            try {
+                if (kind === 'image') {
+                    const image = new Image(); image.src = url; await image.decode();
+                    return { type: file.type, name: file.name, size: file.size, width: image.naturalWidth };
+                }
+                const video = document.createElement('video'); video.src = url; video.muted = true;
+                await new Promise((resolve, reject) => { video.onloadeddata = resolve; video.onerror = reject; });
+                return { type: file.type, name: file.name, size: file.size, width: video.videoWidth, duration: video.duration };
+            } finally { URL.revokeObjectURL(url); }
+        }, kind);
+        expect(output).toMatchObject({ type: kind === 'gif' ? 'video/mp4' : 'image/png', name: kind === 'gif' ? 'SPOILER_animation.mp4' : 'SPOILER_picture.png' });
+        expect(output.size).toBeLessThan(20_000_000); expect(output.width).toBeGreaterThan(0);
+        if (kind === 'gif') expect(output.duration).toBeGreaterThan(.5);
+        expect(await page.evaluate(() => Lowcord.videoCompression.busy())).toBe(false);
+    } finally { await app?.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
 test('Windows icon resources contain real images at every taskbar size and survive restart', async () => {
@@ -450,7 +543,7 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true,
             extensions: await page.evaluate(() => window.Lowcord.extensions.catalog.length), fetchHooked: true });
         expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
-            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'reportAccount', 'accounts', 'onAccountsChanged'] });
+            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged'] });
         expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsSearch('fixture', -1))).toEqual({ error: 'invalid-search' });
         expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsPrepare('not-a-token', 20_000_000))).toEqual({ error: 'expired' });
         await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsCancel());
@@ -882,7 +975,7 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
         await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
         expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
-            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'reportAccount', 'accounts', 'onAccountsChanged']);
+            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged']);
         expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
     } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
 });

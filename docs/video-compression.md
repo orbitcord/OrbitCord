@@ -1,4 +1,33 @@
-# Automatic video attachments — 2026-10-18
+# Automatic media attachments
+
+## Media support and extension search — 2026-10-23
+
+- Root cause: the local attachment filter accepted only video MIME types and
+  extensions, so GIFs and still images never reached compression.
+- The toggle is now “Compress media”; its saved `compressVideos` key is retained
+  so existing on/off choices survive the rename. Oversized images, videos and
+  GIFs use the existing 20 MB DM/group-DM and 100 MB server/thread budgets.
+- Still images become PNG with transparency preserved and dimensions reduced
+  to fit. PNG uses FFmpeg's built-in encoder; the local FFmpeg installation
+  does not provide WebP encoding. Videos and GIFs become MP4; GIF animation is
+  retained. Smaller media keeps its original bytes. Existing native attachment
+  selection, drafts, spoiler names, cancellation and Send behavior are retained.
+- Output MIME and extension now travel with the bounded native response and
+  are validated before creating the replacement File. Animated image headers
+  are detected before still-image encoding to avoid flattening them.
+- Media-source downloads also use the shared still-image compressor instead of
+  rejecting oversized images. Encoding remains lazy and shares the serial queue.
+- Extension settings now have a labeled search field filtering names and
+  descriptions without changing preferences. Empty results are explained;
+  clearing the query restores the list and related controls.
+- Verification: backend checks cover PNG decoding/transparency and oversized
+  source images; Chromium checks cover GIF/image interception, output MIME,
+  extension search, cancellation and batch order. Four real Electron checks
+  pass for video chooser/drop, still-image decoding and GIF-to-MP4 animation.
+- Limits: FFmpeg remains required. Compression only runs at the requested size
+  threshold; Discord still enforces the account's actual upload limits.
+
+## Original video implementation — 2026-10-18
 
 ## Spec and decisions
 

@@ -11,10 +11,10 @@ async function fixture(t,options={}){
     t.after(async()=>{await service.close();await rm(directory,{recursive:true,force:true});});
     return {service,directory};
 }
-const input=(fetch,extra={})=>({url:'https://media.example.test/clip.mp4',referer:'https://media.example.test/page',limit:20_000_000,channelId:'dm',source:'shorts',fetch,...extra});
+const input=(fetch,extra={})=>({url:'https://media.example.test/clip.mp4',referer:'https://media.example.test/page',limit:20_000_000,channelId:'dm',source:'gifreels',fetch,...extra});
 
-test('all eight source adapters constrain navigation to their own HTTPS domains',()=>{
-    assert.deepEqual(SOURCES.map(s=>s.id),['gifreels','erome','sexcom','imagefap','xxxfollow','xxxtik','shorts','xfree']);
+test('only GifReels and XXXTik are available and constrain navigation to their own HTTPS domains',()=>{
+    assert.deepEqual(SOURCES.map(s=>s.id),['gifreels','xxxtik']);
     for(const source of SOURCES){assert.equal(sourceAllows(source,source.home),true);assert.equal(sourceAllows(source,source.home.replace('https:','http:')),false);assert.equal(sourceAllows(source,'https://discord.com/channels/@me'),false);assert.equal(sourceAllows(source,'file:///etc/passwd'),false);assert.equal(sourceAllows(source,`https://${new URL(source.home).hostname}.evil.test/`),false);}
 });
 test('media URLs reject local networks, non-HTTPS URLs, ports and credentials',async()=>{
@@ -51,6 +51,15 @@ test('oversized videos use the shared converter and validate the result against 
     const stream=new ReadableStream({start(controller){controller.enqueue(bytes);for(let i=0;i<20;i++)controller.enqueue(new Uint8Array(CHUNK));controller.close();}});
     const result=await service.prepare(1,input(async()=>new Response(stream)));
     assert.equal(conversions,1);assert.equal(result.size,bytes.length);await service.release(1,result.id);
+});
+
+test('oversized source images compress into PNG instead of failing the attachment limit',async t=>{
+    const bytes=await readFile(join(__dirname,'fixtures/media/sample.png'));
+    const padded=Buffer.alloc(20_000_001);bytes.copy(padded);
+    const {service}=await fixture(t);
+    const result=await service.prepare(1,input(async()=>new Response(padded),{url:'https://media.example.test/photo.png'}));
+    assert.equal(result.type,'image/png');assert.ok(result.size<20_000_000);
+    assert.equal(Buffer.from(await service.read(1,result.id,0)).subarray(0,8).toString('hex'),'89504e470d0a1a0a');
 });
 test('protected, live and separate-audio playlists fail explicitly without fetching their media',async t=>{
     const {service}=await fixture(t);

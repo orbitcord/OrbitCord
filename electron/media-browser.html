@@ -4,8 +4,13 @@
 <title>Media source website — OrbitCord</title><link rel="stylesheet" href="media-browser.css"><script src="media-browser.js" defer></script></head>
 <body>
 <header>
- <div class="top"><strong>Browse source</strong><select id="source" aria-label="Media source"></select><span id="destination"></span><button id="picker">Use this page in picker</button></div>
- <form id="navigation"><button id="back" type="button" aria-label="Back">←</button><button id="forward" type="button" aria-label="Forward">→</button><button id="reload" type="button" aria-label="Reload">↻</button><input id="address" aria-label="Source address" type="url" spellcheck="false"><button id="go" type="submit">Go</button><button id="save" type="button">Save page</button><select id="saved" aria-label="Saved pages"><option value="">Saved pages</option></select><button id="logout" type="button">Sign out</button></form>
+ <form id="navigation">
+  <button id="back" type="button" class="icon" aria-label="Back" title="Back">‹</button><button id="forward" type="button" class="icon" aria-label="Forward" title="Forward">›</button><button id="reload" type="button" class="icon" aria-label="Reload" title="Reload">↻</button>
+  <select id="source" aria-label="Media source"></select>
+  <input id="address" aria-label="Source address" type="url" spellcheck="false"><button id="go" type="submit" hidden>Go</button>
+  <button id="save" type="button">Save page</button><select id="saved" aria-label="Saved pages"><option value="">Saved pages</option></select><button id="logout" type="button">Sign out</button>
+  <button id="picker" type="button">Back to picker</button>
+ </form>
 </header>
-<footer><span id="status" role="status" aria-live="polite">Opening source…</span><button id="cancel" hidden>Cancel</button></footer>
+<footer><span id="destination"></span><span id="status" role="status" aria-live="polite">Opening source…</span><button id="cancel" hidden>Cancel</button></footer>
 </body></html>

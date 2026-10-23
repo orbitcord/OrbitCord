@@ -60,6 +60,27 @@ test("photo uploads require opt-in and extension choices persist", async ({ page
     expect(await page.evaluate(() => Lowcord.extensions.enabled("socialPhotoUpload"))).toBe(true);
 });
 
+test('extension search filters names and descriptions, preserves toggles, and clears empty results', async ({ page }) => {
+    await page.evaluate(() => window.__lowcordOpenSettings('extensions'));
+    const dialog = page.getByRole('dialog', { name: 'OrbitCord Settings' });
+    const search = dialog.getByRole('searchbox', { name: 'Search extensions' });
+    await search.fill('  COMPRESS  MEDIA  ');
+    await expect(dialog.getByRole('switch', { name: /Compress media/ })).toBeChecked();
+    await search.fill('GIFs FFmpeg');
+    await expect(dialog.getByRole('switch')).toHaveCount(1);
+    await dialog.getByRole('switch', { name: /Compress media/ }).uncheck();
+    await search.fill('FFmpeg');
+    await expect(dialog.getByRole('switch', { name: /Compress media/ })).not.toBeChecked();
+    await search.fill('extension that does not exist');
+    await expect(dialog.getByRole('switch')).toHaveCount(0);
+    await expect(dialog.getByRole('status')).toContainText('No extensions found');
+    await search.fill('');
+    await expect(dialog.getByRole('switch')).toHaveCount(await page.evaluate(() => Lowcord.extensions.catalog.length));
+    await expect(dialog.getByRole('switch', { name: /Compress media/ })).not.toBeChecked();
+    await expect(dialog.getByRole('slider', { name: 'Embed volume' })).toBeVisible();
+    await expect(search).toBeFocused();
+});
+
 test("silent typing answers Discord's typing request locally, over XHR and fetch", async ({ page }) => {
     expect(await xhr(page, "POST", `/api/v9/channels/${channel}/typing`, "")).toBe(204);
     expect(await page.evaluate(path => fetch(path, { method: "POST" }).then(r => r.status), `/api/v9/channels/${channel}/typing`)).toBe(204);
@@ -671,6 +692,8 @@ test("mass delete in a server picks the channel or the whole server and can stop
 });
 
 test("media gallery shows a DM's photos and videos by month and jumps to a message", async ({ page }) => {
+    const pixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=", "base64");
+    await page.route("https://cdn.discordapp.com/**", route => route.fulfill({ contentType: "image/png", body: pixel }));
     await page.evaluate(() => {
         document.body.insertAdjacentHTML("beforeend", `<div class="chat_test" style="position:fixed;inset:0 0 0 200px;display:flex;flex-direction:column">
             <section class="title_test" style="height:48px"><div class="toolbar_test" style="display:flex;gap:8px">
@@ -687,6 +710,9 @@ test("media gallery shows a DM's photos and videos by month and jumps to a messa
             { duration: 75, spoiler: i === 29, own: i === 27 || i === 28, second: i === 27, content: i === 27 ? "two photos" : "" }));
         messages.push({ id: "20100", channel_id: "700", timestamp: "2026-10-06T12:00:00Z", author: { id: "1", username: "me" }, attachments: [],
             embeds: [{ type: "gifv", thumbnail: { proxy_url: "https://media.discordapp.net/external/g.gif", width: 200, height: 200 } }] });
+        // One message with a photo and a video, the video without a content type.
+        messages.push({ ...media(19_999, "08-03", "image/png"), author: { id: "3", username: "bo", avatar: "abc" } });
+        messages.at(-1).attachments.push({ ...file("v19999", ""), filename: "clip.MOV" });
         window.gallery = { searches: [], jumps: [], edits: [] };
         const stores = {
             SelectedChannelStore: { getChannelId: () => "700" },
@@ -701,7 +727,8 @@ test("media gallery shows a DM's photos and videos by month and jumps to a messa
             async get({ url, query }) {
                 gallery.searches.push({ url, query: { ...query } });
                 const hits = messages.filter(m => (!query.max_id || BigInt(m.id) <= BigInt(query.max_id))
-                    && (query.has.includes("video") || !m.attachments.some(a => a.content_type.startsWith("video/"))))
+                    // Like Discord's search, a message matches when any of its files does.
+                    && (query.has.includes("video") || !m.attachments.length || m.attachments.some(a => a.content_type.startsWith("image/"))))
                     .sort((a, b) => Number(b.id) - Number(a.id));
                 return { status: 200, body: { total_results: hits.length, messages: hits.slice(0, 25).map(m => [m]) } };
             },
@@ -723,14 +750,20 @@ test("media gallery shows a DM's photos and videos by month and jumps to a messa
     await button.click();
     const pane = page.getByRole("complementary", { name: "Media" });
     await expect(pane).toContainText("Ada");
-    await expect(pane.locator(".lowcord-media-tile")).toHaveCount(32);
+    await expect(pane.locator(".lowcord-media-tile")).toHaveCount(34);
+    // Each tile carries its sender's face: an uploaded avatar, or Discord's default.
+    await expect(pane.locator(".lowcord-media-tile .lowcord-media-avatar")).toHaveCount(34);
+    await expect(pane.getByRole("button", { name: /^Video from bo/ }).locator(".lowcord-media-avatar"))
+        .toHaveAttribute("src", "https://cdn.discordapp.com/avatars/3/abc.webp?size=64");
+    await expect(pane.getByRole("button", { name: /^Video from Ada/ }).first().locator(".lowcord-media-avatar"))
+        .toHaveAttribute("src", "https://cdn.discordapp.com/embed/avatars/0.png");
     await expect(pane.getByRole("status")).toHaveText("That’s everything.");
     const months = await pane.locator(".lowcord-media-month h3").allTextContents();
     expect(months).toHaveLength(2);
     expect(await pane.locator(".lowcord-media-badge", { hasText: "1:15" }).count()).toBe(6);
     await expect(pane.locator(".lowcord-media-badge", { hasText: "GIF" })).toHaveCount(1);
     await expect(pane.locator(".lowcord-media-tile[data-spoiler]")).toHaveCount(1);
-    const src = await pane.locator(".lowcord-media-tile img").nth(1).getAttribute("src");
+    const src = await pane.locator(".lowcord-media-tile img:first-child").nth(1).getAttribute("src");
     expect(src).toContain("ex=1"); expect(src).toContain("format=webp"); expect(src).toContain("width=420"); expect(src).toContain("height=280");
     const first = await page.evaluate(() => gallery.searches[0]);
     expect(first).toEqual({ url: "/channels/700/messages/search", query: { has: ["image", "video"], include_nsfw: true } });
@@ -782,12 +815,18 @@ test("media gallery shows a DM's photos and videos by month and jumps to a messa
     await pair.first().getByRole("button", { name: "Delete photo" }).click();
     await expect(pair).toHaveCount(0);
     expect(await page.evaluate(() => gallery.edits.at(-1))).toEqual(["patch", "/channels/700/messages/20027", { attachments: [] }]);
-    await expect(pane.locator(".lowcord-media-tile")).toHaveCount(29);
+    await expect(pane.locator(".lowcord-media-tile")).toHaveCount(31);
 
     await pane.getByRole("radio", { name: "Photos" }).click();
     await expect(pane.getByRole("radio", { name: "Photos" })).toHaveAttribute("aria-checked", "true");
-    await expect(pane.locator(".lowcord-media-tile")).toHaveCount(23);
+    // The photo-and-video message shows only its photo here.
+    await expect(pane.locator(".lowcord-media-tile")).toHaveCount(24);
     await expect(pane.locator(".lowcord-media-badge", { hasText: "1:15" })).toHaveCount(0);
+    await expect(pane.getByRole("button", { name: /^Video/ })).toHaveCount(0);
+    await expect(pane.getByRole("button", { name: /^Photo from bo/ })).toHaveCount(1);
+    await pane.getByRole("radio", { name: "Videos" }).click();
+    await expect(pane.locator(".lowcord-media-tile")).toHaveCount(7);
+    await expect(pane.getByRole("button", { name: /^(Photo|GIF)/ })).toHaveCount(0);
 
     await pane.locator(".lowcord-media-tile").first().focus();
     await page.keyboard.press("Escape");

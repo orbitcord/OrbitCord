@@ -16,7 +16,7 @@ test.beforeEach(async({page})=>{
         }});
         Object.defineProperty(Lowcord,'RestAPI',{value:{post:async request=>{sourcePosts.push(request);if(window.failSourcePost)throw Error('network');return{body:{id:'sent'}};}}});
         window.sourceBytes=new Uint8Array(await(await fetch('/media/sample.png')).arrayBuffer());
-        window.sourceState={channelId:'original',source:'shorts',destination:'Fixture DM',limit:20_000_000,sources:[{id:'shorts',name:'Shorts'},{id:'erome',name:'Erome'}],
+        window.sourceState={channelId:'original',source:'gifreels',destination:'Fixture DM',limit:20_000_000,sources:[{id:'gifreels',name:'GifReels'},{id:'xxxtik',name:'XXXTik'}],
             saved:[],items:[{id:'item',kind:'image',label:'Fixture image',thumb:'data:image/png;base64,iVBORw0KGgo='}],status:'Click a card to send.'};
         window.__LOWCORD_NATIVE__={mediaSources:async(action,...args)=>{
             sourceCalls.push({action,args});
@@ -96,11 +96,11 @@ test('cancel before preparation completes releases a late result without sending
 test('thumbnail links are original media pages and video metadata beats a preview image',async({page})=>{
     // Run the production scanner against neutral source markup.
     const{createRequire}=await import('node:module');const require=createRequire(import.meta.url);const{scanMediaPage}=require('../electron/media-source-scan.cjs');
-    await page.setContent('<a href="https://shorts.example/video/one"><img src="https://cdn.example/preview.jpg" width="320" height="200" alt="Video preview"></a><video src="blob:missing" width="320" height="200"></video><meta property="og:video" content="https://cdn.example/original.mp4"><meta property="og:image" content="https://cdn.example/preview.jpg">');
-    const result=await page.evaluate(scanMediaPage,'shorts');
+    await page.setContent('<a href="https://gifreels.example/video/one"><img src="https://cdn.example/preview.jpg" width="320" height="200" alt="Video preview"></a><video src="blob:missing" width="320" height="200"></video><meta property="og:video" content="https://cdn.example/original.mp4"><meta property="og:image" content="https://cdn.example/preview.jpg">');
+    const result=await page.evaluate(scanMediaPage,'gifreels');
     expect(result.items).toEqual([expect.objectContaining({kind:'video',url:'https://cdn.example/original.mp4',poster:'https://cdn.example/preview.jpg'})]);
     await page.locator('meta').evaluateAll(nodes=>nodes.forEach(n=>n.remove()));
-    expect((await page.evaluate(scanMediaPage,'shorts')).items[0]).toMatchObject({kind:'page',url:'https://shorts.example/video/one',poster:'https://cdn.example/preview.jpg'});
+    expect((await page.evaluate(scanMediaPage,'gifreels')).items[0]).toMatchObject({kind:'page',url:'https://gifreels.example/video/one',poster:'https://cdn.example/preview.jpg'});
 });
 
 test('dragging and resizing stop on pointer release and restore the saved position',async({page})=>{
@@ -139,14 +139,25 @@ test('provider scanners resolve direct videos/images and filter ads/avatars whil
     const{createRequire}=await import('node:module');const require=createRequire(import.meta.url);const{scanMediaPage}=require('../electron/media-source-scan.cjs');
     await page.setContent(`
         <img src="https://media.gifreels.com/cdn/storage/production/gifreels/post/abc123/poster-240.webp" width="240" height="320" alt="Reel clip">
-        <img src="https://thumbs.xfree.com/listing/medium_retina/dc36e1ba-c891-4210-9cb9-35ba9e15e1c3_0.webp" width="240" height="320" alt="XFree clip">
-        <img src="https://thumbs.xfree.com/avatar/user.webp" width="240" height="240" alt="Avatar">
+        <img src="https://cdn.example/cdn/production/media/0312/clip123/thumbnail.webp" width="240" height="320" alt="XXXTik clip">
+        <img src="https://cdn.example/avatar/user.webp" width="240" height="240" alt="Avatar">
         <video src="https://cdn.hqmediago.com/ad.mp4" width="320" height="200"></video>
     `);
     const gifreels=await page.evaluate(scanMediaPage,'gifreels');
     expect(gifreels.items[0]).toMatchObject({kind:'video',url:'https://media.gifreels.com/cdn/storage/production/gifreels/post/abc123/gif.mp4',fallbackUrl:'https://p5rn.com/cdn/storage/production/gifreels/post/abc123/gif.mp4'});
-    const xfree=await page.evaluate(scanMediaPage,'xfree');
-    expect(xfree.items.find(i=>i.url.includes('cdn.xfree.com'))).toMatchObject({kind:'video',url:'https://cdn.xfree.com/xfree-prod/d/c/3/dc36e1ba-c891-4210-9cb9-35ba9e15e1c3/full-d.mp4'});
-    expect(xfree.items.some(i=>i.url.includes('hqmediago.com')||i.url.includes('/avatar/'))).toBe(false);
+    const xxxtik=await page.evaluate(scanMediaPage,'xxxtik');
+    expect(xxxtik.items.find(i=>i.url.includes('/clip123/'))).toMatchObject({kind:'video',url:'https://cdn.example/cdn/production/media/0312/clip123/master.m3u8',previewUrl:'https://cdn.example/cdn/production/media/0312/clip123/preview.mp4'});
+    for(const result of [gifreels,xxxtik])expect(result.items.some(i=>i.url.includes('hqmediago.com')||i.url.includes('/avatar/'))).toBe(false);
 });
 
+
+test('hovering a video card plays a muted preview in place and leaving stops it',async({page})=>{
+    await page.evaluate(()=>{sourceState.items=[{id:'clip',kind:'video',label:'Fixture clip',duration:12,width:320,height:240,preview:'/media/sample.mp4',thumb:'data:image/png;base64,iVBORw0KGgo='}];sourceEvent({state:'browse',...sourceState});});
+    const tile=page.getByRole('button',{name:'Send Fixture clip',exact:true});
+    await expect(tile).toContainText('0:12');
+    await tile.hover();
+    await expect.poll(()=>tile.locator('video').evaluate(video=>!video.paused&&video.muted&&video.src.endsWith('/media/sample.mp4')).catch(()=>false)).toBe(true);
+    await expect(tile).toHaveAttribute('data-previewing','true');
+    await page.mouse.move(1,1);
+    await expect(tile.locator('video')).toHaveCount(0);
+});

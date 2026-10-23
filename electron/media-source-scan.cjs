@@ -8,9 +8,8 @@ function scanMediaPage(provider) {
         const url=http(value);if(!url)return true;
         try{
             const parsed=new URL(url);
-            if(/(?:^|\.)(?:bkcdn\.net|hqmediago\.com|bongacams\.com|bgicdn\.com|adtng\.com|livemediahost\.com|exoclick\.com|juicyads\.com|tsyndicate\.com|trafficjunky\.net|vcmdiawe\.com|shorts-avt\.b-cdn\.net)$/i.test(parsed.hostname))return true;
-            if(/(?:\/media\/fans\/avatar\/|thumbs\.xfree\.com\/avatar\/|\/avatars?\/|\/profile[-_]?(?:pic|img|photo)|loading-placeholder\.svg)/i.test(url))return true;
-            if(/^(?:www\.)?sex\.com$/i.test(parsed.hostname)&&/\/preview_240p\.mp4(?:[?#]|$)/i.test(parsed.pathname))return true;
+            if(/(?:^|\.)(?:bkcdn\.net|hqmediago\.com|bongacams\.com|bgicdn\.com|adtng\.com|livemediahost\.com|exoclick\.com|juicyads\.com|tsyndicate\.com|trafficjunky\.net|vcmdiawe\.com)$/i.test(parsed.hostname))return true;
+            if(/(?:\/media\/fans\/avatar\/|\/avatars?\/|\/profile[-_]?(?:pic|img|photo)|loading-placeholder\.svg)/i.test(url))return true;
             return false;
         }catch{return true;}
     };
@@ -23,7 +22,9 @@ function scanMediaPage(provider) {
         const width=Math.round(Number(node.videoWidth||node.naturalWidth||node.width)||0),height=Math.round(Number(node.videoHeight||node.naturalHeight||node.height)||0);
         const nodeAlt=node.alt&&node.alt.toLowerCase()!=='poster'?node.alt:null;
         const rawLabel=extra.label||nodeAlt||node.getAttribute?.('aria-label')||node.getAttribute?.('title')||node.getAttribute?.('data-creator')||name||kind;
-        found.push({...extra,url,kind,label:String(rawLabel).replace(/\s+/g,' ').trim().slice(0,100)||name||kind,width,height,
+        // XXXTik uses HLS for the original and a separate MP4 for hover playback.
+        const preview=provider==='xxxtik'&&kind==='video'&&/^(https?:\/\/[^/?#]+\/cdn\/production\/media\/\d+\/[\w-]+)\/master\.m3u8(?:[?#].*)?$/i.exec(url);
+        found.push({...extra,...(preview?{previewUrl:`${preview[1]}/preview.mp4`}:{}),url,kind,label:String(rawLabel).replace(/\s+/g,' ').trim().slice(0,100)||name||kind,width,height,
             duration:Number.isFinite(node.duration)?Math.round(node.duration):null,poster:validPoster(extra.poster)});
     };
 
@@ -49,36 +50,6 @@ function scanMediaPage(provider) {
             const xc=`https://xcdn.tv/cdn/storage/production/gifreels/post/${post.uid}`;
             add(`${p5}/gif.mp4`,'video',{width:post.width,height:post.height},{label:post.title||post.uid,poster:`${p5}/poster-240.webp`,fallbackUrl:`${xc}/gif.mp4`});
         }
-    }
-
-    if(provider==='xxxfollow'){
-        try{
-            let state=window.__PRELOAD_STATE__;
-            const script=[...document.querySelectorAll('script:not([src])')].find(s=>s.textContent.includes('window.__PRELOAD_STATE__'));
-            if(script){
-                const m=/window\.__PRELOAD_STATE__\s*=\s*(\{[\s\S]*\})\s*;?\s*$/.exec(script.textContent.trim());
-                if(m)state={...state,...JSON.parse(m[1])};
-            }
-            if(state&&typeof state==='object'){
-                for(const val of Object.values(state)){
-                    const list=Array.isArray(val)?val:Array.isArray(val?.list)?val.list:Array.isArray(val?.posts)?val.posts:null;
-                    if(!list)continue;
-                    for(const entry of list){
-                        const post=entry?.post||entry;const mediaList=Array.isArray(post?.media)?post.media:[];
-                        const label=post?.text||entry?.user?.username||post?.user?.username||'Video';
-                        for(const media of mediaList){
-                            const src=media?.url||media?.sd_url||media?.fhd_url;
-                            if(!src)continue;
-                            const isVideo=media?.type==='video'||media?.media_type==='video'||/\.(?:mp4|webm|m3u8)(?:[?#]|$)/i.test(src);
-                            add(src,isVideo?'video':'image',{width:media?.width,height:media?.height,duration:Number(media?.duration_in_second)||null},{
-                                label,poster:media?.thumb_url||media?.start_url||media?.thumb_webp_url||media?.poster,
-                                fallbackUrl:http(media?.sd_url||media?.fhd_url||media?.url)
-                            });
-                        }
-                    }
-                }
-            }
-        }catch{}
     }
 
     if(provider==='xxxtik'){
@@ -115,8 +86,7 @@ function scanMediaPage(provider) {
                 const label=gifreelsMeta.get(uid)?.title||siblingImg?.alt||node.alt||uid;
                 add(`${primaryHost}${pathPart}/gif.mp4`,'video',node,{label,poster:poster||`${primaryHost}${pathPart}/poster-240.webp`,fallbackUrl:`${fallbackHost}${pathPart}/gif.mp4`});
             }else{
-                const creator=provider==='shorts'?node.closest?.('.box')?.getAttribute('data-creator'):null;
-                add(src,'video',node,{poster,label:creator?`@${creator}`:undefined});
+                add(src,'video',node,{poster});
             }
         }else if(values.some(value=>String(value).startsWith('blob:')))unsupported++;
     }
@@ -135,15 +105,12 @@ function scanMediaPage(provider) {
     for(const [index,node] of [...document.querySelectorAll('img')].slice(0,2000).entries()){
         if(excluded(node))continue;
         const dataSrc=node.getAttribute('data-src');
-        const eromeOriginal=provider==='erome'&&dataSrc&&/\/\/s\d*\.erome\.com\//i.test(dataSrc)&&!node.closest('a.album-link')?dataSrc:null;
-        const original=node.getAttribute('data-original')||(provider==='imagefap'?node.getAttribute('original'):null)||eromeOriginal;
-        const anchor=node.closest('a[href]')||node.closest('.album, .media-group')?.querySelector('a.album-link[href], a[href*="/a/"]');
+        const original=node.getAttribute('data-original');
+        const anchor=node.closest('a[href]');
         const rawHref=http(anchor?.getAttribute('href'));
         const href=rawHref&&rawHref.split('#')[0]!==location.href.split('#')[0]?rawHref.split('#')[0]:null;
-        const imagefapMediaLink=provider==='imagefap'&&href&&/(?:video\.php\?vid=|\/pictures\/\d+|\/photo\/\d+|gallery\.php\?gid=)/i.test(href)&&!/\/img\/(?:z|NextPage|PrevPage|\w*spacer\w*)\.gif/i.test(node.getAttribute('src')||'');
-        if(!original&&!imagefapMediaLink&&Math.max(node.naturalWidth,node.width)<120&&Math.max(node.naturalHeight,node.height)<100)continue;
-        const rawThumb=provider==='xfree'&&/\/thumb\/small_retina\//i.test(node.currentSrc||'')&&node.getAttribute('src')?node.getAttribute('src'):(node.currentSrc||dataSrc||node.src);
-        const thumb=http(rawThumb);
+        if(!original&&Math.max(node.naturalWidth,node.width)<120&&Math.max(node.naturalHeight,node.height)<100)continue;
+        const thumb=http(node.currentSrc||dataSrc||node.src);
         if(!thumb||adMedia(thumb)||videoPosters.has(thumb)||/\.svg(?:[?#]|$)/i.test(thumb)||/^(?:logo|avatar|profile picture)(?:\b|$)/i.test(node.alt||''))continue;
 
         if(provider==='gifreels'){
@@ -158,40 +125,20 @@ function scanMediaPage(provider) {
                 continue;
             }
         }
-        if(provider==='xxxfollow'){
-            const m=/^(https?:\/\/[^/]+\/media\/fans\/post_public\/[^/]+\/[^/]+\/\d+)_(?:small|start|blur|thumb)\.(?:webp|jpe?g|png)(?:[?#].*)?$/i.exec(thumb);
-            if(m){add(`${m[1]}.mp4`,'video',node,{poster:thumb});continue;}
-        }
         if(provider==='xxxtik'){
             const m=/^(https?:\/\/[^/]+\/cdn\/production\/media\/\d+\/[\w-]+)\/thumbnail\.(?:webp|jpe?g|png)(?:[?#].*)?$/i.exec(thumb);
             if(m){add(`${m[1]}/master.m3u8`,'video',node,{poster:thumb});continue;}
-        }
-        if(provider==='xfree'){
-            const m=/^https?:\/\/thumbs\.xfree\.com\/listing\/[^/]+\/([a-f0-9-]{36})_\d+\.(?:webp|jpe?g|png)(?:[?#].*)?$/i.exec(thumb);
-            if(m){
-                const u=m[1];
-                let xfreeTitle=null;try{xfreeTitle=href&&new URL(href).searchParams.get('title')?.replace(/-/g,' ');}catch{}
-                add(`https://cdn.xfree.com/xfree-prod/${u[0]}/${u[1]}/${u[2]}/${u}/full-d.mp4`,'video',node,{poster:thumb,label:xfreeTitle||node.alt});
-                continue;
-            }
-        }
-        if(provider==='sexcom'&&/\/\/imagex\d*\.sx\.cdn\.live\/images\/pinporn\//i.test(thumb)&&(!href||/\/gifs(?:\/|$)/i.test(href))){
-            const fullImage=thumb.replace(/([?&])width=\d+&?/i,'$1').replace(/[?&]$/,'');
-            add(fullImage,'image',node,{poster:thumb,original:true});
-            continue;
         }
         if(!href&&!original&&(node.hasAttribute('masonrylazy')||node.closest('button,[role=button],figure,[class*=masonry],[class*=thumbnail]')||getComputedStyle(node).cursor==='pointer')){
             add(location.href.split('#')[0]+'#lowcord-item-'+index,'page',node,{poster:thumb,selection:{page:location.href,index,src:node.currentSrc||node.src}});continue;
         }
         if(!href&&!original&&!dataSrc&&!node.closest('main,[role=main],article,[class*=media],[class*=image],[class*=photo],[class*=gallery]')&&!mediaFile(location.href))continue;
         const path=href&&new URL(href).pathname;
-        const isProfileOrNav=path&&(/^\/(?:[a-z]{2}\/?)?$/i.test(path)||/^\/(?:[a-z]{2}\/)?(?:login|register|tags?|categories|search|users?|creators?|members?|profile\.php|explore)(?:\/|$)/i.test(path)||(provider==='xxxfollow'&&/^\/[a-z0-9_.-]+$/i.test(path)));
+        const isProfileOrNav=path&&(/^\/(?:[a-z]{2}\/?)?$/i.test(path)||/^\/(?:[a-z]{2}\/)?(?:login|register|tags?|categories|search|users?|creators?|members?|profile\.php|explore)(?:\/|$)/i.test(path));
         const isPage=href&&!mediaFile(href)&&href!==location.href&&!isProfileOrNav;
         if(href&&!mediaFile(href)&&!isPage&&!original)continue;
         const value=original||(href&&mediaFile(href)?href:null)||(isPage?href:null)||thumb;
-        const cardTitle=provider==='imagefap'?node.closest('.video_item, td, tr')?.querySelector('b, .blk_galleries, a.gal_title, a[title]')?.textContent?.trim():null;
-        const rawPageLabel=cardTitle||(node.alt&&node.alt.toLowerCase()!=='poster'?node.alt:null)||anchor?.textContent?.trim();
-        const pageLabel=provider==='imagefap'&&rawPageLabel?rawPageLabel.replace(/^Free porn pics of\s+/i,''):rawPageLabel;
+        const pageLabel=(node.alt&&node.alt.toLowerCase()!=='poster'?node.alt:null)||anchor?.textContent?.trim();
         if(isPage&&!original)add(value,'page',node,{poster:thumb,label:pageLabel});
         else add(value,/\.(?:mp4|webm|m3u8)(?:[?#]|$)/i.test(value)?'video':'image',node,{poster:thumb,label:pageLabel||undefined,original:!!original||!!(href&&mediaFile(href))});
     }

@@ -3,19 +3,13 @@ const { join } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { randomBytes } = require('node:crypto');
 const {readFileSync,writeFileSync,renameSync}=require('node:fs');
-const { createSourceFiles, requestReferer } = require('./media-source-files.cjs');
+const { createSourceFiles, requestReferer, publicURL } = require('./media-source-files.cjs');
 const { scanMediaPage } = require('./media-source-scan.cjs');
 const { sourceBlobResponse } = require('./media-source-blob.cjs');
 
 const SOURCES = [
     {id:'gifreels',name:'GifReels',home:'https://gifreels.com/'},
-    {id:'erome',name:'Erome',home:'https://www.erome.com/explore'},
-    {id:'sexcom',name:'Sex.com GIFs',home:'https://www.sex.com/en/gifs'},
-    {id:'imagefap',name:'ImageFap',home:'https://www.imagefap.com/gallery.php'},
-    {id:'xxxfollow',name:'XXXFollow',home:'https://www.xxxfollow.com/'},
     {id:'xxxtik',name:'XXXTik',home:'https://xxxtik.com/'},
-    {id:'shorts',name:'Shorts',home:'https://www.shorts.xxx/'},
-    {id:'xfree',name:'XFree',home:'https://www.xfree.com/'},
 ];
 const errors = {
     'access-denied':'This media needs a working site session or cannot be downloaded. Sign in on the site and retry.',
@@ -45,29 +39,27 @@ function sourceAllows(source,value) {
 function isAdStream(value) {
     try {
         const parsed=new URL(value);
-        if(/(?:^|\.)(?:bkcdn\.net|hqmediago\.com|bongacams\.com|bgicdn\.com|adtng\.com|livemediahost\.com|exoclick\.com|juicyads\.com|tsyndicate\.com|trafficjunky\.net|vcmdiawe\.com|shorts-avt\.b-cdn\.net)$/i.test(parsed.hostname))return true;
-        if(/^(?:www\.)?sex\.com$/i.test(parsed.hostname)&&/\/preview_240p\.mp4(?:[?#]|$)/i.test(parsed.pathname))return true;
+        if(/(?:^|\.)(?:bkcdn\.net|hqmediago\.com|bongacams\.com|bgicdn\.com|adtng\.com|livemediahost\.com|exoclick\.com|juicyads\.com|tsyndicate\.com|trafficjunky\.net|vcmdiawe\.com)$/i.test(parsed.hostname))return true;
         return false;
     } catch { return true; }
 }
-function searchURLFor(sourceId,currentURL,rawQuery) {
+// Pausing marks only videos that were playing, so showing the site resumes
+// exactly those instead of leaving the source's own player stuck on pause.
+const pauseVideos='[...document.querySelectorAll("video")].forEach(video=>{if(!video.paused){video.dataset.lowcordPaused="1";video.pause();}})';
+const resumeVideos='[...document.querySelectorAll("video[data-lowcord-paused]")].forEach(video=>{delete video.dataset.lowcordPaused;void video.play().catch(()=>{});});window.dispatchEvent(new Event("scroll"))';
+// A dedicated preview can be a direct file even when the original uses HLS.
+const previewURL=item=>item.kind==='video'&&!item.blob&&[item.previewUrl,item.url].find(url=>typeof url==='string'&&/^https?:\/\/[^?#]+\.(?:mp4|webm)(?:[?#]|$)/i.test(url)&&!isAdStream(url));
+function searchURLFor(sourceId,rawQuery) {
     const q=rawQuery.trim();if(!q)return null;
-    const encoded=encodeURIComponent(q);
     const slug=encodeURIComponent(q.toLowerCase().replace(/^#+/,'').trim().replace(/\s+/g,'-'));
     switch(sourceId){
         case 'gifreels':return `https://gifreels.com/tag/${slug}`;
-        case 'erome':return `https://www.erome.com/search?q=${encoded}`;
-        case 'sexcom':return /\/videos(?:[/?#]|$)/i.test(currentURL||'')?`https://www.sex.com/en/videos?search=${encoded}`:`https://www.sex.com/en/gifs?search=${encoded}`;
-        case 'imagefap':return `https://www.imagefap.com/gallery.php?search=${encoded}`;
-        case 'xxxfollow':return `https://www.xxxfollow.com/tag/${slug}`;
         case 'xxxtik':return `https://xxxtik.com/tag/${slug}`;
-        case 'shorts':return `https://www.shorts.xxx/?search=${encoded}`;
-        case 'xfree':return `https://www.xfree.com/tag/${slug}`;
         default:return null;
     }
 }
-function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavigation=sourceAllows,onEvent=()=>{},storageFile}={}) {
-    const browsers=new Map(), hosts=new Map(), sessions=new Map(); let closed=false;
+function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavigation=sourceAllows,validateURL=publicURL,onEvent=()=>{},storageFile}={}) {
+    const browsers=new Map(), hosts=new Map(), sessions=new Map(), previews=new Map(); let closed=false;
     const hostURL=pathToFileURL(join(__dirname,'media-browser.html')).href;
     const sourceFor=id=>sources.find(source=>source.id===id);
     let saved={};try{const parsed=JSON.parse(readFileSync(storageFile,'utf8'));if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed))saved=parsed;}catch{}
@@ -97,7 +89,7 @@ function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavi
         const state={
             sources:sources.map(({id,name})=>({id,name})),source:record.source.id,destination:record.destination,
             channelId:record.channelId,limit:record.limit,url:wc&&!wc.isDestroyed()?wc.getURL():'',canBack:wc&&!wc.isDestroyed()&&wc.navigationHistory.canGoBack(),
-            canForward:wc&&!wc.isDestroyed()&&wc.navigationHistory.canGoForward(),items:record.items.map(({id,kind,label,width,height,duration,sent})=>({id,kind,label,width,height,duration,sent})),
+            canForward:wc&&!wc.isDestroyed()&&wc.navigationHistory.canGoForward(),items:record.items.map(({id,kind,label,width,height,duration,sent,preview})=>({id,kind,label,width,height,duration,sent,preview:preview?`lowcord-media://sources/${preview}/video`:null})),
             busy:record.busy,status:record.status,loading:record.loading,saved:savedPages(record),
         };
         record.window.webContents.send('lowcord:media-browser-state',state);
@@ -133,10 +125,11 @@ function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavi
     function layout(record) {
         if(!record.view||record.window.isDestroyed()) return;
         const [width,height]=record.window.getContentSize();
-        record.view.setBounds({x:0,y:100,width:Math.max(1,width),height:Math.max(1,height-150)});
+        record.view.setBounds({x:0,y:48,width:Math.max(1,width),height:Math.max(1,height-76)});
     }
+    function forgetPreviews(record){for(const [key,entry]of previews)if(entry.record===record)previews.delete(key);}
     function destroyView(record) {
-        clearTimeout(record.scanTimer);record.thumbs?.abort();record.resolveAbort?.abort();
+        clearTimeout(record.scanTimer);forgetPreviews(record);record.thumbs?.abort();record.resolveAbort?.abort();
         for(const popup of record.popups) if(!popup.isDestroyed()) popup.destroy();
         record.popups.clear();
         if(!record.view) return;
@@ -173,15 +166,22 @@ function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavi
                 if(existing){Object.assign(existing,item,{label:String(item.label||item.kind).slice(0,100)});return existing;}
                 return {...item,id:randomBytes(12).toString('hex'),label:String(item.label||item.kind).slice(0,100)};
             });
+            const kept=new Set(record.items.map(item=>item.preview).filter(Boolean));
+            for(const [key,entry]of previews)if(entry.record===record&&!kept.has(key))previews.delete(key);
+            for(const item of record.items){
+                const url=previewURL(item);if(item.preview||!url)continue;
+                item.preview=randomBytes(18).toString('hex');
+                previews.set(item.preview,{record,url,page:wc.getURL()});
+            }
             record.loading=false;
             if(!record.items.length&&(record.scanAttempts||0)<4){
                 record.scanAttempts=(record.scanAttempts||0)+1;record.loading=true;
                 clearTimeout(record.scanTimer);record.scanTimer=setTimeout(()=>void scan(record),record.scanAttempts*700);
             }
-            record.status=record.loading?'Loading media…':record.items.length?'Click a card to send. Multi-item pages also have an Open button.'
+            record.status=record.loading?'Loading media…':record.items.length?'Hover to preview · Click a card to send'
                 :result.unsupported?'Play the video on the site, then refresh to find its original stream.'
                 :'No media found. Open the site to sign in or browse, then refresh.';
-            publish(record);void thumbnails(record);if(!record.window.isVisible())void execJS(wc,'[...document.querySelectorAll("video")].forEach(video=>video.pause())').catch(()=>{});
+            publish(record);void thumbnails(record);void execJS(wc,record.window.isVisible()?resumeVideos:pauseVideos).catch(()=>{});
         }catch{if(!record.window.isDestroyed()){record.loading=false;record.status='The page is not ready. Open the site to finish loading or sign in, then refresh.';publish(record);}}
     }
     async function activate(record,id) {
@@ -228,7 +228,7 @@ function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavi
             popup.webContents.on('will-redirect',(event,url)=>{if(!allowed(url))event.preventDefault();});
             popup.webContents.setWindowOpenHandler(()=>({action:'deny'}));
         });
-        wc.on('did-start-navigation',details=>{if(details.isMainFrame&&!details.isSameDocument){record.networkMedia=[];if(!record.busy){++record.scanGeneration;record.thumbs?.abort();record.items=[];record.scanAttempts=0;record.loading=true;record.status='Loading source…';publish(record);}}});
+        wc.on('did-start-navigation',details=>{if(details.isMainFrame&&!details.isSameDocument){record.networkMedia=[];if(!record.busy){++record.scanGeneration;record.thumbs?.abort();forgetPreviews(record);record.items=[];record.scanAttempts=0;record.loading=true;record.status='Loading source…';publish(record);}}});
         const loaded=()=>{if(!record.busy)void execJS(wc,'window.dispatchEvent(new Event("scroll"))').catch(()=>{});publish(record);clearTimeout(record.scanTimer);record.scanTimer=setTimeout(()=>void scan(record),350);};
         wc.on('dom-ready',loaded);wc.on('did-finish-load',loaded);wc.on('did-navigate-in-page',loaded);
         wc.on('did-fail-load',(_event,code,_desc,_url,isMainFrame)=>{if(isMainFrame&&code!==-3&&!record.items.length){record.status='The site could not load. Reload or try another source; site access checks may need to be completed manually.';publish(record);}});
@@ -268,55 +268,9 @@ function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavi
         if(!page)return null;
         const {html,url:pageUrl}=page;
         const decode=v=>v.replace(/&amp;/g,'&');
-        if(record.source.id==='sexcom'){
-            const vid=/\/videos\/(\d+)/i.exec(pageUrl)?.[1];
-            if(vid){
-                for(const name of ['CloudFront-Key-Pair-Id','CloudFront-Signature','CloudFront-Policy']){
-                    const m=new RegExp(`${name}=([^;"'\\s&<>]+)`).exec(html);
-                    if(m?.[1])await record.session.cookies.set({url:'https://videos2.sex.com/',domain:'.sex.com',path:'/',name,value:m[1],secure:true,sameSite:'no_restriction'}).catch(()=>{});
-                }
-                return {url:`https://videos2.sex.com/${vid}/video.m3u8`,fallbackUrl:`https://videos2.sex.com/${vid}/preview_240p.mp4`,kind:'video',referer:'https://www.sex.com/'};
-            }
-        }
-        if(record.source.id==='erome'){
-            const videos=[...html.matchAll(/<source[^>]+src=["'](https?:\/\/v\d*\.erome\.com\/[^"']+\.mp4[^"']*)["']/gi)].map(m=>decode(m[1]));
-            const uniqueVideos=[...new Set(videos)];
-            if(uniqueVideos.length){
-                const sd=record.limit<=20_000_000&&uniqueVideos[0].replace(/_720p\.mp4/i,'_480p.mp4');
-                const primary=sd&&sd!==uniqueVideos[0]&&uniqueVideos.includes(sd)?sd:uniqueVideos[0];
-                const fallback=uniqueVideos.find(u=>u!==primary)||null;
-                return {url:primary,fallbackUrl:fallback,kind:'video',referer:pageUrl};
-            }
-            const img=/data-src=["'](https?:\/\/s\d*\.erome\.com\/[^"']+\.(?:jpe?g|png|webp|gif)[^"']*)["']/i.exec(html)?.[1];
-            if(img)return {url:decode(img),kind:'image',referer:pageUrl};
-        }
-        if(record.source.id==='imagefap'){
-            const video=/src=["'](https?:\/\/[^"']*moviefap\.com\/[^"']+\.mp4[^"']*)["']/i.exec(html)?.[1];
-            if(video)return {url:decode(video),kind:'video',referer:pageUrl};
-            const cdnConfig=/(https?:\/\/[^"'\s<>]*moviefap\.com\/cdn\.php\?[^"'\s<>]+)/i.exec(html)?.[1];
-            if(cdnConfig){
-                const xml=await fetchHtml(record,decode(cdnConfig),pageUrl,signal);
-                if(xml){
-                    const links=[...xml.html.matchAll(/<videoLink>(https?:\/\/[^<]+)<\/videoLink>/gi)].map(m=>decode(m[1].trim()));
-                    if(links.length)return {url:links[Math.min(1,links.length-1)],fallbackUrl:links[0]||null,kind:'video',referer:pageUrl};
-                }
-            }
-            const full=/(https?:\/\/cdnc\d*\.imagefap\.com\/images\/full\/[^"'\s<>]+)/i.exec(html)?.[1];
-            if(full)return {url:decode(full),kind:'image',referer:pageUrl};
-            const photoHref=/href=["']((?:https?:\/\/(?:www\.)?imagefap\.com)?\/photo\/\d+\/[^"']*)["']/i.exec(html)?.[1];
-            if(photoHref){
-                const sub=await fetchHtml(record,new URL(decode(photoHref),pageUrl).href,pageUrl,signal);
-                const subFull=sub&&/(https?:\/\/cdnc\d*\.imagefap\.com\/images\/full\/[^"'\s<>]+)/i.exec(sub.html)?.[1];
-                if(subFull)return {url:decode(subFull),kind:'image',referer:sub.url};
-            }
-        }
         if(record.source.id==='gifreels'){
             const uid=/\/gifreels\/post\/([^/"'\s<>?#]+)/i.exec(html)?.[1]||/\/gif\/([^/"'\s<>?#]+)/i.exec(pageUrl)?.[1];
             if(uid)return {url:`https://p5rn.com/cdn/storage/production/gifreels/post/${uid}/gif.mp4`,fallbackUrl:`https://xcdn.tv/cdn/storage/production/gifreels/post/${uid}/gif.mp4`,kind:'video',referer:pageUrl};
-        }
-        if(record.source.id==='xfree'){
-            const u=/(?:thumbs|cdn)\.xfree\.com\/[^"'\s<>]*?([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i.exec(html)?.[1];
-            if(u)return {url:`https://cdn.xfree.com/xfree-prod/${u[0]}/${u[1]}/${u[2]}/${u}/full-d.mp4`,kind:'video',referer:pageUrl};
         }
         for(const pattern of [
             /<meta[^>]+(?:property=["']og:video(?::(?:url|secure_url))?["']|name=["']twitter:player:stream["'])[^>]+content=["']([^"']+)["']/gi,
@@ -373,7 +327,7 @@ function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavi
         record.resolveAbort=new AbortController();const operation=record.operation=(record.operation||0)+1;record.busy=true;record.activeId=id;record.status='Preparing media…';publish(record);emit(record,{state:'preparing',itemId:id});
         try{
             const media=await original(record,item);
-            if(!record.window.isDestroyed())void execJS(wc,'[...document.querySelectorAll("video")].forEach(video=>video.pause())').catch(()=>{});
+            if(!record.window.isDestroyed()&&!record.window.isVisible())void execJS(wc,pauseVideos).catch(()=>{});
             if(operation!==record.operation||record.resolveAbort?.signal.aborted)throw Object.assign(new Error('cancelled'),{code:'cancelled'});
             const referer=media.referer||wc.getURL();
             const prepareUrl=targetUrl=>files.prepare(record.owner.id,{url:media.blob?new URL('/__lowcord_selected_blob.mp4',wc.getURL()).href:targetUrl,referer,source:record.source.id,
@@ -403,7 +357,7 @@ function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavi
     }
     async function open(owner,account,options) {
         if(closed)throw new Error('Media browser closed');
-        const {channelId,limit,destination,source='shorts'}=options??{};
+        const {channelId,limit,destination,source=sources[0]?.id}=options??{};
         if(typeof channelId!=='string'||!/^[\w-]{1,100}$/.test(channelId)||![20_000_000,100_000_000].includes(limit)||!sourceFor(source))throw new Error('Invalid media destination');
         const existing=browsers.get(owner.id);
         if(existing&&!existing.window.isDestroyed()){
@@ -421,8 +375,8 @@ function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavi
         window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
         window.webContents.on('will-navigate',(event,url)=>{if(url!==hostURL)event.preventDefault();});
         window.on('resize',()=>layout(record));
-        window.on('hide',()=>{record.view?.webContents.setAudioMuted(true);void execJS(record.view?.webContents,'[...document.querySelectorAll("video")].forEach(video=>video.pause())').catch(()=>{});});
-        window.on('show',()=>record.view?.webContents.setAudioMuted(false));
+        window.on('hide',()=>{record.view?.webContents.setAudioMuted(true);void execJS(record.view?.webContents,pauseVideos).catch(()=>{});});
+        window.on('show',()=>{record.view?.webContents.setAudioMuted(false);void execJS(record.view?.webContents,resumeVideos).catch(()=>{});});
         window.on('closed',()=>{++record.scanGeneration;destroyView(record);hosts.delete(hostId);browsers.delete(owner.id);if(record.busy)void files.cancel(owner.id,true);});
         await window.loadURL(hostURL);await activate(record,source);
     }
@@ -444,7 +398,7 @@ function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavi
                 }else void loadPage(record.view.webContents,item.url).catch(()=>{});
             }
             else if(action==='cancel'){record.operation=(record.operation||0)+1;record.resolveAbort?.abort();record.view?.webContents.stop();await files.cancel(record.owner.id);record.busy=false;record.status='Cancelled';publish(record);emit(record,{state:'cancelled'});}
-            else if(action==='site'){record.view?.webContents.setAudioMuted(false);record.window.show();record.window.focus();record.view?.webContents.focus();}
+            else if(action==='site'){record.view?.webContents.setAudioMuted(false);record.window.show();record.window.focus();record.view?.webContents.focus();void execJS(record.view?.webContents,resumeVideos).catch(()=>{});}
             else if(action==='picker'){await scan(record);record.view?.webContents.setAudioMuted(true);record.window.hide();const parent=BrowserWindow.fromWebContents(record.owner);if(parent&&!parent.isDestroyed()){parent.show();parent.focus();}}
             else if(action==='more'){
                 await execJS(record.view.webContents,'window.scrollBy(0, Math.max(600,innerHeight*0.85))');
@@ -453,7 +407,7 @@ function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavi
             else if(action==='search'){
                 if(typeof value!=='string'||!value.trim()||value.length>200)throw new Error('Enter a shorter search.');
                 const currentURL=record.view?.webContents.getURL()||'';
-                const direct=sourceAllows(record.source,currentURL)?searchURLFor(record.source.id,currentURL,value):null;
+                const direct=sourceAllows(record.source,currentURL)?searchURLFor(record.source.id,value):null;
                 if(direct&&allowNavigation(record.source,direct)){
                     void loadPage(record.view.webContents,direct).catch(()=>{});
                 }else{
@@ -500,8 +454,32 @@ function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavi
         if(!record||event.senderFrame!==event.sender.mainFrame||event.senderFrame.url!==hostURL)throw new Error('Untrusted media browser request');
         return command(record.owner.id,action,value);
     });
+    // Picker previews: an unguessable per-item token streams that item's direct
+    // file through its source session, with the referer the site expects.
+    async function serve(request) {
+        try{
+            const match=/^\/([a-f0-9]{36})\/video$/.exec(new URL(request.url).pathname);
+            const entry=match&&previews.get(match[1]);
+            if(!entry||!['GET','HEAD'].includes(request.method)||entry.record.window.isDestroyed())return new Response(null,{status:404});
+            const range=request.headers.get('range');
+            if(range&&!/^bytes=\d+-\d*$/.test(range))return new Response(null,{status:416});
+            await validateURL(entry.url);
+            const referer=requestReferer(entry.page,entry.url);
+            const response=await entry.record.session.fetch(entry.url,{redirect:'follow',credentials:'include',signal:request.signal,
+                headers:{Referer:referer,Accept:'video/webm,video/mp4,video/*;q=0.9,*/*;q=0.5',...(range?{Range:range}:{})}});
+            const type=response.headers.get('content-type')||'';
+            if(![200,206].includes(response.status)||!/^(?:video\/(?:mp4|webm)|application\/octet-stream|binary\/octet-stream)(?:;|$)/i.test(type)){
+                await response.body?.cancel();return new Response(null,{status:502});
+            }
+            await validateURL(response.url||entry.url);
+            const headers=new Headers({'content-type':/^video\//i.test(type)?type:/\.webm(?:[?#]|$)/i.test(entry.url)?'video/webm':'video/mp4','cache-control':'private, max-age=600','access-control-allow-origin':'https://discord.com'});
+            for(const name of ['content-length','content-range','accept-ranges']){const value=response.headers.get(name);if(value)headers.set(name,value);}
+            if(request.method==='HEAD'){await response.body?.cancel();return new Response(null,{status:response.status,headers});}
+            return new Response(response.body,{status:response.status,headers});
+        }catch{return new Response(null,{status:404});}
+    }
     async function cancel(owner){const record=browsers.get(owner);if(record&&!record.window.isDestroyed())record.window.destroy();await files.cancel(owner);}
     async function close(){closed=true;for(const record of browsers.values())if(!record.window.isDestroyed())record.window.destroy();await files.close();ipcMain.removeHandler('lowcord:media-browser');}
-    return {open,command,cancel,close,read:files.read,release:files.release};
+    return {open,command,cancel,close,serve,read:files.read,release:files.release};
 }
 module.exports={createMediaSources,SOURCES,sourceAllows};

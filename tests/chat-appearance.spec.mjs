@@ -482,7 +482,14 @@ for (const actions of ["edge", "beside"]) for (const width of [1000, 520]) for (
             expect(await page.evaluate(() => fixture.replies)).toBe(replies);
         }
         await page.evaluate(() => { document.querySelectorAll(".buttonContainer_test").forEach(node => node.remove()); fixture.toolbar(1, 10); });
-        await expect.poll(() => page.locator(".buttonsInner_test").evaluate(node => node.scrollWidth <= node.clientWidth && node.getBoundingClientRect().right <= innerWidth)).toBe(true);
+        // Too many buttons for the room: they wrap onto the bar, never past it or the chat.
+        await expect.poll(() => page.locator(".buttonsInner_test").evaluate(node => {
+            const bar = node.getBoundingClientRect(), timeline = document.querySelector("#timeline").getBoundingClientRect();
+            return node.scrollWidth <= node.clientWidth && bar.right <= timeline.right + 1 && [...node.querySelectorAll("button")].every(button => {
+                const r = button.getBoundingClientRect();
+                return r.left >= bar.left - 1 && r.right <= bar.right + 1 && r.bottom <= bar.bottom + 1;
+            });
+        })).toBe(true);
     });
 }
 

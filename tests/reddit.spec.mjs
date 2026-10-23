@@ -71,16 +71,17 @@ test('a gallery opens a viewer where GIFs play and only picked items are sent', 
     await page.getByRole('button', { name: /^Open gallery of 2/ }).click();
     const viewer = page.getByRole('group', { name: 'Gallery: Two things' });
     await expect(viewer.getByText('1 / 2')).toBeVisible();
-    await expect(viewer.getByRole('button', { name: 'Send 2' })).toBeEnabled();
-    await viewer.getByRole('button', { name: 'Selected', exact: true }).click();
-    await expect(viewer.getByRole('button', { name: 'Send 1' })).toBeVisible();
+    await expect(viewer.getByRole('button', { name: 'Send all 2' })).toBeEnabled();
     await expect(viewer.getByRole('option', { name: 'Item 1' , exact: true })).toHaveAttribute('aria-selected', 'false');
     await page.keyboard.press('ArrowRight');
     await expect(viewer.getByText('2 / 2')).toBeVisible();
     await expect.poll(() => viewer.locator('video').evaluate(video => !video.paused && video.muted && video.loop)).toBe(true);
-    await viewer.getByRole('button', { name: 'Send 1' }).click();
-    await expect(viewer).toBeHidden();
+    await viewer.getByRole('button', { name: 'Select', exact: true }).click();
+    await viewer.getByRole('button', { name: 'Send 1 selected' }).click();
     await expect.poll(() => page.evaluate(() => redditFixture.posts.length)).toBe(1);
+    await expect(viewer.getByRole('button', { name: 'Sent', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(viewer).toBeHidden();
     expect(await page.evaluate(() => redditFixture.prepares.at(-1).selection)).toEqual([1]);
     expect(await page.evaluate(() => redditFixture.uploads)).toEqual(['reddit-gal1-2.mp4']);
     const tile = page.getByRole('button', { name: /^Open gallery of 2/ });
@@ -90,4 +91,21 @@ test('a gallery opens a viewer where GIFs play and only picked items are sent', 
     await page.keyboard.press('Escape');
     await expect(viewer).toBeHidden();
     await expect(page.getByRole('dialog', { name: 'Reddit picker' })).toBeVisible();
+});
+
+test('right-clicking a gallery item sends just that item and keeps the gallery open', async ({ page }) => {
+    await page.getByRole('button', { name: /^Open gallery of 2/ }).click();
+    const viewer = page.getByRole('group', { name: 'Gallery: Two things' });
+    await viewer.getByRole('option', { name: 'Item 1', exact: true }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Send this image' }).click();
+    await expect.poll(() => page.evaluate(() => redditFixture.posts.length)).toBe(1);
+    expect(await page.evaluate(() => redditFixture.prepares.at(-1).selection)).toEqual([0]);
+    await expect(viewer).toBeVisible();
+    await expect(viewer.getByRole('button', { name: 'Sent', exact: true })).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(viewer).toBeHidden();
+    await page.getByRole('button', { name: /^Open gallery of 2/ }).click({ button: 'right' });
+    await expect(page.getByRole('menuitem', { name: 'Send all 2' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toBeHidden();
 });

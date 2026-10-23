@@ -7,56 +7,136 @@
     const call=async(action,...args)=>{const result=await native.mediaSources(action,...args);if(result?.error)throw new Error(result.error);return result;};
     const command=(action,value)=>call('command',action,value);
     const ui=(tag,cls,text)=>{const node=document.createElement(tag);if(cls)node.className=cls;if(text)node.textContent=text;return node;};
-    function button(text,label,fn){const node=ui('button','',text);node.type='button';node.setAttribute('aria-label',label||text);node.title=label||text;node.onclick=fn;return node;}
-    function notice(message,error=false){if(current){current.status.textContent=message;current.status.dataset.error=String(error);}if(error)extensions.toast(message,true);}
+    const paths={
+        grip:'M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01',close:'M6 6l12 12M18 6 6 18',back:'m14 6-6 6 6 6',
+        search:'M21 21l-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0',refresh:'M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 2M18 17a7 7 0 0 1-12 1l-2-2',
+        external:'M14 4h6v6M20 4l-9 9M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6',more:'M5 12h.01M12 12h.01M19 12h.01',
+        play:'m9 5 11 7-11 7Z',album:'M4 7h16v13H4zM7 4h10',resize:'m21 9-12 12m12-6-6 6',image:'M4 5h16v14H4zM4 15l5-5 4 4 3-3 4 4',
+    };
+    function icon(name,size=16){
+        const node=document.createElementNS('http://www.w3.org/2000/svg','svg');
+        for(const [key,value]of Object.entries({viewBox:'0 0 24 24',width:size,height:size,fill:'none',stroke:'currentColor','stroke-width':'1.8','stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true'}))node.setAttribute(key,value);
+        const path=document.createElementNS(node.namespaceURI,'path');path.setAttribute('d',paths[name]);node.append(path);return node;
+    }
+    function button(text,label,fn,cls=''){const node=ui('button',cls,text);node.type='button';if(label){node.setAttribute('aria-label',label);node.title=label;}node.onclick=fn;return node;}
+    const iconButton=(name,label,fn)=>{const node=button('',label,fn,'lowcord-sources-icon');node.append(icon(name));return node;};
+    const clock=value=>Number.isFinite(value)&&value>0?`${Math.floor(value/60)}:${String(Math.floor(value%60)).padStart(2,'0')}`:'';
+    const run=(action,value)=>void command(action,value).catch(error=>notice(error.message,true));
+    function notice(message,error=false){if(current){current.status.textContent=message;current.status.dataset.error=String(error);current.status.hidden=!message;}if(error)extensions.toast(message,true);}
     function updateJob(){
         if(!current)return;
-        const busy=preparing||running;current.cancel.hidden=!busy;current.cancel.disabled=job?.phase==='posting';current.source.disabled=busy;current.search.disabled=busy;
+        const busy=preparing||running;current.cancel.hidden=!busy;current.cancel.disabled=job?.phase==='posting';
+        for(const tab of current.tabs)tab.disabled=busy;current.search.disabled=busy;
         if(current.back)current.back.disabled=busy||!current.state?.canBack;
         current.progress.hidden=!busy;
-        current.progress.textContent=job?.phase==='posting'?'Sending…':job?.phase==='uploading'?`Uploading ${job.percent||0}%`:'Preparing media…';
+        const label=job?.phase==='posting'?'Sending…':job?.phase==='uploading'?`Uploading ${job.percent||0}%`:'Preparing media…';
+        current.progressText.textContent=label;
+        current.progress.style.setProperty('--lowcord-sources-progress',job?.phase==='uploading'?String((job.percent||0)/100):job?.phase==='posting'?'1':'0');
+        current.progress.dataset.phase=job?.phase||'preparing';
         for(const item of current.items.values()){
             const own=job?.itemId===item.id,failed=own&&job.failed;
             item.button.disabled=!!item.sent||busy;
             if(item.openButton)item.openButton.disabled=busy;
             item.button.dataset.state=item.sent?'sent':failed?'failed':own&&busy?'sending':'';
-            item.badge.textContent=item.sent?'Sent':failed?'Retry':own&&busy?current.progress.textContent:item.kind==='video'?'Video':item.kind==='page'?'Album / Page':'Image';
+            item.badge.textContent=item.sent?'Sent':failed?'Retry':own&&busy?label:item.kind==='page'?'Album':'';
+            item.badge.hidden=!item.badge.textContent;
         }
+        if(busy)stopPreview(current);
+    }
+    // One shared muted video follows the hovered tile, as in the RedGIFs picker.
+    function playbackTime(picker){
+        const item=picker.previewing,video=picker.video;if(!item)return;
+        const total=Number.isFinite(video.duration)&&video.duration>0?video.duration:item.duration;
+        if(!Number.isFinite(total)||total<=0)return;
+        const elapsed=Math.max(0,Math.min(total,video.currentTime||0));
+        item.timer.textContent=`${clock(elapsed)||'0:00'} / ${clock(total)}`;item.timer.hidden=false;
+        item.button.style.setProperty('--lowcord-sources-played',String(elapsed/total));
+    }
+    function releaseVideo(picker){
+        clearTimeout(picker.previewTimer);clearTimeout(picker.resumeTimer);picker.pointerX=null;
+        const item=picker.previewing;
+        if(item){delete item.button.dataset.previewing;delete item.button.dataset.scrubbing;item.button.style.removeProperty('--lowcord-sources-played');item.timer.textContent=clock(item.duration);item.timer.hidden=!item.timer.textContent;}
+        picker.previewing=null;
+        const video=picker.video;video.pause();if(video.hasAttribute('src')){video.removeAttribute('src');video.load();}video.remove();
+    }
+    function stopPreview(picker,item){if(picker&&(!item||picker.previewing===item||picker.previewTarget===item)){picker.previewTarget=null;releaseVideo(picker);}}
+    function preview(picker,item){
+        if(current!==picker||document.hidden||picker.gesture||!item.preview||preparing||running||picker.previewTarget===item)return;
+        stopPreview(picker);picker.previewTarget=item;
+        // A brief hover intent avoids opening streams while crossing tiles.
+        picker.previewTimer=setTimeout(()=>{
+            if(current!==picker||picker.previewTarget!==item||!item.button.isConnected)return;
+            picker.previewing=item;picker.video.src=item.preview;item.button.append(picker.video);picker.video.play().catch(()=>{});
+        },140);
+    }
+    function scrub(picker,item,event){
+        if(picker.previewing!==item||event.pointerType==='touch')return;
+        if(picker.pointerX==null){picker.pointerX=event.clientX;return;}
+        if(Math.abs(event.clientX-picker.pointerX)<2)return;picker.pointerX=event.clientX;
+        const video=picker.video;if(!Number.isFinite(video.duration)||video.duration<=0||video.readyState<1)return;
+        const box=item.button.getBoundingClientRect();if(!box.width)return;
+        video.pause();item.button.dataset.scrubbing='true';
+        video.currentTime=Math.min(video.duration-.01,Math.max(0,(event.clientX-box.left)/box.width*video.duration));playbackTime(picker);
+        clearTimeout(picker.resumeTimer);
+        picker.resumeTimer=setTimeout(()=>{if(picker.previewing!==item)return;delete item.button.dataset.scrubbing;video.play().catch(()=>{});},180);
     }
     function render(state){
         const picker=current;if(!picker||picker.channelId!==state.channelId)return;
-        if(!picker.source.options.length)for(const source of state.sources||[])picker.source.append(new Option(source.name,source.id));
-        picker.source.value=state.source;picker.state=state;
-        if(picker.back)picker.back.disabled=!state.canBack||preparing||running;
-        picker.destination.textContent=`Send to ${state.destination}`;picker.budget.textContent=`${state.limit/1_000_000} MB limit`;
-        picker.status.textContent=state.status;picker.status.dataset.error='false';
-        picker.saved.replaceChildren(new Option('Saved pages',''),...(state.saved||[]).map(page=>new Option(page.title,page.url)));
+        if(!picker.tabs.length){
+            picker.tabs=(state.sources||[]).map(source=>{
+                const tab=button(source.name,null,()=>{if(picker.state?.source!==source.id){stopPreview(picker);run('source',source.id);}},'lowcord-sources-tab');
+                tab.setAttribute('role','tab');tab.dataset.source=source.id;
+                tab.onkeydown=event=>{
+                    if(!['ArrowLeft','ArrowRight'].includes(event.key))return;event.preventDefault();
+                    const index=(picker.tabs.indexOf(tab)+(event.key==='ArrowLeft'?picker.tabs.length-1:1))%picker.tabs.length;
+                    picker.tabs[index].focus();picker.tabs[index].click();
+                };
+                return tab;
+            });
+            picker.tabList.replaceChildren(...picker.tabs);
+        }
+        for(const tab of picker.tabs){const selected=tab.dataset.source===state.source;tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;if(selected&&picker.state?.source!==state.source)tab.scrollIntoView({block:'nearest',inline:'nearest'});}
+        picker.state=state;
+        picker.back.disabled=!state.canBack||preparing||running;
+        picker.destination.textContent=state.destination;picker.destination.title=`Media is sent to ${state.destination}`;
+        picker.budget.textContent=`${state.limit/1_000_000} MB max`;
+        picker.status.textContent=state.status;picker.status.dataset.error='false';picker.status.hidden=!state.status||!!state.items?.length&&!state.busy&&/^Hover to preview/.test(state.status);
+        picker.saved.replaceChildren(new Option('Saved pages…',''),...(state.saved||[]).map(page=>new Option(page.title,page.url)));picker.saved.disabled=!state.saved?.length;
         const old=picker.items,next=new Map();
         for(const data of state.items||[]){
             let item=old.get(data.id);
             if(!item){
                 const cell=ui('div','lowcord-sources-cell');
-                const tile=button('',`Send ${data.label}`,()=>sendItem(item));tile.className='lowcord-sources-tile';
-                const image=ui('img');image.alt='';image.loading='lazy';image.decoding='async';
-                const fallback=ui('span','lowcord-sources-placeholder',data.kind==='video'?'▷':'▧');
-                const badge=ui('span','lowcord-sources-badge');const caption=ui('span','lowcord-sources-caption',data.label);
-                const action=ui('span','lowcord-sources-send','↑ Send');
-                tile.append(fallback,image,badge,caption,action);
+                const tile=button('',`Send ${data.label}`,()=>sendItem(item),'lowcord-sources-tile');
+                const image=ui('img');image.alt='';image.loading='lazy';image.decoding='async';image.draggable=false;
+                const fallback=ui('span','lowcord-sources-placeholder');fallback.append(icon(data.kind==='video'?'play':data.kind==='page'?'album':'image',28));
+                const badge=ui('span','lowcord-sources-badge');const timer=ui('span','lowcord-sources-duration');
+                const caption=ui('span','lowcord-sources-caption',data.label);
+                const play=ui('span','lowcord-sources-play');play.append(icon('play',18));
+                const played=ui('span','lowcord-sources-played');
+                tile.append(fallback,image,badge,timer,caption,played);if(data.kind==='video')tile.append(play);
                 cell.append(tile);
                 let openButton=null;
                 if(data.kind==='page'){
-                    openButton=button('Open',`Open ${data.label}`,()=>void command('open-item',item.id).catch(error=>notice(error.message,true)));
-                    openButton.className='lowcord-sources-open';
+                    openButton=button('Open',`Open ${data.label}`,()=>run('open-item',item.id),'lowcord-sources-open');
                     cell.append(openButton);
                 }
-                item={...data,cell,button:tile,openButton,image,badge,placeholder:fallback};
+                item={...data,cell,button:tile,openButton,image,badge,timer,placeholder:fallback};
+                tile.addEventListener('pointerenter',event=>{picker.pointerX=event.clientX;preview(picker,item);});
+                tile.addEventListener('pointermove',event=>scrub(picker,item,event));
+                tile.addEventListener('pointerleave',()=>stopPreview(picker,item));
+                tile.addEventListener('focus',()=>preview(picker,item));tile.addEventListener('blur',()=>stopPreview(picker,item));
                 image.onerror=()=>{image.hidden=true;fallback.hidden=false;};
             }
-            Object.assign(item,data);if(data.thumb){item.image.src=data.thumb;item.image.hidden=false;item.placeholder.hidden=true;}else if(!item.image.getAttribute('src'))item.image.hidden=true;
+            Object.assign(item,data);
+            if(!item.previewing){item.timer.textContent=clock(data.duration);item.timer.hidden=!item.timer.textContent;}
+            if(data.thumb){item.image.src=data.thumb;item.image.hidden=false;item.placeholder.hidden=true;}else if(!item.image.getAttribute('src')){item.image.hidden=true;item.placeholder.hidden=false;}
             next.set(data.id,item);picker.grid.append(item.cell);
         }
-        for(const [id,item]of old)if(!next.has(id))item.cell.remove();picker.items=next;
-        picker.empty.hidden=next.size>0;picker.empty.textContent=state.loading?'Loading media…':'No media found yet. Open the site to sign in or browse, then refresh.';
+        for(const [id,item]of old)if(!next.has(id)){stopPreview(picker,item);item.cell.remove();}picker.items=next;
+        picker.empty.hidden=next.size>0;picker.more.hidden=!next.size;
+        picker.empty.textContent=state.loading?'Loading media…':'No media found yet. Use the site button to sign in or browse, then refresh.';
+        picker.empty.dataset.loading=String(!!state.loading);
         updateJob();
     }
     function capture(itemId,channelId){
@@ -156,23 +236,23 @@
         }else if(event.state==='cancelled'){preparing=false;updateJob();}
     });
     function layout(picker){
-        const maxW=Math.max(320,innerWidth-24),maxH=Math.max(240,innerHeight-36);
-        picker.node.style.width=`${Math.min(picker.width||620,maxW)}px`;picker.node.style.height=`${Math.min(picker.height||650,maxH)}px`;
-        picker.x=Math.max(12,Math.min(picker.x??innerWidth-660,innerWidth-picker.node.offsetWidth-12));
+        const maxW=Math.max(320,innerWidth-24),maxH=Math.max(260,innerHeight-36);
+        picker.node.style.width=`${Math.min(picker.width||460,maxW)}px`;picker.node.style.height=`${Math.min(picker.height||680,maxH)}px`;
+        picker.x=Math.max(12,Math.min(picker.x??innerWidth-picker.node.offsetWidth-16,innerWidth-picker.node.offsetWidth-12));
         picker.y=Math.max(12,Math.min(picker.y??innerHeight-picker.node.offsetHeight-90,innerHeight-picker.node.offsetHeight-12));
         picker.node.style.left=`${picker.x}px`;picker.node.style.top=`${picker.y}px`;
     }
     function gesture(picker,event,resize=false){
-        if(event.button!==0||(!resize&&event.target.closest('input,select,button:not(.lowcord-sources-grip)')))return;
+        if(event.button!==0||(!resize&&event.target.closest('input,select,button:not(.lowcord-sources-grip),[role=tab]')))return;
         event.preventDefault();const handle=event.currentTarget;const start={x:event.clientX,y:event.clientY,left:picker.x,top:picker.y,width:picker.node.offsetWidth,height:picker.node.offsetHeight};
-        handle.setPointerCapture(event.pointerId);
-        const move=next=>{if(resize){picker.width=Math.max(360,start.width+next.clientX-start.x);picker.height=Math.max(300,start.height+next.clientY-start.y);}else{picker.x=start.left+next.clientX-start.x;picker.y=start.top+next.clientY-start.y;}layout(picker);};
-        const end=()=>{handle.removeEventListener('pointermove',move);handle.removeEventListener('pointerup',end);handle.removeEventListener('pointercancel',end);
+        handle.setPointerCapture(event.pointerId);stopPreview(picker);picker.gesture=true;picker.node.dataset.gesture=resize?'resize':'move';
+        const move=next=>{if(resize){picker.width=Math.max(340,start.width+next.clientX-start.x);picker.height=Math.max(320,start.height+next.clientY-start.y);}else{picker.x=start.left+next.clientX-start.x;picker.y=start.top+next.clientY-start.y;}layout(picker);};
+        const end=()=>{handle.removeEventListener('pointermove',move);handle.removeEventListener('pointerup',end);handle.removeEventListener('pointercancel',end);picker.gesture=false;delete picker.node.dataset.gesture;
             try{localStorage.setItem('lowcord-media-sources-layout',JSON.stringify({x:picker.x,y:picker.y,width:picker.width,height:picker.height}));}catch{}};
         handle.addEventListener('pointermove',move);handle.addEventListener('pointerup',end);handle.addEventListener('pointercancel',end);
     }
     function close(){
-        if(!current)return;const picker=current;current=null;picker.node.remove();window.removeEventListener('resize',picker.resize);window.removeEventListener('keydown',picker.key,true);
+        if(!current)return;const picker=current;stopPreview(picker);current=null;picker.node.remove();window.removeEventListener('resize',picker.resize);window.removeEventListener('keydown',picker.key,true);document.removeEventListener('visibilitychange',picker.visibility);
         if(!running&&!preparing){void call('close').catch(()=>{});if(job){void release(job);job=null;}}
         else void command('close').catch(()=>{});
         picker.editor?.isConnected&&picker.editor.focus({preventScroll:true});
@@ -182,36 +262,52 @@
         const channelId=selected(),channel=window.Lowcord.store('ChannelStore')?.getChannel?.(channelId);
         if(!channelId||!channel){extensions.toast('Open a DM or channel before browsing media.',true);return;}
         let saved={};try{saved=JSON.parse(localStorage.getItem('lowcord-media-sources-layout'))||{};}catch{}
-        const picker={channelId,items:new Map(),editor:document.querySelector('[class*=channelTextArea_] [role=textbox], [class*=channelTextArea_] textarea')};for(const key of ['x','y','width','height'])if(Number.isFinite(saved[key]))picker[key]=saved[key];
+        const picker={channelId,items:new Map(),tabs:[],editor:document.querySelector('[class*=channelTextArea_] [role=textbox], [class*=channelTextArea_] textarea')};for(const key of ['x','y','width','height'])if(Number.isFinite(saved[key]))picker[key]=saved[key];
         picker.node=ui('section','lowcord-media-sources');picker.node.setAttribute('role','dialog');picker.node.setAttribute('aria-label','Media sources picker');
-        const header=ui('header','lowcord-sources-header');
-        const grip=button('⠿','Move media picker',()=>{});grip.className='lowcord-sources-grip';
+        const header=ui('header','lowcord-sources-titlebar');
+        const grip=iconButton('grip','Move media picker',()=>{});grip.classList.add('lowcord-sources-grip');
         grip.onkeydown=event=>{if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home'].includes(event.key))return;event.preventDefault();if(event.key==='Home'){picker.x=picker.y=undefined;}else{picker.x+=event.key==='ArrowLeft'?-20:event.key==='ArrowRight'?20:0;picker.y+=event.key==='ArrowUp'?-20:event.key==='ArrowDown'?20:0;}layout(picker);};
-        picker.source=ui('select');picker.source.setAttribute('aria-label','Media source');
-        picker.source.onchange=()=>void command('source',picker.source.value).catch(error=>notice(error.message,true));
         const options=ui('div','lowcord-sources-options');options.hidden=true;
-        picker.saved=ui('select');picker.saved.setAttribute('aria-label','Saved pages');picker.saved.onchange=()=>{if(picker.saved.value)void command('saved',picker.saved.value).catch(error=>notice(error.message,true));};
-        options.append(picker.saved,button('Save page','Save current page',()=>void command('save').catch(error=>notice(error.message,true))),button('Sign out',null,()=>void command('logout').catch(error=>notice(error.message,true))));
-        picker.back=button('←','Back',()=>void command('back').catch(error=>notice(error.message,true)));picker.back.disabled=true;
-        header.append(grip,ui('strong','','Media'),picker.source,picker.back,button('↗','Open site for browsing or login',()=>void command('site').catch(error=>notice(error.message,true))),
-            button('•••','Picker options',()=>{options.hidden=!options.hidden;}),button('×','Close media picker',close));header.onpointerdown=event=>gesture(picker,event);
+        const optionsButton=iconButton('more','Picker options',()=>{options.hidden=!options.hidden;optionsButton.setAttribute('aria-expanded',String(!options.hidden));});optionsButton.setAttribute('aria-expanded','false');
+        picker.saved=ui('select');picker.saved.setAttribute('aria-label','Saved pages');picker.saved.onchange=()=>{if(picker.saved.value)run('saved',picker.saved.value);options.hidden=true;};
+        options.append(ui('strong','','Saved pages'),picker.saved,
+            button('Save or unsave this page','Save current page',()=>{run('save');options.hidden=true;},'lowcord-sources-option'),
+            button('Sign out of this source',null,()=>{run('logout');options.hidden=true;},'lowcord-sources-option'),
+            ui('p','','Hover a video to preview it and move sideways to scrub. Click any card to send it. Albums open with their Open button.'));
+        header.append(grip,ui('h2','','Media'),
+            iconButton('refresh','Refresh media',()=>run('scan')),iconButton('external','Open site for browsing or login',()=>run('site')),optionsButton,iconButton('close','Close media picker',close));
+        header.onpointerdown=event=>gesture(picker,event);
+        picker.tabList=ui('nav','lowcord-sources-tabs');picker.tabList.setAttribute('role','tablist');picker.tabList.setAttribute('aria-label','Media source');
+        picker.tabList.addEventListener('wheel',event=>{if(Math.abs(event.deltaY)>Math.abs(event.deltaX)){picker.tabList.scrollLeft+=event.deltaY;event.preventDefault();}},{passive:false});
         const form=ui('form','lowcord-sources-search');picker.search=ui('input');picker.search.type='search';picker.search.placeholder='Search this source';picker.search.maxLength=200;picker.search.setAttribute('aria-label','Search media');
-        const search=button('Search',null,()=>{});search.type='submit';form.append(picker.search,search,button('↻','Refresh media',()=>void command('scan').catch(error=>notice(error.message,true))));
-        form.onsubmit=event=>{event.preventDefault();void command('search',picker.search.value).catch(error=>notice(error.message,true));};
+        picker.back=iconButton('back','Back',()=>{stopPreview(picker);run('back');});picker.back.disabled=true;
+        const submit=iconButton('search','Search',()=>{});submit.type='submit';
+        form.append(picker.back,picker.search,submit);
+        form.onsubmit=event=>{event.preventDefault();if(picker.search.value.trim()){stopPreview(picker);run('search',picker.search.value);}};
         form.onkeydown=event=>event.stopPropagation();
         picker.grid=ui('div','lowcord-sources-grid');picker.empty=ui('p','lowcord-sources-empty','Loading media…');
-        const results=ui('div','lowcord-sources-results');results.append(picker.grid,picker.empty,button('Load more',null,()=>void command('more').catch(error=>notice(error.message,true))));
-        picker.progress=ui('span','lowcord-sources-progress');picker.progress.hidden=true;
-        picker.cancel=button('Cancel',null,()=>void cancel());picker.cancel.hidden=true;
+        picker.more=button('Load more',null,()=>run('more'),'lowcord-sources-more');picker.more.hidden=true;
+        const results=ui('div','lowcord-sources-results');results.append(picker.grid,picker.empty,picker.more);
+        results.addEventListener('scroll',()=>stopPreview(picker),{passive:true});
+        picker.video=ui('video','lowcord-sources-video');Object.assign(picker.video,{muted:true,loop:true,playsInline:true,preload:'none'});picker.video.setAttribute('aria-hidden','true');
+        picker.video.addEventListener('playing',()=>{if(picker.previewing)picker.previewing.button.dataset.previewing='true';});
+        for(const name of ['timeupdate','durationchange','seeked'])picker.video.addEventListener(name,()=>playbackTime(picker));
+        picker.video.addEventListener('error',()=>{if(picker.previewing){const item=picker.previewing;item.preview=null;stopPreview(picker);}});
+        picker.progress=ui('div','lowcord-sources-progress');picker.progress.hidden=true;picker.progressText=ui('span');
+        picker.cancel=button('Cancel',null,()=>void cancel(),'lowcord-sources-cancel');picker.cancel.hidden=true;
+        picker.progress.append(ui('span','lowcord-sources-bar'),picker.progressText,picker.cancel);
         picker.status=ui('p','lowcord-sources-status','Opening source…');picker.status.setAttribute('role','status');
-        picker.destination=ui('span','lowcord-sources-destination');picker.budget=ui('span','lowcord-sources-budget');
-        const footer=ui('footer','lowcord-sources-footer');footer.append(picker.destination,picker.budget,picker.progress,picker.cancel);
-        const resize=button('◢','Resize media picker',()=>{});resize.className='lowcord-sources-resize';resize.onpointerdown=event=>gesture(picker,event,true);
+        picker.destination=ui('strong','lowcord-sources-destination');picker.budget=ui('span','lowcord-sources-budget');
+        const footer=ui('footer','lowcord-sources-footer');footer.append(ui('span','lowcord-sources-to','To'),picker.destination,picker.budget);
+        const resize=iconButton('resize','Resize media picker',()=>{});resize.className='lowcord-sources-resize';resize.onpointerdown=event=>gesture(picker,event,true);
         resize.onkeydown=event=>{if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home'].includes(event.key))return;event.preventDefault();
-            if(event.key==='Home'){picker.width=620;picker.height=650;}else{picker.width=Math.max(360,picker.node.offsetWidth+(event.key==='ArrowLeft'?-20:event.key==='ArrowRight'?20:0));picker.height=Math.max(300,picker.node.offsetHeight+(event.key==='ArrowUp'?-20:event.key==='ArrowDown'?20:0));}layout(picker);};
-        picker.node.append(header,form,options,results,picker.status,footer,resize);current=picker;document.body.append(picker.node);layout(picker);
+            if(event.key==='Home'){picker.width=460;picker.height=680;}else{picker.width=Math.max(340,picker.node.offsetWidth+(event.key==='ArrowLeft'?-20:event.key==='ArrowRight'?20:0));picker.height=Math.max(320,picker.node.offsetHeight+(event.key==='ArrowUp'?-20:event.key==='ArrowDown'?20:0));}layout(picker);};
+        picker.node.append(header,picker.tabList,form,options,results,picker.status,picker.progress,footer,resize);current=picker;document.body.append(picker.node);layout(picker);
         picker.resize=()=>layout(picker);window.addEventListener('resize',picker.resize);
-        picker.key=event=>{if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();close();}};window.addEventListener('keydown',picker.key,true);
+        picker.visibility=()=>{if(document.hidden)stopPreview(picker);};document.addEventListener('visibilitychange',picker.visibility);
+        picker.key=event=>{if(event.key!=='Escape')return;event.preventDefault();event.stopImmediatePropagation();
+            if(!options.hidden){options.hidden=true;optionsButton.setAttribute('aria-expanded','false');optionsButton.focus();}else close();};
+        window.addEventListener('keydown',picker.key,true);
         const recipient=channel.getRecipientId?.()||channel.recipients?.[0],person=recipient&&window.Lowcord.store('UserStore')?.getUser?.(recipient);
         try{
             await call('open',{channelId,limit:channel.guild_id||channel.guildId?100_000_000:20_000_000,destination:channel.name||person?.globalName||person?.username||`Chat ${channelId.slice(-6)}`});

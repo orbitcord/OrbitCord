@@ -294,9 +294,13 @@
 :root[data-orbitcord-theme] .lowcord-icon-check path { stroke: var(--oc-on-accent); }
 
 /* @theme fjord */
-/* Nordic slate. The selected channel carries a frost rule at its edge. */
+/* Nordic slate. The selected channel sits in a frost wash, its name and icon
+   in frost; an edge rule would bend around the row's rounded corners. */
 :root[data-orbitcord-theme="fjord"] { --oc-mention-pill: rgb(136 192 208 / .16); }
-:root[data-orbitcord-theme="fjord"] a[data-list-item-id^="channels___"][aria-current="page"] { box-shadow: inset 2px 0 0 var(--oc-accent); }
+:root[data-orbitcord-theme="fjord"] a[data-list-item-id^="channels___"][aria-current="page"] {
+    --interactive-background-selected: rgb(136 192 208 / .16); --text-strong: #d4ebf2; --interactive-text-active: #d4ebf2;
+    --channel-icon: var(--oc-accent); --icon-strong: var(--oc-accent); --interactive-icon-default: var(--oc-accent);
+}
 
 /* @theme ember */
 /* Warm charcoal. A faint amber glow rises from under the composer; it is

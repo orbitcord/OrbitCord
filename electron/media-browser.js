@@ -5,7 +5,7 @@
         current=state;
         if(!find('source').options.length)for(const source of state.sources)find('source').append(new Option(source.name,source.id));
         find('source').value=state.source;
-        find('destination').textContent=`To: ${state.destination}`;find('destination').title=state.destination;
+        find('destination').textContent=`Sending to ${state.destination}`;find('destination').title=state.destination;
         if(document.activeElement!==find('address'))find('address').value=state.url;
         find('status').textContent=state.status;find('status').title=state.status;
         find('save').textContent=state.saved.some(page=>page.url===state.url)?'Unsave page':'Save page';

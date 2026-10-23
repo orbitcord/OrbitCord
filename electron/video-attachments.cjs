@@ -2,14 +2,14 @@ const { randomBytes } = require('node:crypto');
 const { mkdtemp, open, stat, rm, readdir } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
-const { compressVideo } = require('./video-compress.cjs');
+const { compressVideo, compressImage } = require('./video-compress.cjs');
 
 const CHUNK = 1024 * 1024, MAX_SOURCE = 2 * 1024 ** 3;
 const fail = code => Object.assign(new Error(code), { code });
 
 // The page sends File bytes, never paths. Tokens belong to one trusted window;
 // ordered chunks avoid buffering the original movie in the renderer or IPC.
-function createVideoAttachments({ tempRoot = tmpdir(), compress = compressVideo } = {}) {
+function createVideoAttachments({ tempRoot = tmpdir(), compress = compressVideo, imageCompress = compressImage } = {}) {
     const jobs = new Map();
     let closed = false, root;
     async function folder() {
@@ -53,12 +53,12 @@ function createVideoAttachments({ tempRoot = tmpdir(), compress = compressVideo 
         })()));
     }
     async function begin(owner, options) {
-        const { size, limit } = options ?? {};
-        if (![20_000_000, 100_000_000].includes(limit) || !Number.isSafeInteger(size) || size < limit || size > MAX_SOURCE) throw fail('invalid-input');
+        const { size, limit, kind = 'video' } = options ?? {};
+        if (!['video', 'image', 'gif'].includes(kind) || ![20_000_000, 100_000_000].includes(limit) || !Number.isSafeInteger(size) || size < limit || size > MAX_SOURCE) throw fail('invalid-input');
         if (closed) throw fail('expired');
         if (jobs.size >= 4 || [...jobs.values()].some(job => job.owner === owner)) throw fail('busy');
         const id = randomBytes(18).toString('hex');
-        const job = { id, owner, size, limit, written: 0, state: 'writing', controller: new AbortController() };
+        const job = { id, owner, size, limit, kind, written: 0, state: 'writing', controller: new AbortController() };
         jobs.set(id, job); touch(job);
         try {
             await step(job, async () => {
@@ -89,19 +89,28 @@ function createVideoAttachments({ tempRoot = tmpdir(), compress = compressVideo 
         return step(job, async () => {
             job.state = 'encoding';
             await job.file.close(); job.file = null;
-            const path = await compress(job.input, job.directory, job.limit, job.controller.signal, { general: true });
+            const source = await open(job.input, 'r');
+            const prefix = Buffer.alloc(Math.min(job.size, 64 * 1024));
+            try { await source.read(prefix, 0, prefix.length, 0); } finally { await source.close(); }
+            const animated = /^GIF8[79]a/.test(prefix.toString('ascii', 0, 6))
+                || prefix.toString('ascii', 8, 12) === 'WEBP' && prefix.includes(Buffer.from('ANIM'))
+                || prefix.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) && prefix.includes(Buffer.from('acTL'));
+            const image = job.kind === 'image' && !animated;
+            const extension = image ? 'png' : 'mp4', type = image ? 'image/png' : 'video/mp4';
+            const path = await (image ? imageCompress : compress)(job.input, job.directory, job.limit, job.controller.signal, { general: true });
             job.controller.signal.throwIfAborted();
             // Encoders may be injected in tests, but no encoder gets to escape
             // this job directory or return an oversized/incomplete attachment.
-            if (path !== join(job.directory, 'compressed.mp4')) throw fail('invalid-output');
+            if (path !== join(job.directory, `compressed.${extension}`)) throw fail('invalid-output');
             const info = await stat(path);
             if (!info.isFile() || info.size < 12 || info.size >= job.limit) throw fail('too-large');
             job.output = await open(path, 'r');
             const header = Buffer.alloc(12); await job.output.read(header, 0, 12, 0);
-            if (header.toString('ascii', 4, 8) !== 'ftyp') throw fail('invalid-output');
+            if (image ? !header.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
+                : header.toString('ascii', 4, 8) !== 'ftyp') throw fail('invalid-output');
             await rm(job.input); // original is no longer needed
             job.outputSize = info.size; job.state = 'ready';
-            return { size: info.size };
+            return { size: info.size, type, extension };
         });
     }
     async function read(owner, id, offset) {
