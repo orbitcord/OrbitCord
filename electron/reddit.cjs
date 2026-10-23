@@ -138,15 +138,26 @@ function createReddit({ fetchAccount = fetch, fetchMedia = fetch, compress = com
         return me;
     }
     function signedOut() { me = null; listings.clear(); for (const controller of browsing.values()) controller.abort(); }
+    let nextExpiry = Infinity;
     function mint(post, owner) {
         if (!post || typeof post.id !== 'string' || !/^\w{1,16}$/.test(post.id) || post.removed_by_category) return null;
         const found = mediaOf(post);
         if (!found) return null;
         const key = randomBytes(18).toString('hex');
-        // Bounded capability table. Expired tokens are rejected without a timer.
-        for (const [id, entry] of entries) if (entry.expires < Date.now()) entries.delete(id);
+        // Until the earliest expiry, a full table scan cannot remove anything.
+        // Access still checks every token's expiry; no timer or grace period.
+        const now = Date.now();
+        if (nextExpiry < now) {
+            nextExpiry = Infinity;
+            for (const [id, entry] of entries) {
+                if (entry.expires < now) entries.delete(id);
+                else nextExpiry = Math.min(nextExpiry, entry.expires);
+            }
+        }
         while (entries.size >= 4096) entries.delete(entries.keys().next().value);
-        entries.set(key, { ...found, owner, id: post.id, expires: Date.now() + 30 * 60_000 });
+        const expires = now + 30 * 60_000;
+        entries.set(key, { ...found, owner, id: post.id, expires });
+        nextExpiry = Math.min(nextExpiry, expires);
         return { key, id: post.id, kind: found.kind, title: text(post.title, 300), subreddit: text(post.subreddit, 30),
             author: text(post.author, 30), nsfw: post.over_18 === true, spoiler: post.spoiler === true,
             score: Number.isFinite(post.score) ? post.score : null, comments: number(post.num_comments),

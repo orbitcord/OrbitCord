@@ -82,39 +82,45 @@
     }
 
     // GIF LZW with 8-bit minimum code size, written as 255-byte sub-blocks.
-    const codes = new Int16Array(1 << 20), stamps = new Int32Array(1 << 20);
-    let generation = 0;
-    function lzw(pixels, out) {
-        const clear = 256, end = 257;
-        let size = 9, limit = 511, next = 258, reset = false;
-        let bits = 0, count = 0;
-        const block = new Uint8Array(255);
-        let filled = 0;
-        const flush = () => { if (!filled) return; out.byte(filled); out.bytes(block.subarray(0, filled)); filled = 0; };
-        const emit = code => {
-            bits |= code << count; count += size;
-            while (count >= 8) { block[filled++] = bits & 255; bits >>>= 8; count -= 8; if (filled === 255) flush(); }
-            if (reset) { size = 9; limit = 511; reset = false; }
-            else if (next > limit) { size++; limit = size === 12 ? 4096 : (1 << size) - 1; }
-        };
-        out.byte(8);
-        generation++;
-        emit(clear);
-        let prefix = pixels[0];
-        for (let i = 1; i < pixels.length; i++) {
-            const pixel = pixels[i], key = prefix << 8 | pixel;
-            if (stamps[key] === generation) { prefix = codes[key]; continue; }
+    function createLzw() {
+        // Allocate these 6 MiB only while converting, then release the encoder.
+        const codes = new Int16Array(1 << 20), stamps = new Int32Array(1 << 20);
+        let generation = 0;
+        return function lzw(pixels, out) {
+            const clear = 256, end = 257;
+            let size = 9, limit = 511, next = 258, reset = false;
+            let bits = 0, count = 0;
+            const block = new Uint8Array(255);
+            let filled = 0;
+            const flush = () => { if (!filled) return; out.byte(filled); out.bytes(block.subarray(0, filled)); filled = 0; };
+            const emit = code => {
+                bits |= code << count; count += size;
+                while (count >= 8) { block[filled++] = bits & 255; bits >>>= 8; count -= 8; if (filled === 255) flush(); }
+                if (reset) { size = 9; limit = 511; reset = false; }
+                else if (next > limit) { size++; limit = size === 12 ? 4096 : (1 << size) - 1; }
+            };
+            out.byte(8);
+            generation++;
+            emit(clear);
+            let prefix = pixels[0];
+            for (let i = 1; i < pixels.length; i++) {
+                const pixel = pixels[i], key = prefix << 8 | pixel;
+                if (stamps[key] === generation) { prefix = codes[key]; continue; }
+                emit(prefix);
+                if (next < 4096) { stamps[key] = generation; codes[key] = next++; }
+                else { generation++; next = 258; reset = true; emit(clear); }
+                prefix = pixel;
+            }
             emit(prefix);
-            if (next < 4096) { stamps[key] = generation; codes[key] = next++; }
-            else { generation++; next = 258; reset = true; emit(clear); }
-            prefix = pixel;
-        }
-        emit(prefix);
-        emit(end);
-        if (count > 0) { block[filled++] = bits & 255; if (filled === 255) flush(); }
-        flush();
-        out.byte(0);
+            emit(end);
+            if (count > 0) { block[filled++] = bits & 255; if (filled === 255) flush(); }
+            flush();
+            out.byte(0);
+        };
     }
+    // Frame compression is synchronous, so overlapping conversions can keep
+    // sharing one dictionary, as before, without retaining it once all finish.
+    let activeLzw, activeConversions = 0;
 
     function load(bytes) {
         const video = document.createElement("video");
@@ -133,7 +139,7 @@
         });
     }
 
-    async function encode(video, { size, fps }, limit) {
+    async function encode(video, { size, fps }, limit, lzw) {
         const scale = Math.min(1, size / Math.max(video.videoWidth, video.videoHeight));
         const width = Math.max(1, Math.round(video.videoWidth * scale)), height = Math.max(1, Math.round(video.videoHeight * scale));
         const canvas = document.createElement("canvas");
@@ -197,15 +203,20 @@
     // Resolves to GIF bytes no larger than `limit`, or null if none fit.
     async function fromVideo(bytes, limit) {
         const { video, close } = await load(bytes);
+        activeConversions++;
         try {
             if (!video.videoWidth || !Number.isFinite(video.duration)) return null;
+            const lzw = activeLzw ??= createLzw();
             // Long clips start smaller, as the largest step could not fit anyway.
             for (const step of steps.slice(video.duration > 20 ? 1 : 0)) {
-                const data = await encode(video, step, limit);
+                const data = await encode(video, step, limit, lzw);
                 if (data) return data;
             }
             return null;
-        } finally { close(); }
+        } finally {
+            if (!--activeConversions) activeLzw = undefined;
+            close();
+        }
     }
     window.Lowcord.gif = { fromVideo };
 })();

@@ -59,16 +59,26 @@ function createRedgifs({ fetchPage = fetch, compress = compressVideo, tempRoot =
         }
         return JSON.parse((await bytes(response, 4 * 1024 * 1024)).toString('utf8'));
     }
+    let nextExpiry = Infinity;
     function mint(gif, owner) {
         if (!gif || typeof gif !== 'object' || typeof gif.id !== 'string') return null;
         const hd = mediaURL(gif.urls?.hd), sd = mediaURL(gif.urls?.sd);
         if (!/^[a-z0-9]{1,100}$/i.test(gif.id) || (!hd && !sd) || (gif.type != null && gif.type !== 1)) return null;
         const key = randomBytes(18).toString('hex');
-        // Bounded capability table. Expired tokens are rejected without a timer.
-        for (const [id, entry] of entries) if (entry.expires < Date.now()) entries.delete(id);
+        // Until the earliest expiry, a full table scan cannot remove anything.
+        // Access still checks every token's expiry; no timer or grace period.
+        const now = Date.now();
+        if (nextExpiry < now) {
+            nextExpiry = Infinity;
+            for (const [id, entry] of entries) {
+                if (entry.expires < now) entries.delete(id);
+                else nextExpiry = Math.min(nextExpiry, entry.expires);
+            }
+        }
         while (entries.size >= 4096) entries.delete(entries.keys().next().value);
-        const entry = { owner, id: gif.id, hd, sd, poster: mediaURL(gif.urls?.poster ?? gif.urls?.thumbnail), expires: Date.now() + 30 * 60_000 };
+        const entry = { owner, id: gif.id, hd, sd, poster: mediaURL(gif.urls?.poster ?? gif.urls?.thumbnail), expires: now + 30 * 60_000 };
         entries.set(key, entry);
+        nextExpiry = Math.min(nextExpiry, entry.expires);
         return { key, id: entry.id, author: String(gif.userName ?? '').slice(0, 100),
             duration: Number.isFinite(gif.duration) && gif.duration >= 0 ? gif.duration : null,
             width: Number.isFinite(gif.width) && gif.width > 0 ? gif.width : null,
