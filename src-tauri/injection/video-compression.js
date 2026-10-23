@@ -64,7 +64,7 @@
         check(batch);
         const kind = mediaKind(file), label = kind === 'gif' ? 'GIF' : kind;
         const headline = total === 1 ? `Compressing 1 ${label}` : `Compressing media ${index} of ${total}`;
-        const detail = `${kind === 'image' ? 'PNG' : kind === 'gif' ? 'GIF → MP4' : 'MP4'} · under ${batch.limit / 1_000_000} MB`;
+        const detail = `${kind === 'image' ? 'PNG' : kind === 'gif' ? 'GIF' : 'MP4'} · under ${batch.limit / 1_000_000} MB`;
         batch.status.update(headline, detail, file.name);
         let id;
         try {
@@ -81,7 +81,8 @@
             check(batch);
             if (!Number.isSafeInteger(result.size) || result.size < 12 || result.size >= batch.limit) throw new Error('invalid-output');
             const type = result.type || 'video/mp4';
-            const extension = { 'video/mp4': 'mp4', 'image/png': 'png' }[type];
+            const extension = { 'video/mp4': 'mp4', 'image/png': 'png', 'image/gif': 'gif' }[type];
+            if (kind === 'gif' && type !== 'image/gif') throw new Error('invalid-output');
             if (!extension || result.extension && result.extension !== extension) throw new Error('invalid-output');
             const parts = [];
             for (let offset = 0; offset < result.size; offset += chunkSize) {
@@ -112,6 +113,8 @@
         if (message) extensions()?.toast(message, true);
     }
     function errorMessage(error) {
+        if (error.code === 'gif-too-large') return 'Couldn’t shrink this GIF below the upload limit. The original GIF was kept.';
+        if (error.code === 'too-large') return 'Couldn’t shrink this media below the upload limit. Original files were kept.';
         if (error.code === 'ffmpeg-missing') return 'Install FFmpeg and restart Lowcord to compress media. Original files were kept.';
         if (error.code === 'unsupported-duration') return 'Couldn’t read this video or animation, or it exceeds six hours. Original files were kept.';
         if (error.code === 'encode-timeout') return 'Media compression took too long. Original files were kept.';

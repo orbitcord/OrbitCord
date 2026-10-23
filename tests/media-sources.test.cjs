@@ -91,14 +91,18 @@ test('cancellation while URL validation is pending prevents a later download',as
     await service.cancel(1);await rejected;resolveValidation();
     await new Promise(resolve=>setImmediate(resolve));assert.equal(downloaded,false);
 });
-test('the shared local converter turns animated GIF input into an MP4',async t=>{
+test('the shared GIF converter preserves animation while shrinking below budget',async t=>{
     const {promisify}=require('node:util');const {execFile}=require('node:child_process');
-    const {compressVideo}=require('../electron/video-compress.cjs');
+    const {compressGif}=require('../electron/video-compress.cjs');
     const directory=await mkdtemp(join(tmpdir(),'source-gif-'));t.after(()=>rm(directory,{recursive:true,force:true}));
     const input=join(directory,'animation.gif');
-    await promisify(execFile)('ffmpeg',['-hide_banner','-loglevel','error','-y','-i',join(__dirname,'fixtures/media/sample.mp4'),'-vf','scale=64:36,fps=8','-t','1',input]);
-    const output=await compressVideo(input,directory,120_000,new AbortController().signal,{general:true});
-    const bytes=await readFile(output);assert.equal(bytes.toString('ascii',4,8),'ftyp');assert.ok(bytes.length<120_000);
+    await promisify(execFile)('ffmpeg',['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','testsrc2=size=320x180:rate=20:duration=1',input]);
+    const original=await readFile(input);assert.ok(original.length>50_000);
+    const output=await compressGif(input,directory,50_000,new AbortController().signal);
+    const bytes=await readFile(output);assert.match(bytes.toString('ascii',0,6),/^GIF8[79]a$/);assert.ok(bytes.length<50_000);assert.ok(bytes.length<original.length);
+    const {stdout}=await promisify(execFile)('ffprobe',['-v','error','-count_frames','-show_entries','stream=nb_read_frames,duration','-of','json',output]);
+    const stream=JSON.parse(stdout).streams[0];assert.ok(Number(stream.nb_read_frames)>1);assert.ok(Number(stream.duration)>=0.8);
+
 });
 
 test('cross-origin media requests use an origin referrer compatible with Chromium policy',async t=>{
@@ -126,3 +130,15 @@ test('separate-audio HLS playlists with EXT-X-MEDIA audio URI mux video and audi
     await service.release(1,result.id);
 });
 
+
+test('oversized source GIFs remain GIF attachments',async t=>{
+    const {promisify}=require('node:util');const {execFile}=require('node:child_process');
+    const directory=await mkdtemp(join(tmpdir(),'source-gif-upload-'));t.after(()=>rm(directory,{recursive:true,force:true}));
+    const path=join(directory,'input.gif');
+    await promisify(execFile)('ffmpeg',['-hide_banner','-loglevel','error','-y','-i',join(__dirname,'fixtures/media/sample.mp4'),'-vf','scale=64:36,fps=8','-t','1',path]);
+    const original=await readFile(path),padded=Buffer.alloc(20_000_001);original.copy(padded);
+    const {service}=await fixture(t);
+    const result=await service.prepare(1,input(async()=>new Response(padded),{url:'https://media.example.test/animation.gif'}));
+    assert.equal(result.type,'image/gif');assert.match(result.name,/\.gif$/);assert.ok(result.size<20_000_000);
+    assert.match(Buffer.from(await service.read(1,result.id,0)).toString('ascii',0,6),/^GIF8[79]a$/);
+});

@@ -20,6 +20,7 @@ test.beforeEach(async ({ page }) => {
         })[name];
         window.calls = []; window.jobs = new Map(); window.failure = null; window.hold = false;
         const sample = new Uint8Array(await (await fetch('/media/sample.mp4')).arrayBuffer());
+        const gif = new TextEncoder().encode('GIF89a' + 'sample animation');
         const image = new Uint8Array(await (await fetch('/media/sample.png')).arrayBuffer());
         window.__LOWCORD_NATIVE__ = { videoCompression: async (action, ...args) => {
             window.calls.push({ action, options: action === 'begin' ? args[0] : undefined, length: action === 'append' ? args[1].length : undefined });
@@ -32,8 +33,8 @@ test.beforeEach(async ({ page }) => {
                 if (job.cancelled) return { error: 'cancelled' };
                 if (window.failure) return { error: window.failure };
                 if (job.written !== job.size) throw Error('Incomplete source');
-                job.output = job.kind === 'image' ? image : sample;
-                return { size: job.output.length, type: job.kind === 'image' ? 'image/png' : 'video/mp4', extension: job.kind === 'image' ? 'png' : 'mp4' };
+                job.output = job.kind === 'gif' ? gif : job.kind === 'image' ? image : sample;
+                return { size: job.output.length, type: job.kind === 'gif' ? 'image/gif' : job.kind === 'image' ? 'image/png' : 'video/mp4', extension: job.kind === 'gif' ? 'gif' : job.kind === 'image' ? 'png' : 'mp4' };
             }
             if (action === 'read') return job.output.slice(args[1], args[1] + 1024 * 1024);
         }};
@@ -153,8 +154,8 @@ test('pasted videos compress and attach without sending; small videos and docume
 
 for (const item of [
     { name: 'SPOILER_photo.png', type: 'image/png', kind: 'image', output: 'SPOILER_photo.png', mime: 'image/png' },
-    { name: 'animation.gif', type: 'image/gif', kind: 'gif', output: 'animation.mp4', mime: 'video/mp4' },
-    { name: 'animation.GIF', type: 'application/octet-stream', kind: 'gif', output: 'animation.mp4', mime: 'video/mp4' },
+    { name: 'animation.gif', type: 'image/gif', kind: 'gif', output: 'animation.gif', mime: 'image/gif' },
+    { name: 'animation.GIF', type: 'application/octet-stream', kind: 'gif', output: 'animation.gif', mime: 'image/gif' },
 ]) test(`oversized ${item.name} compresses before native validation and keeps its correct output type`, async ({ page }) => {
     await select(page, { name: item.name, type: item.type, method: 'paste' }); await ready(page);
     expect(await page.evaluate(() => calls.find(c => c.action === 'begin').options.kind)).toBe(item.kind);
@@ -289,4 +290,13 @@ test('selected bottom toast matches the compact reference at desktop and stays w
     await expect.poll(() => page.evaluate(() => Lowcord.videoCompression.busy())).toBe(false);
     await expect(page.locator('.lowcord-video-compression')).toHaveCount(0);
     expect(errors).toEqual([]);
+});
+
+test('a GIF that cannot fit stays an original GIF and explains the limit', async ({ page }) => {
+    await page.evaluate(() => { window.failure = 'gif-too-large'; });
+    await select(page, { name: 'animation.gif', type: 'image/gif' }); await ready(page);
+    expect(await page.evaluate(() => ({name: prepared[0].file.name, type: prepared[0].file.type, size: prepared[0].file.size})))
+        .toEqual({name: 'animation.gif', type: 'image/gif', size: 20_000_001});
+    await expect(page.locator('.lowcord-toast[role="status"]')).toContainText('The original GIF was kept');
+    expect(await page.evaluate(() => receipts.length)).toBe(0);
 });

@@ -4,11 +4,11 @@ const { mkdtemp, rm, writeFile, readFile, readdir } = require('node:fs/promises'
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { createVideoAttachments, CHUNK, MAX_SOURCE } = require('../electron/video-attachments.cjs');
-const { compressVideo, compressImage } = require('../electron/video-compress.cjs');
+const { compressVideo, compressImage, compressGif } = require('../electron/video-compress.cjs');
 
-async function fixture(t, compress) {
+async function fixture(t, compress, extra = {}) {
     const tempRoot = await mkdtemp(join(tmpdir(), 'attachment-test-'));
-    const service = createVideoAttachments({ tempRoot, compress });
+    const service = createVideoAttachments({ tempRoot, compress, ...extra });
     t.after(async () => { await service.close(); await rm(tempRoot, { recursive: true, force: true }); });
     return { service, tempRoot };
 }
@@ -120,4 +120,42 @@ test('still-image compression produces a decodable PNG under budget and retains 
     assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a'); assert.ok(bytes.length < 2000);
     const { stdout } = await exec('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', output, '-vf', 'crop=1:1:0:0', '-frames:v', '1', '-pix_fmt', 'rgba', '-f', 'rawvideo', 'pipe:1'], { encoding: 'buffer' });
     assert.equal(stdout.length, 4); assert.ok(stdout[3] > 100 && stdout[3] < 155, 'transparent pixels must stay transparent');
+});
+
+test('GIF attachments use a GIF encoder, validate GIF output, and reject disguised videos', async t => {
+    let mode = 'gif';
+    const gif = Buffer.from('GIF89a' + 'animation output');
+    const { service } = await fixture(t, () => { throw Error('GIF must not use the video encoder'); }, {
+        gifCompress: async (_input, directory) => {
+            const output = join(directory, 'compressed.gif');
+            await writeFile(output, mode === 'gif' ? gif : mp4); return output;
+        },
+    });
+    for (mode of ['gif', 'mp4', 'disguised']) {
+        const { id } = await service.begin(1, { size: 20_000_000, limit: 20_000_000, kind: 'gif' });
+        const prefix = new Uint8Array(CHUNK);
+        if (mode !== 'disguised') prefix.set(Buffer.from('GIF89a'));
+        await service.append(1, id, prefix);
+        await fill(service, 1, id, 20_000_000 - CHUNK);
+        if (mode === 'gif') {
+            assert.deepEqual(await service.finish(1, id), { size: gif.length, type: 'image/gif', extension: 'gif' });
+            assert.deepEqual(Buffer.from(await service.read(1, id, 0)), gif);
+        } else await assert.rejects(service.finish(1, id), { code: mode === 'disguised' ? 'invalid-input' : 'invalid-output' });
+        await service.cancel(1, id);
+    }
+});
+
+test('GIF compression retains transparent pixels and finite loop settings', async t => {
+    const { promisify } = require('node:util'); const { execFile } = require('node:child_process');
+    const directory = await mkdtemp(join(tmpdir(), 'attachment-gif-alpha-'));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const input = join(directory, 'transparent.gif');
+    const transparent = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+    const loop = Buffer.concat([Buffer.from([0x21, 0xff, 11]), Buffer.from('NETSCAPE2.0'), Buffer.from([3, 1, 3, 0, 0])]);
+    await writeFile(input, Buffer.concat([transparent.subarray(0, 19), loop, transparent.subarray(19)]));
+    const output = await compressGif(input, directory, 2000, new AbortController().signal);
+    const bytes = await readFile(output), marker = bytes.indexOf(Buffer.from('NETSCAPE2.0'));
+    assert.ok(marker >= 0); assert.equal(bytes.readUInt16LE(marker + 13), 3);
+    const { stdout } = await promisify(execFile)('ffmpeg', ['-v', 'error', '-i', output, '-frames:v', '1', '-pix_fmt', 'rgba', '-f', 'rawvideo', 'pipe:1'], { encoding: 'buffer' });
+    assert.equal(stdout.length, 4); assert.equal(stdout[3], 0);
 });

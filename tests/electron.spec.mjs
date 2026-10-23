@@ -278,14 +278,19 @@ for (const kind of ['image', 'gif']) test(`automatic ${kind} compression attache
                     const image = new Image(); image.src = url; await image.decode();
                     return { type: file.type, name: file.name, size: file.size, width: image.naturalWidth };
                 }
-                const video = document.createElement('video'); video.src = url; video.muted = true;
-                await new Promise((resolve, reject) => { video.onloadeddata = resolve; video.onerror = reject; });
-                return { type: file.type, name: file.name, size: file.size, width: video.videoWidth, duration: video.duration };
+                const image = new Image(); image.src = url; await image.decode();
+                const decoder = new ImageDecoder({ data: await file.arrayBuffer(), type: file.type });
+                try {
+                    await decoder.tracks.ready;
+                    await decoder.completed;
+                    return { type: file.type, name: file.name, size: file.size, width: image.naturalWidth,
+                        frames: decoder.tracks.selectedTrack.frameCount };
+                } finally { decoder.close(); }
             } finally { URL.revokeObjectURL(url); }
         }, kind);
-        expect(output).toMatchObject({ type: kind === 'gif' ? 'video/mp4' : 'image/png', name: kind === 'gif' ? 'SPOILER_animation.mp4' : 'SPOILER_picture.png' });
+        expect(output).toMatchObject({ type: kind === 'gif' ? 'image/gif' : 'image/png', name: kind === 'gif' ? 'SPOILER_animation.gif' : 'SPOILER_picture.png' });
         expect(output.size).toBeLessThan(20_000_000); expect(output.width).toBeGreaterThan(0);
-        if (kind === 'gif') expect(output.duration).toBeGreaterThan(.5);
+        if (kind === 'gif') expect(output.frames).toBeGreaterThan(1);
         expect(await page.evaluate(() => Lowcord.videoCompression.busy())).toBe(false);
     } finally { await app?.close(); await rm(dir, { recursive: true, force: true }); }
 });

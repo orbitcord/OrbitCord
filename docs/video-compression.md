@@ -1,5 +1,31 @@
 # Automatic media attachments
 
+## Preserve GIF uploads — 2026-10-23
+
+- Root cause: oversized GIFs shared the MP4 encoder and output validation with
+  videos; the renderer accepted only PNG or MP4 replacements.
+- GIF headers now select a dedicated GIF encoder for local uploads and media
+  source downloads. The renderer accepts GIF MIME/extension and rejects MP4
+  replacements for GIF uploads. Originals are restored with an explanation
+  when the GIF cannot fit; files are never silently converted to video.
+- When installed, Gifsicle tries lossless optimization, then modest lossy
+  compression. FFmpeg is the fallback, using a two-pass palette without buffering
+  the entire animation. Later attempts reduce colors, dimensions and frame rate;
+  output retains transparency and the source loop setting. The existing serial
+  encoder queue and cancellation apply. No new startup work or dependencies.
+- Verification: 22 backend and 15 Chromium upload checks pass, including actual
+  GIF decoding, animation duration/frame count, transparency, finite loops,
+  output MIME/header validation, downloaded GIFs and original-file restoration.
+  Two real Electron checks pass for PNG and animated GIF uploads across sandbox
+  IPC. The decoder test waits for track metadata before reading frame count.
+  Preload build and whitespace checks pass.
+- Test diagnosis: the initial fixture already fit its requested cap. Replaced it
+  with a larger animation; a 20 KB cap exceeded the encoder's quality floor
+  (128px edge), so the success case uses 50 KB against a 92 KB source.
+- Risks: Gifsicle is optional and absent on this development machine; the real
+  codec checks exercise FFmpeg. GIF compression may visibly reduce quality and
+  cannot guarantee that every animation will fit Discord's upload limit.
+
 ## Media support and extension search — 2026-10-23
 
 - Root cause: the local attachment filter accepted only video MIME types and

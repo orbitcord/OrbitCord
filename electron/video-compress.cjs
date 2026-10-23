@@ -1,5 +1,5 @@
 const { spawn } = require('node:child_process');
-const { stat } = require('node:fs/promises');
+const { stat, open } = require('node:fs/promises');
 const { join } = require('node:path');
 
 const failure = code => Object.assign(new Error(code), { code });
@@ -125,4 +125,65 @@ async function compressImage(input, directory, limit, signal) {
     } finally { if (waiting.length) waiting.shift().resolve(); else encoding = false; }
 }
 
-module.exports = { compressVideo, compressImage };
+// GIFs keep their format. Gifsicle is optional: use its lossless optimizer
+// first, then modest lossy settings. FFmpeg supplies a portable fallback using
+// a two-pass palette, so palette generation never buffers the whole animation.
+async function compressGif(input, directory, limit, signal) {
+    await acquire(signal);
+    try {
+        signal?.throwIfAborted();
+        if (!Number.isSafeInteger(limit) || limit < 1000 || limit > 100_000_000) throw failure('invalid-limit');
+        const output = join(directory, 'compressed.gif');
+        const fits = async () => { const { size } = await stat(output); return size >= 12 && size < limit; };
+        const candidates = ['gifsicle', ...(process.platform === 'darwin' ? ['/opt/homebrew/bin/gifsicle', '/usr/local/bin/gifsicle'] : [])];
+        for (const candidate of candidates) {
+            try {
+                const probe = await run(candidate, ['--version'], signal, 5000);
+                if (probe.code !== 0) continue;
+            } catch (error) { if (signal?.aborted) throw error; continue; }
+            for (const options of [[], ['--lossy=30'], ['--lossy=60', '--colors=128']]) {
+                const result = await run(candidate, ['--no-ignore-errors', '-O3', ...options, input, '-o', output], signal);
+                if (result.code !== 0) break;
+                if (await fits()) return output;
+            }
+            break;
+        }
+        const command = await findFFmpeg(signal);
+        // Read the loop extension without loading the source into JS memory.
+        const file = await open(input, 'r'), prefix = Buffer.alloc(65_536);
+        let length;
+        try { length = (await file.read(prefix, 0, prefix.length, 0)).bytesRead; } finally { await file.close(); }
+        if (length < 13 || !/^GIF8[79]a/.test(prefix.toString('ascii', 0, 6))) throw failure('invalid-input');
+        let loop = -1;
+        for (const name of ['NETSCAPE2.0', 'ANIMEXTS1.0']) {
+            const index = prefix.subarray(0, length).indexOf(Buffer.from(name));
+            if (index >= 0 && index + 16 <= length && prefix[index + 11] === 3 && prefix[index + 12] === 1)
+                loop = prefix.readUInt16LE(index + 13);
+        }
+        let edge = Math.min(960, Math.max(prefix.readUInt16LE(6), prefix.readUInt16LE(8)));
+        for (let attempt = 0; attempt < 5; attempt++) {
+            const colors = attempt === 0 ? 256 : attempt === 1 ? 128 : 64;
+            // First pass keeps dimensions and timing; later passes cap frame
+            // rate without increasing it, and shrink dimensions to fit.
+            const resize = attempt === 0 ? 'null' : `scale=w='min(${edge},iw)':h='min(${edge},ih)':force_original_aspect_ratio=decrease:flags=lanczos,fps=fps='min(source_fps,${attempt < 3 ? 20 : 12})'`;
+            const inputs = ['-protocol_whitelist', 'file', '-format_whitelist', 'gif', '-threads', '2', '-ignore_loop', '1', '-i', input];
+            const palette = join(directory, 'gif-palette.png');
+            const generated = await run(command, ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+                ...inputs, '-vf', `${resize},palettegen=max_colors=${colors}:reserve_transparent=1`,
+                '-frames:v', '1', '-filter_threads', '1', '-threads', '1', palette], signal);
+            if (generated.code !== 0) throw failure('encode-failed');
+            const result = await run(command, ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+                ...inputs, '-protocol_whitelist', 'file', '-format_whitelist', 'png_pipe', '-i', palette,
+                '-an', '-sn', '-dn', '-map_metadata', '-1', '-filter_complex',
+                `[0:v]${resize}[v];[v][1:v]paletteuse=dither=bayer:bayer_scale=3:alpha_threshold=128`,
+                '-filter_complex_threads', '1', '-threads', '2', '-c:v', 'gif', '-loop', String(loop), output], signal);
+            if (result.code !== 0) throw failure('encode-failed');
+            if (await fits()) return output;
+            const { size } = await stat(output);
+            edge = Math.max(Math.min(128, edge), Math.floor(edge * Math.min(.8, Math.sqrt(limit * .85 / size))));
+        }
+        throw failure('gif-too-large');
+    } finally { if (waiting.length) waiting.shift().resolve(); else encoding = false; }
+}
+
+module.exports = { compressVideo, compressImage, compressGif };

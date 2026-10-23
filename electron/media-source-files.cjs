@@ -4,7 +4,7 @@ const { isIP } = require('node:net');
 const { mkdtemp, open, rm, stat, readdir } = require('node:fs/promises');
 const { join } = require('node:path');
 const { tmpdir } = require('node:os');
-const { compressVideo, compressImage } = require('./video-compress.cjs');
+const { compressVideo, compressImage, compressGif } = require('./video-compress.cjs');
 const fail = code => Object.assign(new Error(code), { code });
 const CHUNK = 1024 * 1024, MAX_SOURCE = 2 * 1024 ** 3;
 
@@ -71,7 +71,7 @@ function requestReferer(page,value){
     const referer=new URL(page),target=new URL(value);referer.hash='';
     return referer.origin===target.origin?referer.href:referer.origin+'/';
 }
-function createSourceFiles({ directory = tmpdir(), validateURL = publicURL, compress = compressVideo, imageCompress = compressImage } = {}) {
+function createSourceFiles({ directory = tmpdir(), validateURL = publicURL, compress = compressVideo, imageCompress = compressImage, gifCompress = compressGif } = {}) {
     const jobs = new Map(); let root, closed = false;
     async function folder() {
         return root ??= (async () => {
@@ -239,10 +239,10 @@ function createSourceFiles({ directory = tmpdir(), validateURL = publicURL, comp
             let media = hls ? {type:'video/mp4',ext:'mp4',convert:true} : identify(bytes.subarray(0,headerSize));
             let path = input;
             if (media.convert || job.downloaded>=limit) {
-                const image=media.type.startsWith('image/')&&!media.animated;
+                const gif=media.type==='image/gif',image=media.type.startsWith('image/')&&!media.animated;
                 onState('Compressing media…');
-                path = await (image?imageCompress:compress)(input,job.folder,limit,job.controller.signal,{general:true,audioInput:job.audioInput,remux:hls});
-                media=image?{type:'image/png',ext:'png'}:{type:'video/mp4',ext:'mp4'};
+                path = await (gif?gifCompress:image?imageCompress:compress)(input,job.folder,limit,job.controller.signal,{general:true,audioInput:job.audioInput,remux:hls});
+                media=gif?{type:'image/gif',ext:'gif'}:image?{type:'image/png',ext:'png'}:{type:'video/mp4',ext:'mp4'};
                 if(path!==join(job.folder,`compressed.${media.ext}`))throw fail('invalid-output');
             }
             job.controller.signal.throwIfAborted();

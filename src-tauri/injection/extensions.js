@@ -6,7 +6,7 @@
     const storageKey = "lowcord.extensions";
     const catalog = [
         { id: "anonymiseFileNames", title: "Anonymise file names", description: "Randomise upload names. Keep file types and spoiler tags." },
-        { id: "compressVideos", title: "Compress media", description: "Shrink large images, videos and GIFs below 20 MB in DMs and 100 MB in servers. Images retain transparency; GIFs become MP4. Requires FFmpeg." },
+        { id: "compressVideos", title: "Compress media", description: "Shrink large images, videos and GIFs below 20 MB in DMs and 100 MB in servers. Images retain transparency; GIFs stay GIFs. Requires FFmpeg; optionally uses Gifsicle for GIF optimization." },
         { id: "voiceMessages", title: "Voice messages", description: "Use the waveform button to record a voice message." },
         { id: "redgifsPicker", title: "RedGIFs picker", description: "Browse and search RedGIFs, then send a video as an MP4 file." },
         { id: "mediaSources", title: "Media sources", description: "Browse GifReels and XXXTik and send original images or videos with one click." },
