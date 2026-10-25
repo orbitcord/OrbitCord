@@ -118,36 +118,67 @@ test("clean links strips tracking from sent and edited messages, keeping real pa
     expect(JSON.parse((await received(page))[2].body).content).toBe(content);
 });
 
-test("fake nitro unlocks chat emojis, links the ones the account can't use, and sends locked stickers as links", async ({ page }) => {
+test("fake nitro unlocks chat emojis and Nitro-locked stickers, sends them as links, and shows received links natively", async ({ page }) => {
     await page.evaluate(channel => {
-        // Shapes observed in Discord's module cache: frozen premium checks, and
-        // emoji helpers that take an intention and a premium bypass flag.
+        // Shapes observed in Discord's module cache: frozen premium checks,
+        // emoji helpers that take an intention and a premium bypass flag, the
+        // expression picker's state store, and a dispatcher with interceptors.
         const premium = Object.freeze({ canUseEmojisEverywhere: () => false, canUseAnimatedEmojis: () => false, canUseCustomStickersEverywhere: () => false });
         const reason = ({ intention, bypassPremiumEmojiEntitlement }) => bypassPremiumEmojiEntitlement ? null : `locked:${intention}`;
         const emojiHelpers = { getEmojiUnavailableReason: reason, isEmojiPremiumLocked: options => reason(options) !== null,
             getEmojiUnavailableReasons: options => ({ locked: reason(options) !== null }) };
         const intentions = { EmojiIntention: { REACTION: 0, STATUS: 1, CHAT: 3, AUTO_SUGGESTION: 9 }, isExternalEmojiAllowedForIntention: () => true };
+        let pickerState = { activeView: "sticker", activeChannelId: String(channel), isNitroLockedSectionVisible: false };
+        const picker = () => pickerState;
+        picker.getState = () => pickerState;
+        picker.setState = update => { pickerState = { ...pickerState, ...(typeof update === "function" ? update(pickerState) : update) }; };
+        const fixture = { emojiHelpers, picker, actions: [], picked: [], previews: {}, canExternal: true };
+        const interceptors = [];
+        const dispatcher = { subscribe() {}, unsubscribe() {}, addInterceptor: fn => interceptors.push(fn),
+            dispatch(action) {
+                if (interceptors.some(fn => fn(action))) return;
+                fixture.actions.push(action);
+                if (action.type === "ADD_STICKER_PREVIEW") fixture.previews[action.channelId] = [action.sticker];
+            } };
+        const stickers = { 7: { id: "7", guild_id: "away", name: "party [cat]", format_type: 4 }, 8: { id: "8", guild_id: "away", name: "wave", format_type: 2 },
+            9: { id: "9", guild_id: "home", name: "home", format_type: 1 }, 10: { id: "10", guild_id: "away", name: "lottie", format_type: 3 },
+            11: { id: "11", guild_id: "away", name: "lost", format_type: 1, available: false } };
         const stores = {
             UserStore: { getCurrentUser: () => ({ id: "self", premiumType: 0 }) },
             SelectedChannelStore: { getChannelId: () => String(channel) },
             ChannelStore: { getChannel: id => ({ id, guild_id: id === String(channel) ? "home" : null }) },
-            EmojiStore: { getCustomEmojiById: id => ({ 111: { guildId: "home" }, 222: { guildId: "home" }, 333: { guildId: "away" } })[id] },
+            EmojiStore: { getCustomEmojiById: id => ({ 111: { guildId: "home" }, 222: { guildId: "home" }, 333: { guildId: "away" }, 555: { guildId: "away", managed: true } })[id] },
+            StickersStore: { getStickerById: id => stickers[id] },
+            PermissionStore: { can: () => fixture.canExternal },
+            StickerMessagePreviewStore: { getStickerPreview: id => fixture.previews[id] },
+            UploadAttachmentStore: { getUploads: () => [] },
         };
         for (const [name, store] of Object.entries(stores)) {
             const Store = class {};
             Store.displayName = name;
             Object.setPrototypeOf(store, Store.prototype);
         }
-        const rest = { get() {}, put() {}, patch() {}, del() {},
-            post: ({ url, body }) => fetch(`/api/v9${url}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }) };
-        window.fakeNitroFixture = { emojiHelpers, picked: [] };
-        window.webpackChunkdiscord_app[0][2]({ c: { fakeNitro: { exports: { premium, emojiHelpers, intentions, rest, ...stores } } } });
+        window.fakeNitroFixture = fixture;
+        window.webpackChunkdiscord_app[0][2]({ c: { fakeNitro: { exports: { premium, emojiHelpers, intentions, picker, dispatcher, ...stores } } } });
         // Discord's picker markup: a locked sticker has an unsendable node.
-        const sticker = (id, name, format, locked) => `<div role="gridcell" id="sticker-picker-grid-0-${id}"><div role="button" tabindex="0" data-type="sticker"
-            data-id="${id}" data-name="${name}" data-format-type="${format}"><div aria-hidden="true"><div class="stickerNode_x${locked ? " stickerUnsendable_x" : ""}">
-            <img data-type="sticker" alt="${name}"></div></div></div></div>`;
-        document.querySelector("main").insertAdjacentHTML("beforeend", `<div id="sticker-picker">${sticker(7, "party [cat]", 4, true)}${sticker(8, "wave", 2, true)}${sticker(9, "home", 1, false)}${sticker(10, "lottie", 3, true)}</div>`);
-        document.querySelector("#sticker-picker").addEventListener("click", event => fakeNitroFixture.picked.push(event.target.closest("[data-id]").dataset.id));
+        const sticker = (id, locked) => `<div role="gridcell" id="sticker-picker-grid-0-${id}"><div role="button" tabindex="0" data-type="sticker"
+            data-id="${id}" data-name="${stickers[id].name}" data-format-type="${stickers[id].format_type}"><div aria-hidden="true">
+            <div class="stickerNode_x${locked ? " stickerUnsendable_x" : ""}"><img data-type="sticker" alt=""></div></div></div></div>`;
+        document.querySelector("main").insertAdjacentHTML("beforeend", `<div id="sticker-picker"><input aria-label="Search stickers">
+            ${sticker(7, true)}${sticker(8, true)}${sticker(9, false)}${sticker(10, true)}${sticker(11, true)}</div>
+            <div class="channelTextArea_x"><div contenteditable="true" role="textbox" aria-label="Fake Nitro composer"></div></div>`);
+        document.querySelector("#sticker-picker").addEventListener("click", event => fixture.picked.push(event.target.closest("[data-id]")?.dataset.id));
+        document.querySelector("#sticker-picker input").addEventListener("keydown", () => fixture.picked.push("search"));
+        // Discord's submit: the draft's text and sticker preview go out together.
+        const editor = document.querySelector('[aria-label="Fake Nitro composer"]');
+        editor.addEventListener("keydown", event => {
+            if (event.key !== "Enter") return;
+            const preview = fixture.previews[channel] ?? [];
+            delete fixture.previews[channel];
+            void fetch(`/api/v9/channels/${channel}/messages`, { method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ content: editor.textContent, sticker_ids: preview.map(item => item.id) }) });
+            editor.textContent = "";
+        });
     }, channel);
     await expect.poll(() => page.evaluate(() => fakeNitroFixture.emojiHelpers.getEmojiUnavailableReason({ intention: 3 }))).toBe(null);
     // Chat intentions are unlocked; reactions and statuses keep Discord's answer.
@@ -156,30 +187,61 @@ test("fake nitro unlocks chat emojis, links the ones the account can't use, and 
     expect(await page.evaluate(() => [fakeNitroFixture.emojiHelpers.isEmojiPremiumLocked({ intention: 3 }),
         fakeNitroFixture.emojiHelpers.getEmojiUnavailableReasons({ intention: 0 }).locked])).toEqual([false, true]);
 
-    const content = "hi <:wave:111> <a:dance:222> <:away:333> `<:code:333>` <:unknown:444>";
+    const content = "hi <:wave:111> <a:dance:222> <:away:333> <:twitch:555> `<:code:333>` <:unknown:444>";
     await xhr(page, "POST", `/api/v9/channels/${channel}/messages`, JSON.stringify({ content }));
-    await xhr(page, "PATCH", `/api/v9/channels/${channel}/messages/5`, JSON.stringify({ content: "<:away:333>" }));
-    const [sent, edited] = (await received(page)).map(entry => JSON.parse(entry.body));
-    expect(sent.content).toBe("hi <:wave:111> [dance](https://cdn.discordapp.com/emojis/222.gif?size=48&name=dance) "
-        + "[away](https://cdn.discordapp.com/emojis/333.webp?size=48&name=away) `<:code:333>` [unknown](https://cdn.discordapp.com/emojis/444.webp?size=48&name=unknown)");
-    expect(edited.content).toBe("[away](https://cdn.discordapp.com/emojis/333.webp?size=48&name=away)");
+    expect(JSON.parse((await received(page))[0].body).content).toBe("hi <:wave:111> [dance](https://cdn.discordapp.com/emojis/222.gif?size=48&name=dance) "
+        + "[away](https://cdn.discordapp.com/emojis/333.webp?size=48&name=away) <:twitch:555> `<:code:333>` [unknown](https://cdn.discordapp.com/emojis/444.webp?size=48&name=unknown)");
 
-    // Locked stickers send as links; sendable and Lottie ones stay Discord's.
-    for (const id of ["7", "9", "10"]) await page.locator(`[data-id="${id}"][role="button"]`).click();
-    await page.locator('[data-id="8"][role="button"]').focus();
-    await page.keyboard.press("Enter");
-    await expect.poll(async () => (await received(page)).length).toBe(4);
-    expect((await received(page)).slice(2).map(entry => JSON.parse(entry.body).content)).toEqual([
-        "[party cat](https://media.discordapp.net/stickers/7.gif?size=160)", "[wave](https://media.discordapp.net/stickers/8.png?size=160)"]);
-    expect(await page.evaluate(() => fakeNitroFixture.picked)).toEqual(["9", "10"]);
+    // With an empty draft, a locked sticker sends at once through Discord's draft.
+    await page.locator('[data-id="7"][role="button"]').click();
+    await expect.poll(async () => (await received(page)).length).toBe(2);
+    expect(JSON.parse((await received(page))[1].body)).toEqual({ content: "[party cat](https://media.discordapp.net/stickers/7.gif?size=160)", sticker_ids: [] });
+    expect(await page.evaluate(() => fakeNitroFixture.picker.getState().activeView)).toBe(null);
+    // With text, it joins the draft; Enter in search picks the highlighted one.
+    await page.evaluate(() => { document.querySelector('[aria-label="Fake Nitro composer"]').textContent = "look"; });
+    await page.evaluate(() => document.querySelector('[data-id="8"][role="button"]').classList.add("stickerInspected_x"));
+    await page.getByRole("textbox", { name: "Search stickers" }).press("Enter");
+    expect(await page.evaluate(id => fakeNitroFixture.previews[id]?.map(item => item.id), String(channel))).toEqual(["8"]);
+    expect((await received(page)).length).toBe(2);
+    await page.getByRole("textbox", { name: "Fake Nitro composer" }).press("Enter");
+    await expect.poll(async () => (await received(page)).length).toBe(3);
+    expect(JSON.parse((await received(page))[2].body)).toEqual({ content: "look\n[wave](https://media.discordapp.net/stickers/8.png?size=160)", sticker_ids: [] });
+    // Sendable, Lottie, unavailable and server-disallowed stickers stay Discord's.
+    for (const id of ["9", "10", "11"]) await page.locator(`[data-id="${id}"][role="button"]`).click();
+    await page.evaluate(() => { fakeNitroFixture.canExternal = false; });
+    await page.locator('[data-id="7"][role="button"]').click();
+    expect(await page.evaluate(() => fakeNitroFixture.picked)).toEqual(["9", "10", "11", "7"]);
+
+    // Received Fake Nitro links show as the emoji or sticker they stand for.
+    const link = id => `https://cdn.discordapp.com/emojis/${id}`;
+    const shown = await page.evaluate(([link]) => {
+        const message = { id: "900", author: { id: "self" }, sticker_items: [],
+            content: `hey [dance](${link}222.gif?size=48&name=dance) ${link}333.webp?size=48&name=away ${link}999.png \`[x](${link}1.webp)\`\n`
+                + "[party cat](https://media.discordapp.net/stickers/7.gif?size=160) [a [b]](https://cdn.discordapp.com/emojis/5.webp)",
+            embeds: [{ type: "image", url: `${link}222.gif?size=48&name=dance` }, { type: "image", url: `${link}333.webp?size=48&name=away` },
+                { type: "image", url: `${link}999.png` }, { type: "article", url: "https://example.com/" }] };
+        Lowcord.Dispatcher.dispatch({ type: "MESSAGE_CREATE", message });
+        // Discord fills in link previews with a later update that may lack content.
+        const update = { id: "900", embeds: [{ type: "image", url: `${link}222.gif?size=48&name=dance` }, { type: "article", url: "https://example.com/" }] };
+        Lowcord.Dispatcher.dispatch({ type: "MESSAGE_UPDATE", message: update });
+        return { message, update };
+    }, [link(""), channel]);
+    expect(shown.message.content).toBe(`hey <a:dance:222> <:away:333> ${link(999)}.png \`[x](${link(1)}.webp)\`\n [a [b]](${link(5)}.webp)`);
+    expect(shown.message.sticker_items).toEqual([{ id: "7", name: "party [cat]", format_type: 4 }]);
+    expect(shown.message.embeds.map(embed => embed.url)).toEqual([`${link(999)}.png`, "https://example.com/"]);
+    expect(shown.update.embeds.map(embed => embed.url)).toEqual(["https://example.com/"]);
+    // The edit box doesn't show the sticker, so an edit keeps its link.
+    await xhr(page, "PATCH", `/api/v9/channels/${channel}/messages/900`, JSON.stringify({ content: "edited" }));
+    expect(JSON.parse((await received(page))[3].body).content).toBe("edited\n[party cat](https://media.discordapp.net/stickers/7.gif?size=160)");
 
     // Turned off, Discord's checks, messages and picker are its own.
     await setExtension(page, "fakeNitro", false);
     expect(await page.evaluate(() => fakeNitroFixture.emojiHelpers.getEmojiUnavailableReason({ intention: 3 }))).toBe("locked:3");
     await xhr(page, "POST", `/api/v9/channels/${channel}/messages`, JSON.stringify({ content }));
-    await page.locator('[data-id="7"][role="button"]').click();
     expect(JSON.parse((await received(page))[4].body).content).toBe(content);
-    expect(await page.evaluate(() => fakeNitroFixture.picked)).toEqual(["9", "10", "7"]);
+    await page.evaluate(() => { fakeNitroFixture.canExternal = true; });
+    await page.locator('[data-id="8"][role="button"]').click();
+    expect(await page.evaluate(() => fakeNitroFixture.picked.at(-1))).toBe("8");
 });
 
 test("anonymised uploads get 7 random letters, keep extension and spoiler, and match the message", async ({ page }) => {

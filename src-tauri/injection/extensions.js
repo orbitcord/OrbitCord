@@ -712,10 +712,12 @@
     // Discord freezes its premium checks, but its emoji helpers, which the
     // picker, autocomplete and message parser call, take a flag that skips
     // the Nitro check. It is set for chat only, so reactions and statuses keep
-    // Discord's answer. On send, each emoji the account can't use natively
-    // becomes a link to its image. A locked sticker sends as a link when picked.
+    // Discord's answer. A locked sticker goes into Discord's own sticker draft.
+    // On send, each emoji or sticker the account can't use natively becomes a
+    // link to its image; received links show as the emoji or sticker again.
     let chatIntentions = new Set([3, 9]); // CHAT, AUTO_SUGGESTION
-    let premium;
+    let premium, pickerStore;
+    const store = name => window.Lowcord.store(name);
     window.Lowcord.waitFor(window.Lowcord.filters.byProps("getEmojiUnavailableReason", "getEmojiUnavailableReasons", "isEmojiPremiumLocked"), helpers => {
         for (const [name, helper] of Object.entries(helpers)) {
             if (typeof helper !== "function") continue;
@@ -728,56 +730,160 @@
     });
     window.Lowcord.waitFor(value => typeof value?.isExternalEmojiAllowedForIntention === "function" && Number.isInteger(value.EmojiIntention?.CHAT),
         ({ EmojiIntention: intention }) => { chatIntentions = new Set([intention.CHAT, intention.AUTO_SUGGESTION].filter(Number.isInteger)); });
-    window.Lowcord.waitFor(window.Lowcord.filters.byProps("canUseEmojisEverywhere", "canUseAnimatedEmojis"), checks => { premium = checks; });
+    window.Lowcord.waitFor(window.Lowcord.filters.byProps("canUseEmojisEverywhere", "canUseAnimatedEmojis", "canUseCustomStickersEverywhere"), checks => { premium = checks; });
+    // The expression picker's state store; clearing activeView closes it.
+    window.Lowcord.waitFor(value => typeof value === "function" && typeof value.getState === "function" && typeof value.setState === "function"
+        && value.getState()?.isNitroLockedSectionVisible !== undefined, picker => { pickerStore = picker; });
+
+    // Only the Nitro lock is lifted. A server that turns off external stickers,
+    // a sticker its server lost with its boosts, and Lottie stickers, which
+    // have no image to link, stay Discord's.
+    const externalStickers = 1n << 37n;
+    function fakeableSticker(sticker, channelId) {
+        const user = store("UserStore")?.getCurrentUser?.();
+        if (!enabled("fakeNitro") || !premium || !user || !sticker?.guild_id || sticker.available === false || sticker.format_type === 3) return false;
+        const channel = store("ChannelStore")?.getChannel?.(channelId);
+        const guildId = channel?.guild_id ?? null;
+        if (sticker.guild_id === guildId || premium.canUseCustomStickersEverywhere(user)) return false;
+        return !guildId || store("PermissionStore")?.can?.(externalStickers, channel) !== false;
+    }
+    // Format 4 is GIF; PNG and APNG stickers are served as PNG.
+    const stickerLink = sticker => `[${String(sticker.name ?? "").replace(/[[\]\\\n]/g, "").trim() || "sticker"}]`
+        + `(https://media.discordapp.net/stickers/${sticker.id}.${sticker.format_type === 4 ? "gif" : "png"}?size=160)`;
     // Code spans keep their text; Discord doesn't render emojis inside them.
     const emojiSyntax = /(```[\s\S]*?```|`[^`\n]*`)|<(a?):(\w+):(\d+)>/g;
+    // Sticker links of the account's own messages, which the edit box doesn't
+    // show, so an edit keeps them.
+    const ownStickerLinks = new Map();
     function fakeNitro(data, path) {
-        if (!enabled("fakeNitro") || !premium || typeof data.content !== "string" || !data.content.includes("<")) return false;
-        const user = window.Lowcord.store("UserStore")?.getCurrentUser?.();
+        if (!enabled("fakeNitro") || !premium) return false;
+        const user = store("UserStore")?.getCurrentUser?.();
         if (!user) return false;
-        const channelId = /^\/channels\/(\d+)/.exec(path)?.[1];
-        const guildId = window.Lowcord.store("ChannelStore")?.getChannel?.(channelId)?.guild_id ?? null;
-        const emojis = window.Lowcord.store("EmojiStore");
-        const everywhere = premium.canUseEmojisEverywhere(user), animated = premium.canUseAnimatedEmojis(user);
-        const content = data.content.replace(emojiSyntax, (match, code, isAnimated, name, id) => {
-            if (code) return match;
-            const local = guildId && emojis?.getCustomEmojiById?.(id)?.guildId === guildId;
-            if ((everywhere || local) && (!isAnimated || animated)) return match;
-            return `[${name}](https://cdn.discordapp.com/emojis/${id}.${isAnimated ? "gif" : "webp"}?size=48&name=${name})`;
-        });
-        if (content === data.content) return false;
-        data.content = content;
+        const [, channelId, messageId] = /^\/channels\/(\d+)\/messages(?:\/(\d+))?/.exec(path) ?? [];
+        const guildId = store("ChannelStore")?.getChannel?.(channelId)?.guild_id ?? null;
+        let changed = false;
+        if (typeof data.content === "string" && data.content.includes("<")) {
+            const emojis = store("EmojiStore");
+            const everywhere = premium.canUseEmojisEverywhere(user), animated = premium.canUseAnimatedEmojis(user);
+            const content = data.content.replace(emojiSyntax, (match, code, isAnimated, name, id) => {
+                if (code) return match;
+                // Integration (managed) emojis work across servers without Nitro.
+                const emoji = emojis?.getCustomEmojiById?.(id);
+                if ((everywhere || emoji?.managed || (guildId && emoji?.guildId === guildId)) && (!isAnimated || animated)) return match;
+                return `[${name}](https://cdn.discordapp.com/emojis/${id}.${isAnimated ? "gif" : "webp"}?size=48&name=${name})`;
+            });
+            if (content !== data.content) { data.content = content; changed = true; }
+        }
+        const urls = [];
+        if (Array.isArray(data.sticker_ids) && data.sticker_ids.length) {
+            const stickers = store("StickersStore");
+            data.sticker_ids = data.sticker_ids.filter(id => {
+                const sticker = stickers?.getStickerById?.(id);
+                if (!fakeableSticker(sticker, channelId)) return true;
+                urls.push(stickerLink(sticker));
+                return false;
+            });
+        }
+        if (messageId && typeof data.content === "string")
+            urls.push(...(ownStickerLinks.get(messageId) ?? []).filter(link => !data.content.includes(link)));
+        if (!urls.length) return changed;
+        data.content = [data.content, ...urls].filter(Boolean).join("\n");
         return true;
     }
-    // Discord marks stickers the account can't send; picking one would open
-    // a Nitro upsell. Lottie stickers (format 3) have no image to link.
-    function lockedSticker(event) {
-        const item = event.target instanceof Element ? event.target.closest('[id^="sticker-picker-grid"] [role="button"][data-type="sticker"][data-id]') : null;
-        if (!enabled("fakeNitro") || !item?.querySelector('[class*="stickerUnsendable_"]') || item.dataset.formatType === "3") return null;
-        return item;
+
+    function pickedSticker(event) {
+        if (!enabled("fakeNitro") || !(event.target instanceof Element)) return null;
+        let item = event.target.closest('[id^="sticker-picker-grid"] [role="button"][data-type="sticker"][data-id]');
+        // In search, Enter picks the highlighted sticker; focus stays in the box.
+        if (!item && event.type === "keydown" && event.key === "Enter" && event.target.matches("input"))
+            item = document.querySelector('[id^="sticker-picker-grid"] [role="button"][data-type="sticker"][class*="stickerInspected_"]');
+        return item?.querySelector('[class*="stickerUnsendable_"]') ? item : null;
     }
-    async function sendSticker(event) {
-        const item = lockedSticker(event);
+    function pickSticker(event) {
+        const item = pickedSticker(event);
         if (!item) return;
+        const selected = store("SelectedChannelStore")?.getChannelId?.();
+        const channelId = pickerStore?.getState().activeChannelId ?? selected;
+        const sticker = store("StickersStore")?.getStickerById?.(item.dataset.id);
+        if (!channelId || !fakeableSticker(sticker, channelId) || !window.Lowcord.Dispatcher) return;
         event.preventDefault(); event.stopImmediatePropagation();
-        const channelId = window.Lowcord.store("SelectedChannelStore")?.getChannelId?.();
-        if (!channelId || !window.Lowcord.RestAPI?.post) return;
-        const { id, name, formatType } = item.dataset;
-        // Format 4 is GIF; PNG and APNG stickers are served as PNG.
-        const url = `https://media.discordapp.net/stickers/${id}.${formatType === "4" ? "gif" : "png"}?size=160`;
-        item.closest('[class*="layerContainer_"], [role="dialog"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true }));
-        try {
-            await window.Lowcord.RestAPI.post({ url: `/channels/${channelId}/messages`, body: {
-                content: `[${(name ?? "").replace(/[[\]\\]/g, "") || "sticker"}](${url})`, channel_id: channelId, type: 0, sticker_ids: [],
-                nonce: String((BigInt(Date.now()) - 1420070400000n) << 22n) } });
-        } catch (failure) {
-            console.warn("[lowcord] Fake Nitro sticker:", failure);
-            toast("Couldn’t send the sticker. Please try again.", true);
-        }
+        // Like Discord: a sticker joins a draft that has text, files or a
+        // sticker, keeping its reply; otherwise it sends at once.
+        const editor = channelId === selected ? document.querySelector('main [class*="channelTextArea_"] [contenteditable="true"][role="textbox"]') : null;
+        const draft = editor?.textContent.trim() || draftFiles(channelId)?.size
+            || store("StickerMessagePreviewStore")?.getStickerPreview?.(channelId, 0)?.length;
+        window.Lowcord.Dispatcher.dispatch({ type: "ADD_STICKER_PREVIEW", channelId, sticker, draftType: 0 });
+        pickerStore?.setState(state => ({ activeView: null, activeViewType: null, activeChannelId: null, showEmojiPacks: false, lastActiveView: state.activeView }));
+        if (!editor) return;
+        editor.focus();
+        if (!draft) editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
     }
-    // Discord's own picker handlers would run first in its root listener.
-    window.addEventListener("click", sendSticker, true);
-    window.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") void sendSticker(event); }, true);
+    // Capturing on window runs before Discord's root listeners.
+    window.addEventListener("click", pickSticker, true);
+    window.addEventListener("keydown", event => {
+        if (event.key === "Enter" || (event.key === " " && event.target instanceof Element && event.target.matches('[data-type="sticker"]'))) pickSticker(event);
+    }, true);
+
+    // Received links, from OrbitCord or Vencord's Fake Nitro, show as the emoji
+    // or sticker they stand for, and their image previews are dropped. A bare
+    // emoji link counts only with Fake Nitro's name parameter.
+    const cdnImage = String.raw`https://(?:cdn|media)\.discordapp\.(?:com|net)/(emojis|stickers)/(\d+)\.(webp|gif|png|avif)(?:\?[^\s()<>]*)?`;
+    const receivedLink = new RegExp(String.raw`(\`\`\`[\s\S]*?\`\`\`|\`[^\`\n]*\`)|\[([^[\]\n]{0,64})\]\(${cdnImage}\)|(?<!\()${cdnImage}`, "g");
+    const shownMessages = new Set();
+    function linkKey(url) {
+        const match = /^https:\/\/(?:cdn|media)\.discordapp\.(?:com|net)\/(emojis|stickers)\/(\d+)\./.exec(url ?? "");
+        return match && `${match[1]}/${match[2]}`;
+    }
+    function showFakeNitro(message) {
+        if (!message || typeof message !== "object") return;
+        showFakeNitro(message.referenced_message);
+        for (const snapshot of Array.isArray(message.message_snapshots) ? message.message_snapshots : []) showFakeNitro(snapshot?.message);
+        const keys = new Set();
+        if (typeof message.content === "string" && message.content.includes("discordapp.")) {
+            const stickers = [...(Array.isArray(message.sticker_items) ? message.sticker_items : [])], links = [];
+            const content = message.content.replace(receivedLink, (match, code, text, maskedKind, maskedId, maskedType, kind = maskedKind, id = maskedId, type = maskedType) => {
+                if (code) return match;
+                const url = new URL(text === undefined ? match : match.slice(match.lastIndexOf("](") + 2, -1));
+                if (kind === "stickers") {
+                    if (stickers.length >= 3) return match;
+                    const known = store("StickersStore")?.getStickerById?.(id);
+                    stickers.push({ id, name: known?.name ?? text ?? "Sticker", format_type: known?.format_type ?? (type === "gif" ? 4 : 1) });
+                    links.push(match);
+                    keys.add(`stickers/${id}`);
+                    return "";
+                }
+                const name = (url.searchParams.get("name") ?? text ?? "").replace(/\W/g, "_").slice(0, 32);
+                if (text === undefined && !url.searchParams.has("name")) return match;
+                keys.add(`emojis/${id}`);
+                return `<${type === "gif" || url.searchParams.get("animated") === "true" ? "a" : ""}:${name.length >= 2 ? name : "emoji"}:${id}>`;
+            });
+            if (keys.size) {
+                message.content = content.trim();
+                if (stickers.length) message.sticker_items = stickers;
+                if (links.length && message.id && message.author?.id === store("UserStore")?.getCurrentUser?.()?.id) {
+                    if (ownStickerLinks.size >= 200) ownStickerLinks.delete(ownStickerLinks.keys().next().value);
+                    ownStickerLinks.set(message.id, links);
+                }
+                if (message.id) {
+                    if (shownMessages.size >= 1000) shownMessages.delete(shownMessages.values().next().value);
+                    shownMessages.add(message.id);
+                }
+            }
+        }
+        // An embed update can arrive without the content it belongs to.
+        if (Array.isArray(message.embeds) && message.embeds.length && (keys.size || (message.content === undefined && shownMessages.has(message.id))))
+            message.embeds = message.embeds.filter(embed => { const key = linkKey(embed?.url); return !key || (keys.size && !keys.has(key)); });
+    }
+    window.Lowcord.waitFor(window.Lowcord.filters.byProps("dispatch", "subscribe", "addInterceptor"), dispatcher => {
+        dispatcher.addInterceptor(action => {
+            if (!enabled("fakeNitro")) return false;
+            try {
+                if (action.message) showFakeNitro(action.message);
+                if (Array.isArray(action.messages)) for (const message of action.messages.flat()) showFakeNitro(message);
+            } catch (error) { console.warn("[lowcord] Fake Nitro:", error); }
+            return false;
+        });
+    });
 
     // Returns a replacement body, or undefined to send the original.
     function rewrite(method, url, body) {
