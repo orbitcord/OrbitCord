@@ -70,6 +70,8 @@ export async function buildPreload({ sourceRoot = root, output = join(sourceRoot
 if (process.isMainFrame && location.protocol !== 'data:') {
     require('./electron/update-notice.cjs').setupUpdateNotice(ipcRenderer);
     ipcRenderer.on('lowcord:trim-memory', () => webFrame.clearCache());
+    // Discord's gateway checks its socket on "online"; see electron/network-watch.cjs.
+    ipcRenderer.on('lowcord:network-changed', () => { if (navigator.onLine) window.dispatchEvent(new Event('online')); });
     contextBridge.exposeInMainWorld('__LOWCORD_NATIVE__', {
         notify: (title, body) => ipcRenderer.invoke('lowcord:notify', title, body),
         setBadge: count => ipcRenderer.invoke('lowcord:badge', count),

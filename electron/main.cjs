@@ -15,6 +15,7 @@ const { createVideoAttachments } = require('./video-attachments.cjs');
 const { downloadImage } = require('./image-drop.cjs');
 const { createUpdateController, latestRelease, macAsset, downloadMacInstaller } = require('./updates.cjs');
 const { createBackgroundSaver } = require('./background.cjs');
+const { watchNetwork } = require('./network-watch.cjs');
 
 app.setName('OrbitCord');
 app.setAppUserModelId('dev.lowcord.app'); // Stable identity preserves existing installs and notifications.
@@ -780,6 +781,11 @@ async function start() {
     });
     if (testing && process.env.LOWCORD_TEST_UPDATER === '1') updates.initialize();
     registerIpc();
+    watchNetwork({ powerMonitor: require('electron').powerMonitor, onChange: () => {
+        for (const { window } of discordWindows.values()) {
+            if (!window.isDestroyed() && trusted(window.webContents.getURL())) window.webContents.send('lowcord:network-changed');
+        }
+    } });
     Menu.setApplicationMenu(appMenu());
     if (!testing) {
         const image = process.platform === 'win32'

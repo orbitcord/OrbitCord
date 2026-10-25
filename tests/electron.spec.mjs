@@ -1089,6 +1089,19 @@ test('opened image menu copies full image pixels and saves the original file', a
     }
 });
 
+test('waking from sleep tells Discord\'s gateway to check its socket', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-network-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('domcontentloaded');
+        // Discord's own listener lives in the main world, apart from the preload.
+        await page.evaluate(() => { window.onlineEvents = 0; window.addEventListener('online', () => window.onlineEvents++); });
+        await app.evaluate(({ powerMonitor }) => powerMonitor.emit('resume'));
+        await expect.poll(() => page.evaluate(() => window.onlineEvents)).toBe(1);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('text fields get a native edit menu that pastes, and passkey autofill stays off', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'orbitcord-edit-menu-'));
     const app = await launch(dir);
