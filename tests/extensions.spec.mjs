@@ -118,6 +118,70 @@ test("clean links strips tracking from sent and edited messages, keeping real pa
     expect(JSON.parse((await received(page))[2].body).content).toBe(content);
 });
 
+test("fake nitro unlocks chat emojis, links the ones the account can't use, and sends locked stickers as links", async ({ page }) => {
+    await page.evaluate(channel => {
+        // Shapes observed in Discord's module cache: frozen premium checks, and
+        // emoji helpers that take an intention and a premium bypass flag.
+        const premium = Object.freeze({ canUseEmojisEverywhere: () => false, canUseAnimatedEmojis: () => false, canUseCustomStickersEverywhere: () => false });
+        const reason = ({ intention, bypassPremiumEmojiEntitlement }) => bypassPremiumEmojiEntitlement ? null : `locked:${intention}`;
+        const emojiHelpers = { getEmojiUnavailableReason: reason, isEmojiPremiumLocked: options => reason(options) !== null,
+            getEmojiUnavailableReasons: options => ({ locked: reason(options) !== null }) };
+        const intentions = { EmojiIntention: { REACTION: 0, STATUS: 1, CHAT: 3, AUTO_SUGGESTION: 9 }, isExternalEmojiAllowedForIntention: () => true };
+        const stores = {
+            UserStore: { getCurrentUser: () => ({ id: "self", premiumType: 0 }) },
+            SelectedChannelStore: { getChannelId: () => String(channel) },
+            ChannelStore: { getChannel: id => ({ id, guild_id: id === String(channel) ? "home" : null }) },
+            EmojiStore: { getCustomEmojiById: id => ({ 111: { guildId: "home" }, 222: { guildId: "home" }, 333: { guildId: "away" } })[id] },
+        };
+        for (const [name, store] of Object.entries(stores)) {
+            const Store = class {};
+            Store.displayName = name;
+            Object.setPrototypeOf(store, Store.prototype);
+        }
+        const rest = { get() {}, put() {}, patch() {}, del() {},
+            post: ({ url, body }) => fetch(`/api/v9${url}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }) };
+        window.fakeNitroFixture = { emojiHelpers, picked: [] };
+        window.webpackChunkdiscord_app[0][2]({ c: { fakeNitro: { exports: { premium, emojiHelpers, intentions, rest, ...stores } } } });
+        // Discord's picker markup: a locked sticker has an unsendable node.
+        const sticker = (id, name, format, locked) => `<div role="gridcell" id="sticker-picker-grid-0-${id}"><div role="button" tabindex="0" data-type="sticker"
+            data-id="${id}" data-name="${name}" data-format-type="${format}"><div aria-hidden="true"><div class="stickerNode_x${locked ? " stickerUnsendable_x" : ""}">
+            <img data-type="sticker" alt="${name}"></div></div></div></div>`;
+        document.querySelector("main").insertAdjacentHTML("beforeend", `<div id="sticker-picker">${sticker(7, "party [cat]", 4, true)}${sticker(8, "wave", 2, true)}${sticker(9, "home", 1, false)}${sticker(10, "lottie", 3, true)}</div>`);
+        document.querySelector("#sticker-picker").addEventListener("click", event => fakeNitroFixture.picked.push(event.target.closest("[data-id]").dataset.id));
+    }, channel);
+    await expect.poll(() => page.evaluate(() => fakeNitroFixture.emojiHelpers.getEmojiUnavailableReason({ intention: 3 }))).toBe(null);
+    // Chat intentions are unlocked; reactions and statuses keep Discord's answer.
+    expect(await page.evaluate(() => [3, 9, 0, 1].map(intention => fakeNitroFixture.emojiHelpers.getEmojiUnavailableReason({ intention }))))
+        .toEqual([null, null, "locked:0", "locked:1"]);
+    expect(await page.evaluate(() => [fakeNitroFixture.emojiHelpers.isEmojiPremiumLocked({ intention: 3 }),
+        fakeNitroFixture.emojiHelpers.getEmojiUnavailableReasons({ intention: 0 }).locked])).toEqual([false, true]);
+
+    const content = "hi <:wave:111> <a:dance:222> <:away:333> `<:code:333>` <:unknown:444>";
+    await xhr(page, "POST", `/api/v9/channels/${channel}/messages`, JSON.stringify({ content }));
+    await xhr(page, "PATCH", `/api/v9/channels/${channel}/messages/5`, JSON.stringify({ content: "<:away:333>" }));
+    const [sent, edited] = (await received(page)).map(entry => JSON.parse(entry.body));
+    expect(sent.content).toBe("hi <:wave:111> [dance](https://cdn.discordapp.com/emojis/222.gif?size=48&name=dance) "
+        + "[away](https://cdn.discordapp.com/emojis/333.webp?size=48&name=away) `<:code:333>` [unknown](https://cdn.discordapp.com/emojis/444.webp?size=48&name=unknown)");
+    expect(edited.content).toBe("[away](https://cdn.discordapp.com/emojis/333.webp?size=48&name=away)");
+
+    // Locked stickers send as links; sendable and Lottie ones stay Discord's.
+    for (const id of ["7", "9", "10"]) await page.locator(`[data-id="${id}"][role="button"]`).click();
+    await page.locator('[data-id="8"][role="button"]').focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(async () => (await received(page)).length).toBe(4);
+    expect((await received(page)).slice(2).map(entry => JSON.parse(entry.body).content)).toEqual([
+        "[party cat](https://media.discordapp.net/stickers/7.gif?size=160)", "[wave](https://media.discordapp.net/stickers/8.png?size=160)"]);
+    expect(await page.evaluate(() => fakeNitroFixture.picked)).toEqual(["9", "10"]);
+
+    // Turned off, Discord's checks, messages and picker are its own.
+    await setExtension(page, "fakeNitro", false);
+    expect(await page.evaluate(() => fakeNitroFixture.emojiHelpers.getEmojiUnavailableReason({ intention: 3 }))).toBe("locked:3");
+    await xhr(page, "POST", `/api/v9/channels/${channel}/messages`, JSON.stringify({ content }));
+    await page.locator('[data-id="7"][role="button"]').click();
+    expect(JSON.parse((await received(page))[4].body).content).toBe(content);
+    expect(await page.evaluate(() => fakeNitroFixture.picked)).toEqual(["9", "10", "7"]);
+});
+
 test("anonymised uploads get 7 random letters, keep extension and spoiler, and match the message", async ({ page }) => {
     const files = [{ id: "1", filename: "Screenshot 2026-10-03 at 4.19.04 AM.png" }, { id: "2", filename: "SPOILER_secret.mp4" }, { id: "3", filename: "backup.tar.gz" }];
     await xhr(page, "POST", `/api/v9/channels/${channel}/attachments`, JSON.stringify({ files }));

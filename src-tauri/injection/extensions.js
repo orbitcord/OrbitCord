@@ -2,6 +2,7 @@
 // embed frames, so no Discord code is patched; voice messages use Discord's
 // uploader and REST client from its module cache. Quick reply uses the native
 // pending-reply action without modifying Discord's modules or message sending.
+// Fake Nitro also wraps Discord's emoji helpers, an object of methods.
 (() => {
     const storageKey = "lowcord.extensions";
     const catalog = [
@@ -19,6 +20,7 @@
         { id: "massDelete", title: "Mass delete", description: "Use the trash button to delete all your messages in a DM, channel or server." },
         { id: "dmQuickReply", title: "DM quick reply", description: "Hover over a DM in the list to read and reply without switching chats." },
         { id: "quickReply", title: "Quick reply", description: "Shift + ↑/↓ in an empty box picks a message to reply to. Esc cancels. Replaces the edit shortcut." },
+        { id: "fakeNitro", title: "Fake Nitro", description: "Use any server's emojis and stickers in chat. Ones your account can't send go as image links." },
         { id: "cleanUrls", title: "Clean links", description: "Remove tracking parameters from links you send." },
         { id: "silentTyping", title: "Silent typing", description: "Hide your typing indicator." },
         { id: "noTracking", title: "No tracking", description: "Block Discord analytics, crash reports and desktop app prompts." },
@@ -706,14 +708,85 @@
         return cleanUrl(match.slice(0, match.length - tail.length)) + tail;
     });
 
+    // ----- Fake Nitro ----------------------------------------------------------
+    // Discord freezes its premium checks, but its emoji helpers, which the
+    // picker, autocomplete and message parser call, take a flag that skips
+    // the Nitro check. It is set for chat only, so reactions and statuses keep
+    // Discord's answer. On send, each emoji the account can't use natively
+    // becomes a link to its image. A locked sticker sends as a link when picked.
+    let chatIntentions = new Set([3, 9]); // CHAT, AUTO_SUGGESTION
+    let premium;
+    window.Lowcord.waitFor(window.Lowcord.filters.byProps("getEmojiUnavailableReason", "getEmojiUnavailableReasons", "isEmojiPremiumLocked"), helpers => {
+        for (const [name, helper] of Object.entries(helpers)) {
+            if (typeof helper !== "function") continue;
+            helpers[name] = function (options, ...rest) {
+                if (enabled("fakeNitro") && options && typeof options === "object" && chatIntentions.has(options.intention))
+                    options = { ...options, bypassPremiumEmojiEntitlement: true };
+                return helper.call(this, options, ...rest);
+            };
+        }
+    });
+    window.Lowcord.waitFor(value => typeof value?.isExternalEmojiAllowedForIntention === "function" && Number.isInteger(value.EmojiIntention?.CHAT),
+        ({ EmojiIntention: intention }) => { chatIntentions = new Set([intention.CHAT, intention.AUTO_SUGGESTION].filter(Number.isInteger)); });
+    window.Lowcord.waitFor(window.Lowcord.filters.byProps("canUseEmojisEverywhere", "canUseAnimatedEmojis"), checks => { premium = checks; });
+    // Code spans keep their text; Discord doesn't render emojis inside them.
+    const emojiSyntax = /(```[\s\S]*?```|`[^`\n]*`)|<(a?):(\w+):(\d+)>/g;
+    function fakeNitro(data, path) {
+        if (!enabled("fakeNitro") || !premium || typeof data.content !== "string" || !data.content.includes("<")) return false;
+        const user = window.Lowcord.store("UserStore")?.getCurrentUser?.();
+        if (!user) return false;
+        const channelId = /^\/channels\/(\d+)/.exec(path)?.[1];
+        const guildId = window.Lowcord.store("ChannelStore")?.getChannel?.(channelId)?.guild_id ?? null;
+        const emojis = window.Lowcord.store("EmojiStore");
+        const everywhere = premium.canUseEmojisEverywhere(user), animated = premium.canUseAnimatedEmojis(user);
+        const content = data.content.replace(emojiSyntax, (match, code, isAnimated, name, id) => {
+            if (code) return match;
+            const local = guildId && emojis?.getCustomEmojiById?.(id)?.guildId === guildId;
+            if ((everywhere || local) && (!isAnimated || animated)) return match;
+            return `[${name}](https://cdn.discordapp.com/emojis/${id}.${isAnimated ? "gif" : "webp"}?size=48&name=${name})`;
+        });
+        if (content === data.content) return false;
+        data.content = content;
+        return true;
+    }
+    // Discord marks stickers the account can't send; picking one would open
+    // a Nitro upsell. Lottie stickers (format 3) have no image to link.
+    function lockedSticker(event) {
+        const item = event.target instanceof Element ? event.target.closest('[id^="sticker-picker-grid"] [role="button"][data-type="sticker"][data-id]') : null;
+        if (!enabled("fakeNitro") || !item?.querySelector('[class*="stickerUnsendable_"]') || item.dataset.formatType === "3") return null;
+        return item;
+    }
+    async function sendSticker(event) {
+        const item = lockedSticker(event);
+        if (!item) return;
+        event.preventDefault(); event.stopImmediatePropagation();
+        const channelId = window.Lowcord.store("SelectedChannelStore")?.getChannelId?.();
+        if (!channelId || !window.Lowcord.RestAPI?.post) return;
+        const { id, name, formatType } = item.dataset;
+        // Format 4 is GIF; PNG and APNG stickers are served as PNG.
+        const url = `https://media.discordapp.net/stickers/${id}.${formatType === "4" ? "gif" : "png"}?size=160`;
+        item.closest('[class*="layerContainer_"], [role="dialog"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true }));
+        try {
+            await window.Lowcord.RestAPI.post({ url: `/channels/${channelId}/messages`, body: {
+                content: `[${(name ?? "").replace(/[[\]\\]/g, "") || "sticker"}](${url})`, channel_id: channelId, type: 0, sticker_ids: [],
+                nonce: String((BigInt(Date.now()) - 1420070400000n) << 22n) } });
+        } catch (failure) {
+            console.warn("[lowcord] Fake Nitro sticker:", failure);
+            toast("Couldn’t send the sticker. Please try again.", true);
+        }
+    }
+    // Discord's own picker handlers would run first in its root listener.
+    window.addEventListener("click", sendSticker, true);
+    window.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") void sendSticker(event); }, true);
+
     // Returns a replacement body, or undefined to send the original.
     function rewrite(method, url, body) {
         const path = route(url)?.path;
-        if (!path || (!enabled("anonymiseFileNames") && !enabled("cleanUrls") && !enabled("socialEmbeds") && !enabled("musicEmbeds") && !videos.size)) return undefined;
+        if (!path || (!enabled("anonymiseFileNames") && !enabled("cleanUrls") && !enabled("socialEmbeds") && !enabled("musicEmbeds") && !enabled("fakeNitro") && !videos.size)) return undefined;
         const upload = method === "POST" && /^\/channels\/\d+\/attachments$/.test(path);
         const message = (method === "POST" || method === "PATCH") && /^\/channels\/\d+\/messages(\/\d+)?$/.test(path);
         if (!upload && !message) return undefined;
-        if (body instanceof FormData) return rewriteForm(body);
+        if (body instanceof FormData) return rewriteForm(body, path);
         if (typeof body !== "string") return undefined;
         let data;
         try { data = JSON.parse(body); } catch { return undefined; }
@@ -735,22 +808,24 @@
                 }
             }
             if (method === "POST" && withoutVideoLinks(data)) changed = true;
+            if (fakeNitro(data, path)) changed = true;
         }
         return changed ? JSON.stringify(data) : undefined;
     }
     // The older multipart path carries files and a payload_json part.
-    function rewriteForm(form) {
+    function rewriteForm(form, path) {
         const next = new FormData();
         let changed = false;
         for (const [key, value] of form.entries()) {
             if (value instanceof File && enabled("anonymiseFileNames") && !isGenerated(value.name)) {
                 next.append(key, value, anonymous(value.name));
                 changed = true;
-            } else if (key === "payload_json" && typeof value === "string" && (enabled("cleanUrls") || enabled("socialEmbeds") || enabled("musicEmbeds") || videos.size)) {
+            } else if (key === "payload_json" && typeof value === "string" && (enabled("cleanUrls") || enabled("socialEmbeds") || enabled("musicEmbeds") || enabled("fakeNitro") || videos.size)) {
                 try {
                     const payload = JSON.parse(value);
                     if (typeof payload.content === "string") payload.content = musicContent(socialContent(enabled("cleanUrls") ? cleanContent(payload.content) : payload.content));
                     withoutVideoLinks(payload);
+                    fakeNitro(payload, path);
                     next.append(key, JSON.stringify(payload));
                     changed = true;
                 } catch { next.append(key, value); }
