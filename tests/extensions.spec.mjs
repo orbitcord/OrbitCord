@@ -45,7 +45,7 @@ test("desktop download shortcut is hidden without affecting servers or attachmen
 test("photo uploads require opt-in and extension choices persist", async ({ page }) => {
     const state = await page.evaluate(() => Lowcord.extensions.state);
     expect(state).toMatchObject({
-        anonymiseFileNames: true, voiceMessages: true, quickReply: true, cleanUrls: true, silentTyping: true, noTracking: true,
+        anonymiseFileNames: true, voiceMessages: true, quickReply: true, clickReply: true, cleanUrls: true, silentTyping: true, noTracking: true,
         youtubeAdblock: true, musicEmbeds: true, socialEmbeds: true, socialCards: true, redditVideoUpload: true, instagramVideoUpload: true, twitterVideoUpload: true,
         socialPhotoUpload: false });
     expect(Object.entries(state).every(([id, value]) => value === (id !== "socialPhotoUpload"))).toBe(true);

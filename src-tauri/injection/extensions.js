@@ -1,7 +1,8 @@
 // Lowcord's built-in extensions use Discord's own HTTP requests and official
 // embed frames, so no Discord code is patched; voice messages use Discord's
 // uploader and REST client from its module cache. Quick reply uses the native
-// pending-reply action without modifying Discord's modules or message sending.
+// pending-reply action without modifying Discord's modules or message sending;
+// so does Click to reply.
 // Fake Nitro also wraps Discord's emoji helpers, an object of methods.
 (() => {
     const storageKey = "lowcord.extensions";
@@ -20,6 +21,7 @@
         { id: "massDelete", title: "Mass delete", description: "Use the trash button to delete all your messages in a DM, channel or server." },
         { id: "dmQuickReply", title: "DM quick reply", description: "Hover over a DM in the list to read and reply without switching chats." },
         { id: "quickReply", title: "Quick reply", description: "Shift + ↑/↓ in an empty box picks a message to reply to. Esc cancels. Replaces the edit shortcut." },
+        { id: "clickReply", title: "Click to reply", description: "Click a chat bubble to reply to it. Works when chat appearance uses bubbles." },
         { id: "fakeNitro", title: "Fake Nitro", description: "Use any server's emojis and stickers in chat. Ones your account can't send go as image links." },
         { id: "cleanUrls", title: "Clean links", description: "Remove tracking parameters from links you send." },
         { id: "silentTyping", title: "Silent typing", description: "Hide your typing indicator." },
@@ -584,6 +586,117 @@
             reconcileReply();
         });
     }
+
+    // ----- Click reply -------------------------------------------------------
+    // A plain single click on a text bubble (or a media caption bubble) in the
+    // main chat starts Discord's own pending reply. The bubble attributes come
+    // from chat-appearance.js, so this is off whenever bubbles are. One
+    // delegated listener; nothing runs per message.
+    const clickReplyDelay = 300;
+    const sendMessages = 1n << 11n;
+    // Inside message text, these keep Discord's own click behaviour.
+    const clickReplyExcluded = 'a, button, input, textarea, select, img, svg, video, audio, canvas, iframe, pre, code, time, '
+        + '[role="button"], [role="link"], [role="img"], [role="textbox"], [contenteditable="true"], '
+        + '[class*="mention"], [class*="spoiler"], [class*="emoji"], [class*="timestamp"], [class*="lowcord-"]';
+    let clickPress, clickTimer, clickUndo;
+    function selectionText() {
+        try { return String(window.getSelection() ?? ""); } catch { return ""; }
+    }
+    const clickReplySurface = ':scope > [data-lowcord-bubble], :scope > [data-lowcord-media][data-lowcord-caption]';
+    // The bubble row a click landed on, if the spot it hit isn't one of
+    // Discord's own controls.
+    function clickReplyRow(target) {
+        if (!(target instanceof Element)) return null;
+        const surface = target.closest('[id^="chat-messages-"] > [data-lowcord-bubble], [id^="chat-messages-"] > [data-lowcord-media][data-lowcord-caption]');
+        const messageId = surface && /^chat-messages-\d+-(\d+)$/.exec(surface.parentElement.id)?.[1];
+        if (!messageId) return null;
+        const content = surface.querySelector(`[id="message-content-${messageId}"]`);
+        if (content?.contains(target)) {
+            for (let node = target; node && node !== content; node = node.parentElement) if (node.matches(clickReplyExcluded)) return null;
+        } else if (!surface.hasAttribute("data-lowcord-bubble")
+            || (target !== surface && !(target.parentElement === surface && !target.id && target.matches('[class*="contents_"]')))) return null;
+        return surface.parentElement;
+    }
+    // Everything needed to reply to a row, or null if it can't be replied to
+    // right now. Checked on click and again when the delayed reply fires.
+    function clickReplyContext(row) {
+        const match = enabled("clickReply") && row?.isConnected && /^chat-messages-(\d+)-(\d+)$/.exec(row.id);
+        const surface = match && row.querySelector(clickReplySurface);
+        if (!surface) return null;
+        const [, channelId, messageId] = match;
+        // Main chat only: not threads beside it, pins, search, popouts or dialogs.
+        const chat = row.closest("main");
+        if (!chat || !row.closest('ol[data-list-id="chat-messages"]') || row.closest('[role="dialog"], [class*="layerContainer_"], [data-lowcord-capture-picking]')
+            || document.querySelector('[role="dialog"][aria-modal="true"]')) return null;
+        if (channelId !== window.Lowcord.store("SelectedChannelStore")?.getChannelId()) return null;
+        if (surface.querySelector(`[id="message-content-${messageId}"]`)?.closest('[id^="message-reply-context-"], [class*="repliedMessage_"]')) return null;
+        // Editing swaps the text for an inline editor inside the message.
+        if (surface.querySelector('[role="textbox"], textarea, [contenteditable="true"]')
+            || window.Lowcord.store("EditMessageStore")?.isEditing?.(channelId, messageId)) return null;
+        const channel = window.Lowcord.store("ChannelStore")?.getChannel(channelId);
+        const message = window.Lowcord.store("MessageStore")?.getMessage(channelId, messageId);
+        if (!channel || !message?.author || ![0, 19, 20, 23].includes(message.type ?? 0) || message.flags & 64
+            || (message.state != null && message.state !== "SENT")) return null;
+        if (channel.guild_id && window.Lowcord.store("PermissionStore")?.can?.(sendMessages, channel) !== true) return null;
+        // No usable composer means no permission to send here (blocked, system DM, read-only).
+        const composer = chat.querySelector('[class*="channelTextArea_"] [role="textbox"][contenteditable="true"]');
+        if (!composer || composer.getAttribute("aria-disabled") === "true" || composer.closest('[role="dialog"]')) return null;
+        return { channel, message, composer };
+    }
+    function cancelClickReply() {
+        clearTimeout(clickTimer);
+        clickTimer = undefined;
+    }
+    function clickReplyDown(event) {
+        cancelClickReply();
+        // A late second click of a double click (slower than the delay above)
+        // takes back the reply its first click started.
+        if (event.detail > 1 && clickUndo && performance.now() - clickUndo.time < 800 && clickUndo.row.contains(event.target)) {
+            const { previous, channelId } = clickUndo;
+            if (previous) createReply?.({ channel: previous.channel, message: previous.message,
+                shouldMention: previous.shouldMention, showMentionToggle: previous.showMentionToggle });
+            else window.Lowcord.Dispatcher?.dispatch({ type: "DELETE_PENDING_REPLY", channelId });
+        }
+        clickUndo = undefined;
+        clickPress = event.button === 0 && event.detail <= 1
+            ? { x: event.clientX, y: event.clientY, target: event.target, selection: selectionText() } : undefined;
+    }
+    function clickReply(event) {
+        const press = clickPress;
+        clickPress = undefined;
+        if (!press || !event.isTrusted || event.defaultPrevented || event.button !== 0 || event.detail !== 1
+            || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey
+            || Math.hypot(event.clientX - press.x, event.clientY - press.y) > 4
+            || press.selection || selectionText()) return;
+        const row = clickReplyRow(event.target);
+        if (!row || row !== clickReplyRow(press.target) || !clickReplyContext(row)) return;
+        // Wait out a double or triple click so word and line selection still
+        // work. Discord may re-render the message text meanwhile; the row stays.
+        clickTimer = setTimeout(() => {
+            clickTimer = undefined;
+            const current = !selectionText() && clickReplyContext(row.isConnected ? row : document.getElementById(row.id));
+            if (!current) return;
+            const { channel, message, composer } = current;
+            const pendingStore = window.Lowcord.store("PendingReplyStore");
+            createReply ??= window.Lowcord.find(window.Lowcord.filters.byCode("CREATE_PENDING_REPLY", "shouldMention", "showMentionToggle"));
+            if (!pendingStore || !createReply) return;
+            const previous = pendingStore.getPendingReply(channel.id);
+            // Clicking the message already being replied to keeps that reply
+            // (and its mention toggle) and just returns to the composer.
+            if (previous?.message?.id !== message.id) {
+                createReply({ channel, message,
+                    shouldMention: message.author.id !== window.Lowcord.store("UserStore")?.getCurrentUser()?.id,
+                    showMentionToggle: true });
+                clickUndo = { row, channelId: channel.id, previous, time: performance.now() };
+            }
+            composer.focus({ preventScroll: true });
+        }, clickReplyDelay);
+    }
+    // mousedown, not pointerdown: only mouse events carry the click count.
+    window.addEventListener("mousedown", clickReplyDown, true);
+    window.addEventListener("click", clickReply);
+    window.addEventListener("keydown", cancelClickReply, true);
+    window.addEventListener("blur", cancelClickReply);
 
     // ----- Request rules -----------------------------------------------------
     const api = /^\/api(?:\/v\d+)?(\/.*)$/;
