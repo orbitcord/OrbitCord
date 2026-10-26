@@ -262,3 +262,41 @@ test("Nitro themes paint Discord's gradient, keep their classes, save mixes and 
     await page.getByRole("radio", { name: /^Fjord/ }).click();
     await expect.poll(nitro).toEqual({ classes: [], theme: "fjord" });
 });
+
+test("live preview docks the settings beside Discord, lets clicks through, and ends with Done, Esc or closing", async ({ page }) => {
+    await page.setViewportSize({ width: 1300, height: 820 });
+    const preview = () => page.evaluate(() => {
+        const panel = document.querySelector("[data-lowcord-inspector-panel]"), box = panel?.getBoundingClientRect();
+        return { active: window.__lowcordInspector.active, marks: document.querySelectorAll("[data-lowcord-inspector-panel], [data-lowcord-inspector-fit], [data-lowcord-inspector-scrim]").length,
+            right: box ? Math.round(innerWidth - box.right) : null, width: box ? Math.round(box.width) : null,
+            fits: panel ? [...panel.querySelectorAll("*")].every(node => node.getBoundingClientRect().right <= box.right + 1) : null,
+            scrim: getComputedStyle(document.querySelector(".lowcord-settings-backdrop")).pointerEvents };
+    });
+    await page.evaluate(() => {
+        const button = document.createElement("button");
+        button.id = "behind"; button.textContent = "Behind settings";
+        button.style.cssText = "position:fixed;left:20px;top:20px;z-index:1";
+        button.onclick = () => { window.behindClicks = (window.behindClicks ?? 0) + 1; };
+        document.body.append(button);
+        window.__lowcordOpenSettings("themes");
+    });
+    await page.getByRole("button", { name: "Preview live" }).click();
+    await expect.poll(preview).toEqual({ active: true, marks: 4, right: 12, width: 440, fits: true, scrim: "none" });
+    await expect(page.getByRole("status")).toContainText("Live preview");
+    // Discord beside the panel takes clicks while the theme changes.
+    await page.locator("#behind").click();
+    expect(await page.evaluate(() => window.behindClicks)).toBe(1);
+    await page.getByRole("radio", { name: /^Ember/ }).click();
+    await expect.poll(() => applied(page)).toEqual({ id: "ember", sheets: 1 });
+    await page.getByRole("button", { name: "Done" }).click();
+    await expect.poll(preview).toMatchObject({ active: false, marks: 0, scrim: "auto" });
+    // Esc ends the preview but keeps the settings open; closing them ends it too.
+    await page.getByRole("button", { name: "Preview live" }).click();
+    await page.keyboard.press("Escape");
+    await expect.poll(preview).toMatchObject({ active: false, marks: 0 });
+    await expect(page.getByRole("dialog", { name: "OrbitCord Settings" })).toBeVisible();
+    await page.getByRole("button", { name: "Preview live" }).click();
+    await page.getByRole("button", { name: "Close OrbitCord Settings" }).click();
+    expect(await page.evaluate(() => ({ active: window.__lowcordInspector.active, inspector: document.documentElement.hasAttribute("data-lowcord-inspector") })))
+        .toEqual({ active: false, inspector: false });
+});

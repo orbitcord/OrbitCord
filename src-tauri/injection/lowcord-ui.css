@@ -638,6 +638,47 @@
 }
 @media (max-width: 640px) { .lowcord-nitro-controls { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .lowcord-nitro-swatch, .lowcord-nitro-remove, .lowcord-nitro-glass { transition: none; } }
+/* Live preview: the settings window docks on the right and Discord beside it
+   stays live. Attributes come from settings.js; the scrim lets clicks through. */
+.lowcord-themes-intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.lowcord-themes-intro .lowcord-chat-intro { margin-top: 0; }
+.lowcord-preview-button {
+    display: inline-flex; flex: none; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border: 0; border-radius: 8px;
+    cursor: pointer; font: inherit; font-size: 14px; font-weight: 500; white-space: nowrap;
+    color: var(--text-default, var(--text-normal, #f2f3f5)); background: var(--background-mod-subtle, rgb(148 155 164 / .14));
+    transition: background-color .15s;
+}
+.lowcord-preview-button:hover { background: var(--background-mod-normal, rgb(148 155 164 / .22)); }
+.lowcord-preview-button:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px; }
+.lowcord-preview-bar {
+    position: sticky; top: 0; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    margin-bottom: 20px; padding: 12px 14px; border-radius: 10px;
+    background: color-mix(in srgb, var(--brand-500, #5865f2) 18%, var(--background-base-lower, #2b2d31));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand-500, #5865f2) 45%, transparent);
+}
+.lowcord-preview-bar > span { display: grid; gap: 2px; min-width: 0; }
+.lowcord-preview-bar strong { font-size: 14px; }
+.lowcord-preview-bar > span > span { font-size: 12px; color: var(--text-muted, #949ba4); }
+[data-lowcord-inspector-scrim] { background: transparent !important; backdrop-filter: none !important; pointer-events: none !important; }
+[data-lowcord-inspector-panel] {
+    position: fixed !important; inset: 12px 12px 12px auto !important; width: min(440px, calc(100vw - 24px)) !important;
+    height: auto !important; min-width: 0 !important; max-width: none !important; max-height: none !important;
+    margin: 0 !important; transform: none !important; border-radius: 14px !important; pointer-events: auto;
+    box-shadow: 0 0 0 1px rgb(255 255 255 / .08), 0 16px 48px rgb(0 0 0 / .5) !important;
+    animation: lowcord-dock .24s cubic-bezier(.2, .8, .2, 1);
+}
+@keyframes lowcord-dock { from { opacity: 0; translate: 32px 0; } }
+[data-lowcord-inspector-fit] { box-sizing: border-box; width: 100% !important; min-width: 0 !important; max-width: none !important; height: 100% !important; }
+[data-lowcord-inspector-panel] aside[class*="sidebar_"], [data-lowcord-inspector-panel] > .lowcord-settings-nav { display: none !important; }
+[data-lowcord-inspector-panel].lowcord-settings { grid-template-columns: minmax(0, 1fr) !important; }
+[data-lowcord-inspector-panel] .lowcord-settings-body { padding: 16px 18px 48px !important; }
+/* A narrow panel: two theme columns, controls stacked. */
+:root[data-lowcord-inspector] .lowcord-themes-page .lowcord-theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 12px; }
+:root[data-lowcord-inspector] .lowcord-themes-page .lowcord-theme-blurb { display: none; }
+:root[data-lowcord-inspector] .lowcord-themes-page :is(.lowcord-nitro-controls, .lowcord-theme-colors) { grid-template-columns: minmax(0, 1fr); }
+:root[data-lowcord-inspector] .lowcord-themes-page .lowcord-theme-editor-row { flex-direction: column; align-items: flex-start; gap: 10px; }
+:root[data-lowcord-inspector] .lowcord-themes-page .lowcord-nitro-swatches { grid-template-columns: repeat(auto-fill, 40px); }
+@media (prefers-reduced-motion: reduce) { [data-lowcord-inspector-panel] { animation: none; } }
 .lowcord-theme-options { display: grid; gap: 22px; margin-top: 36px; padding-top: 24px; border-top: 1px solid var(--border-subtle, rgb(78 80 88 / .48)); }
 .lowcord-theme-typeface .lowcord-position-control { margin-bottom: 12px; }
 .lowcord-theme-typeface select { min-width: 180px; }

@@ -369,6 +369,8 @@ function setupLowcordSettings() {
     };
 
     let dialog, root;
+    // The live preview (below), if one is showing.
+    let inspector;
     function open(pageId = "appearance") {
         if (!window.Lowcord.React || !window.Lowcord.createRoot) return;
         if (!dialog) build();
@@ -395,7 +397,12 @@ function setupLowcordSettings() {
         dialog = backdrop;
     }
     // Esc closes Lowcord's dialog only, not Discord's settings underneath.
-    const onKey = event => { if (event.key === "Escape") { event.stopPropagation(); event.preventDefault(); close(); } };
+    // In a live preview it ends the preview first.
+    const onKey = event => {
+        if (event.key !== "Escape") return;
+        event.stopPropagation(); event.preventDefault();
+        if (inspector) exitInspector(); else close();
+    };
     function show(pageId) {
         const page = pages.find(entry => entry.id === pageId);
         if (!dialog.isConnected) {
@@ -410,6 +417,7 @@ function setupLowcordSettings() {
         dialog.querySelector(`nav button[data-page="${pageId}"]`).focus();
     }
     function close() {
+        exitInspector();
         root?.unmount();
         root = undefined;
         window.removeEventListener("keydown", onKey, true);
@@ -459,6 +467,7 @@ function setupLowcordSettings() {
         } };
     }
     function closeInline() {
+        exitInspector();
         if (!inline) return;
         const current = inline;
         inline = undefined;
@@ -466,7 +475,50 @@ function setupLowcordSettings() {
         current.root.unmount();
         current.host.remove();
     }
-    window.Lowcord.onDomChange(() => { if (inline && !inline.host.isConnected) closeInline(); });
+    window.Lowcord.onDomChange(() => {
+        if (inline && !inline.host.isConnected) closeInline();
+        if (inspector && !inspector.from.isConnected) exitInspector();
+    });
+
+    // Live preview: the settings window docks as a narrow panel on the right
+    // and its dimming scrim lets clicks through, so Discord beside it stays
+    // usable while a theme changes. Discord's tree is untouched; attributes
+    // mark the window, the boxes between it and the page, and the scrim.
+    const inspectorEvent = "lowcord-inspector-change";
+    function enterInspector(from) {
+        if (inspector) return true;
+        const panel = from?.closest?.('[class*="modal_"], .lowcord-settings');
+        if (!panel) return false;
+        const marked = [];
+        const mark = (node, name) => { if (!node) return; node.setAttribute(name, ""); marked.push([node, name]); };
+        mark(panel, "data-lowcord-inspector-panel");
+        for (let node = from.parentElement; node && node !== panel; node = node.parentElement) mark(node, "data-lowcord-inspector-fit");
+        mark(panel.closest('[class*="layerContainer_"]')?.querySelector(':scope > [class*="scrim_"]') ?? panel.closest(".lowcord-settings-backdrop"),
+            "data-lowcord-inspector-scrim");
+        document.documentElement.setAttribute("data-lowcord-inspector", "");
+        // Esc ends the preview, unless the user is typing in Discord itself.
+        const onEscape = event => {
+            if (event.key !== "Escape" || event.defaultPrevented || !(panel.contains(document.activeElement) || document.activeElement === document.body)) return;
+            event.preventDefault(); event.stopImmediatePropagation();
+            exitInspector();
+        };
+        window.addEventListener("keydown", onEscape, true);
+        inspector = { from, cleanup() {
+            marked.forEach(([node, name]) => node.removeAttribute(name));
+            document.documentElement.removeAttribute("data-lowcord-inspector");
+            window.removeEventListener("keydown", onEscape, true);
+        } };
+        window.dispatchEvent(new Event(inspectorEvent));
+        return true;
+    }
+    function exitInspector() {
+        if (!inspector) return;
+        const current = inspector;
+        inspector = undefined;
+        current.cleanup();
+        window.dispatchEvent(new Event(inspectorEvent));
+    }
+    window.__lowcordInspector = { enter: enterInspector, exit: exitInspector, get active() { return Boolean(inspector); }, changeEvent: inspectorEvent };
 
     // Mirror one of Discord's sidebar sections, reusing its class names so the
     // entry looks native. React never owns these nodes.

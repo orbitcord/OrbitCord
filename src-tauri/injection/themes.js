@@ -387,6 +387,16 @@ function setupLowcordThemes() {
         const [error, setError] = React.useState("");
         const fonts = React.useMemo(() => installedFonts(), []);
         const [nitroTab, setNitroTab] = React.useState(() => nitroPresets.find(preset => sameNitro(preset, state.nitro))?.scheme ?? "dark");
+        // Live preview docks the settings beside Discord; settings.js owns it.
+        const inspector = window.__lowcordInspector;
+        const pageRef = React.useRef(null);
+        const [previewing, setPreviewing] = React.useState(() => Boolean(inspector?.active));
+        React.useEffect(() => {
+            if (!inspector) return;
+            const update = () => setPreviewing(inspector.active);
+            window.addEventListener(inspector.changeEvent, update);
+            return () => window.removeEventListener(inspector.changeEvent, update);
+        }, []);
         React.useEffect(() => {
             const update = () => setCurrent({ ...state });
             window.addEventListener(changeEvent, update);
@@ -564,9 +574,18 @@ function setupLowcordThemes() {
                     description("Color OrbitCord’s chat bubbles to match the theme instead of your own bubble colors.")),
                 h("input", { type: "checkbox", role: "switch", checked: current.bubbles, disabled: !active,
                     onChange: event => save({ bubbles: event.target.checked }) })));
-        return h("section", { className: "lowcord-chat-appearance lowcord-themes-page" },
-            h("p", { className: "lowcord-chat-intro" },
-                "Restyle all of Discord. Themes are plain CSS, so they add no background work and switch instantly."),
+        const eye = h("svg", { viewBox: "0 0 24 24", width: 16, height: 16, "aria-hidden": "true" },
+            h("path", { d: "M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinejoin: "round" }),
+            h("circle", { cx: 12, cy: 12, r: 3, fill: "none", stroke: "currentColor", strokeWidth: 2 }));
+        return h("section", { className: "lowcord-chat-appearance lowcord-themes-page", ref: pageRef },
+            previewing ? h("div", { className: "lowcord-preview-bar", role: "status" },
+                    h("span", null, h("strong", null, "Live preview"), h("span", null, "Use Discord beside this panel. Esc to finish.")),
+                    h("button", { type: "button", className: "lowcord-theme-use", onClick: () => inspector.exit() }, "Done"))
+                : h("div", { className: "lowcord-themes-intro" },
+                    h("p", { className: "lowcord-chat-intro" },
+                        "Restyle all of Discord. Themes are plain CSS, so they add no background work and switch instantly."),
+                    inspector ? h("button", { type: "button", className: "lowcord-preview-button",
+                        onClick: () => { if (!inspector.enter(pageRef.current)) setError("Live preview isn’t available here."); } }, eye, "Preview live") : null),
             h("div", { className: "lowcord-theme-grid", role: "radiogroup", "aria-label": "Theme" }, ...choices.map(card)),
             nitroOn && current.id === "nitro" ? nitroEditor() : null,
             editor, options,
