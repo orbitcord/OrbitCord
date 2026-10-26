@@ -80,6 +80,106 @@ function setupLowcordThemes() {
         const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x);
         return (light + .05) / (dark + .05);
     };
+    // Nitro themes, part of the Fake Nitro extension: Discord's own gradient
+    // themes, drawn by Discord's own stylesheet. A theme is two to five colors
+    // (optionally at set positions) and an angle; the strength is how much of
+    // it shows through. Discord only draws one when <html> carries its two
+    // classes and the variables below, which its custom theme code would set.
+    // The choice stays on this device and never reaches Discord's settings.
+    const nitroPresets = [
+        ["Mint Apple", "light", 180, [["#56b69f", 6.2], ["#63bc61", 48.7], ["#9eca67", 93.1]]],
+        ["Citrus Sherbert", "light", 180, [["#f3b336", 31.1], ["#ee8558", 67.1]]],
+        ["Retro Raincloud", "light", 149, [["#3a7ca1", 5.6], ["#7f7eb9", 26.4], ["#7f7eb9", 49.9], ["#3a7ca1", 73.1]]],
+        ["Hanami", "light", 38, [["#efaab3", 3.6], ["#efd696", 35.5], ["#a6daa2", 68.8]]],
+        ["Sunrise", "light", 154, [["#9f4175", 8.6], ["#c49064", 48.1], ["#a6953d", 76]]],
+        ["Candyfloss", "light", 180, [["#f4abb8", 8.5], ["#b1c2fc", 94.3]]],
+        ["LoFi Vibes", "light", 180, [["#a4c0f7", 7.1], ["#a9e4e8", 34.9], ["#b0e2b8", 65.1], ["#cfdfa2", 96.2]]],
+        ["Desert Khaki", "light", 39, [["#e7dbd0", 12.9], ["#dfd0b2", 32.9], ["#e0d6a3", 52.1]]],
+        ["Sunset", "dark", 142, [["#48288c", 27.6], ["#db7f4b", 71.2]]],
+        ["Chroma Glow", "dark", 129, [["#0eb5bf", 3.9], ["#4c0ce0", 26.1], ["#a308a7", 39.8], ["#9a53ff", 56.9], ["#218be0", 76.5]]],
+        ["Forest", "dark", 162, [["#142215", 11.2], ["#2d4d39", 29.9], ["#454c32", 48.6], ["#5a7c58", 67.8], ["#a98e4b", 83.5]]],
+        ["Crimson Moon", "dark", 65, [["#950909", 16.2], ["#000000", 72]]],
+        ["Midnight Blurple", "dark", 48, [["#5348ca", 11.2], ["#140730", 61.9]]],
+        ["Mars", "dark", 171, [["#895240", 14.6], ["#8f4343", 74.6]]],
+        ["Dusk", "dark", 180, [["#665069", 12.8], ["#91a3d1", 86]]],
+        ["Under the Sea", "dark", 179, [["#647962", 1.9], ["#588575", 49], ["#6a8482", 96.3]]],
+        ["Retro Storm", "dark", 149, [["#3a7ca1", 5.6], ["#58579a", 26.4], ["#58579a", 49.9], ["#3a7ca1", 73.1]]],
+        ["Neon Nights", "dark", 180, [["#01a89e", 0], ["#7d60ba", 50], ["#b43898", 100]]],
+        ["Strawberry Lemonade", "dark", 161, [["#af1a6c", 18.8], ["#c26b20", 49.8], ["#e7a525", 80.7]]],
+        ["Aurora", "dark", 239, [["#062053", 10.4], ["#191fbb", 26.9], ["#13929a", 48.3], ["#218573", 65], ["#051a81", 92.5]]],
+        ["Sepia", "dark", 70, [["#857664", 14.1], ["#5b4421", 60.4]]],
+        ["Blurple Twilight", "dark", 48, [["#2c3fe7", 11.2], ["#261d83", 64.5]]],
+        ["Memory Lane", "light", 180, [["#7289da", 4], ["#4e5d94", 96]]],
+    ].map(([name, scheme, angle, stops]) => ({ name, scheme, angle, colors: stops.map(([color]) => color), stops: stops.map(([, stop]) => stop) }));
+    const nitroDefault = (({ colors, stops, angle }) => ({ colors, stops, angle }))(nitroPresets.find(preset => preset.name === "Aurora"));
+    // Discord's default strength for its own custom themes.
+    const nitroStrength = 74;
+    const nitroClasses = ["custom-theme-background", "custom-client-theme"];
+    const rgbToHsl = value => {
+        const [r, g, b] = channels(value).map(channel => channel / 255);
+        const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min;
+        if (!d) return [0, 0, l];
+        const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+        return [(h * 60 + 360) % 360, d / (1 - Math.abs(2 * l - 1)), l];
+    };
+    const hslToRgb = (h, s, l) => {
+        const a = s * Math.min(l, 1 - l), k = n => (n + h / 30) % 12;
+        return [0, 8, 4].map(n => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1)))));
+    };
+    const hslToHex = (h, s, l) => `#${hslToRgb(h, s, l).map(channel => channel.toString(16).padStart(2, "0")).join("")}`;
+    const nitroGradient = ({ colors, stops, angle }) =>
+        `linear-gradient(${angle}deg, ${colors.map((color, index) => stops ? `${color} ${stops[index]}%` : color).join(", ")})`;
+    // The same values Discord's custom theme code derives from the colors:
+    // surfaces are tinted from the darkest color in dark mode, the lightest
+    // in light mode, and the strength sets how see-through they are.
+    function nitroCSS(theme, strength) {
+        const [darkest, lightest] = [0, -1].map(end => rgbToHsl([...theme.colors].sort((a, b) => luminance(a) - luminance(b)).at(end)));
+        const rest = 100 - strength;
+        const rgb = ([h, s, l]) => `rgb(${hslToRgb(h, s, l).join(",")})`;
+        // Read back from the rounded color, as Discord does.
+        const hsl = ([h, s, l]) => {
+            const [hue, saturation, lightness] = rgbToHsl(hslToHex(h, s, l));
+            const round = value => Number(value.toFixed(4));
+            return `${round(hue)} ${round(saturation * 100)}% ${round(lightness * 100)}%`;
+        };
+        const lightness = value => Number(value.toFixed(2));
+        const darkBase = [darkest[0], 1, .05], lightBase = [lightest[0], 1, .9];
+        return `:root.custom-theme-background{--custom-theme-background:${nitroGradient(theme)};`
+            + "--custom-background-gradient-opacity-multiplier:1;--custom-background-gradient-chat-opacity-base-light:.95;"
+            + "--custom-background-gradient-highest-opacity-base-light:1;--custom-theme-border-color-amount:5%;"
+            + `--custom-background-gradient-opacity-mix-amount:${((30 + .7 * rest) / 100).toFixed(2)};`
+            + `--custom-theme-base-color-amount:${60 + .4 * rest}%;--custom-theme-text-color-amount:30%;`
+            + `--custom-theme-base-color-dark:${rgb(darkBase)};--custom-theme-base-color-dark-hsl:${hsl(darkBase)};`
+            + `--custom-theme-text-color-dark:${rgb([darkest[0], darkest[1], lightness((100 - .1 * rest) / 100)])};`
+            + `--custom-theme-base-color-light:${rgb(lightBase)};--custom-theme-base-color-light-hsl:${hsl(lightBase)};`
+            + `--custom-theme-text-color-light:${rgb([lightest[0], lightest[1], lightness(.05 * rest / 100)])}}\n`
+            + `:root.theme-light.custom-theme-background{--custom-theme-base-color-amount:${30 - .2 * strength}%;--custom-theme-text-color-amount:40%}\n`;
+    }
+    // Colors that sit well together: neighbours, opposites or a triad around
+    // one random hue, deep for dark mode and soft for light.
+    function generateNitro(scheme) {
+        const random = (min, max) => min + Math.random() * (max - min);
+        const patterns = [[0, 32], [0, 30, 60], [0, 180], [0, 150, 210], [0, 120, 240], [0, 24, 48, 72]];
+        const offsets = patterns[Math.floor(Math.random() * patterns.length)];
+        const hue = random(0, 360), dark = scheme !== "light";
+        return { colors: offsets.map(offset => hslToHex((hue + offset + random(-8, 8) + 360) % 360, random(.45, .85),
+            dark ? random(.22, .46) : random(.62, .8))), stops: null, angle: Math.floor(random(0, 24)) * 15 };
+    }
+    function fakeNitroOn() {
+        const extensions = window.Lowcord?.extensions;
+        if (typeof extensions?.enabled === "function") return extensions.enabled("fakeNitro");
+        try { return JSON.parse(storage?.getItem("lowcord.extensions") ?? "{}")?.fakeNitro !== false; } catch { return true; }
+    }
+    function nitroValue(value) {
+        const colors = Array.isArray(value?.colors) ? value.colors.filter(color => hex.test(color ?? "")).map(color => color.toLowerCase()).slice(0, 5) : [];
+        if (colors.length < 2) return null;
+        const stops = Array.isArray(value.stops) && value.stops.length === colors.length
+            && value.stops.every(stop => Number.isFinite(stop) && stop >= 0 && stop <= 100) ? value.stops : null;
+        const angle = Number.isFinite(value.angle) ? Math.round(((value.angle % 360) + 360) % 360) : 180;
+        return { colors, stops, angle };
+    }
+    const sameNitro = (a, b) => a.angle === b.angle && a.colors.join() === b.colors.join() && (a.stops ?? []).join() === (b.stops ?? []).join();
+
     // Starting points: each preset, plus two light ones.
     const seeds = [["Discord", "#1a1a1e", "#5865f2", null, 8], ["Paper", "#f6f3ee", "#c2562b", "#2b2622", 8], ["Cloud", "#ffffff", "#3b6fe0", null, 14],
         ...themes.map(theme => [theme.name, theme.palette.chat, theme.palette.accent, theme.palette.text, theme.radius ? 8 : 0])]
@@ -171,8 +271,15 @@ function setupLowcordThemes() {
         const color = (name, fallback) => hex.test(saved[name] ?? "") ? saved[name].toLowerCase() : fallback;
         const custom = { background: color("background", customDefaults.background), accent: color("accent", customDefaults.accent),
             text: color("text", null), radius: corners.some(([, radius]) => radius === saved.radius) ? saved.radius : customDefaults.radius };
-        return { id: value?.id === "custom" || themes.some(theme => theme.id === value?.id) ? value.id : "discord",
-            fonts: value?.fonts !== false, bubbles: value?.bubbles !== false, font: fontStack(value?.font) ? value.font : "", custom };
+        const mixes = (Array.isArray(value?.nitroSaved) ? value.nitroSaved : []).map(entry => {
+            const theme = nitroValue(entry), name = typeof entry?.name === "string" ? entry.name.trim().slice(0, 40) : "";
+            return theme && name ? { name, ...theme } : null;
+        }).filter((entry, index, all) => entry && all.findIndex(other => other?.name === entry.name) === index).slice(0, 30);
+        return { id: ["custom", "nitro"].includes(value?.id) || themes.some(theme => theme.id === value?.id) ? value.id : "discord",
+            fonts: value?.fonts !== false, bubbles: value?.bubbles !== false, font: fontStack(value?.font) ? value.font : "", custom,
+            nitro: nitroValue(value?.nitro) ?? nitroDefault,
+            nitroStrength: Number.isFinite(value?.nitroStrength) ? Math.round(Math.min(100, Math.max(0, value.nitroStrength))) : nitroStrength,
+            nitroSaved: mixes };
     }
     const themeFor = id => id === "custom" ? customTheme(state.custom) : themes.find(entry => entry.id === id);
     let state;
@@ -182,21 +289,43 @@ function setupLowcordThemes() {
     const style = document.createElement("style");
     style.id = "lowcord-theme";
     let renderedKey;
+    // Discord rewrites <html>'s classes as the window gains or loses focus,
+    // so a Nitro theme puts its two back whenever they go missing.
+    let nitroKeeper;
+    function keepNitroClasses(on) {
+        const root = document.documentElement;
+        if (on) {
+            const restore = () => { if (!nitroClasses.every(name => root.classList.contains(name))) root.classList.add(...nitroClasses); };
+            restore();
+            nitroKeeper ??= new MutationObserver(restore);
+            nitroKeeper.observe(root, { attributes: true, attributeFilter: ["class"] });
+            return;
+        }
+        if (!nitroKeeper) return;
+        nitroKeeper.disconnect();
+        nitroKeeper = undefined;
+        // A Nitro account's own theme uses the same classes; leave them to it.
+        if (!document.querySelector("style[data-client-themes]")?.textContent.trim()) root.classList.remove(...nitroClasses);
+    }
     function render() {
         const root = document.documentElement;
-        const theme = themeFor(state.id);
+        const nitro = state.id === "nitro" && fakeNitroOn();
+        const theme = nitro ? null : themeFor(state.id);
         const stack = fontStack(state.font);
-        if (!theme && !stack) {
+        keepNitroClasses(nitro);
+        if (!theme && !stack && !nitro) {
             style.remove();
             style.textContent = "";
             renderedKey = undefined;
             for (const name of ["data-orbitcord-theme", "data-orbitcord-theme-fonts", "data-orbitcord-theme-bubbles", "data-orbitcord-font"]) root.removeAttribute(name);
             return;
         }
-        const key = `${theme?.id}|${state.font}|${theme?.id === "custom" ? JSON.stringify(state.custom) : ""}`;
+        const key = `${nitro ? "nitro" : theme?.id}|${state.font}|${theme?.id === "custom" ? JSON.stringify(state.custom) : ""}`
+            + (nitro ? `|${JSON.stringify(state.nitro)}|${state.nitroStrength}` : "");
         if (renderedKey !== key) {
             // The chosen font outranks a theme's own and keeps Discord's text size.
-            style.textContent = (theme ? paletteCSS(theme) + sections.shared + (sections[theme.id] ?? "") : "")
+            style.textContent = (nitro ? nitroCSS(state.nitro, state.nitroStrength)
+                : theme ? paletteCSS(theme) + sections.shared + (sections[theme.id] ?? "") : "")
                 + (stack ? `:root:root[data-orbitcord-font]{--font-primary:${stack};--font-display:${stack};--font-headline:${stack};`
                     + "font-size-adjust:ex-height .47}\n" : "");
             renderedKey = key;
@@ -229,6 +358,13 @@ function setupLowcordThemes() {
         waiting.observe(document, { childList: true });
     }
 
+    // Turning Fake Nitro off or on shows or hides a chosen Nitro theme.
+    window.addEventListener("lowcord-extensions-change", () => {
+        if (state.id !== "nitro") return;
+        start();
+        window.dispatchEvent(new Event(changeEvent));
+    });
+
     function change(next) {
         const before = state;
         const after = normalize({ ...state, ...next, custom: { ...state.custom, ...next.custom } });
@@ -250,6 +386,7 @@ function setupLowcordThemes() {
         const [current, setCurrent] = React.useState(() => ({ ...state }));
         const [error, setError] = React.useState("");
         const fonts = React.useMemo(() => installedFonts(), []);
+        const [nitroTab, setNitroTab] = React.useState(() => nitroPresets.find(preset => sameNitro(preset, state.nitro))?.scheme ?? "dark");
         React.useEffect(() => {
             const update = () => setCurrent({ ...state });
             window.addEventListener(changeEvent, update);
@@ -257,7 +394,13 @@ function setupLowcordThemes() {
         }, []);
         const save = next => { try { change(next); setError(""); } catch (failure) { setError(failure.message); } };
         const custom = customTheme(current.custom);
-        const choices = [discord, ...themes, custom];
+        const nitroOn = fakeNitroOn();
+        // The Nitro card's miniature: Discord's surfaces see-through over the gradient.
+        const nitroCard = { id: "nitro", name: "Nitro", scheme: "gradient", radius: 8, blurb: "Discord’s Nitro themes, or your own mix.",
+            palette: { frame: nitroGradient(current.nitro), rail: "rgb(0 0 0 / .34)", sidebar: "rgb(0 0 0 / .22)", chat: "rgb(0 0 0 / .1)",
+                surface: "rgb(255 255 255 / .1)", border: "rgb(255 255 255 / .14)", mention: "rgb(255 255 255 / .1)",
+                text: "#f2f3f5", muted: "#c4c9ce", accent: "#5865f2" } };
+        const choices = [discord, ...themes, custom, ...(nitroOn ? [nitroCard] : [])];
         const active = themeFor(current.id);
         // Any edit to the custom theme also selects it, so the change shows.
         const edit = value => save({ id: "custom", custom: value });
@@ -298,7 +441,7 @@ function setupLowcordThemes() {
                         h("span", { className: "lowcord-theme-composer" }, h("b", null)))),
                 h("span", { className: "lowcord-theme-label" },
                     h("span", { className: "lowcord-theme-name" }, theme.name),
-                    h("span", { className: "lowcord-theme-scheme" }, { dark: "Dark", light: "Light" }[theme.scheme] ?? "Default")),
+                    h("span", { className: "lowcord-theme-scheme" }, { dark: "Dark", light: "Light", gradient: "Gradient" }[theme.scheme] ?? "Default")),
                 h("span", { className: "lowcord-theme-blurb" }, theme.blurb),
                 selected ? h("svg", { className: "lowcord-theme-check", viewBox: "0 0 16 16", width: 18, height: 18, "aria-hidden": "true" },
                     h("circle", { cx: 8, cy: 8, r: 8, fill: "currentColor" }),
@@ -339,6 +482,58 @@ function setupLowcordThemes() {
                         "aria-checked": current.custom.radius === radius, onClick: () => edit({ radius }) },
                         h("i", { className: "lowcord-theme-corner", style: { "--corner": `${radius / 2}px` }, "aria-hidden": true }), label)))));
 
+        // The Nitro editor: Discord's presets, saved mixes, a generator and the
+        // colors, angle and strength of the current one.
+        const nitroEditor = () => {
+            const theme = current.nitro;
+            const named = [...nitroPresets, ...current.nitroSaved].find(entry => sameNitro(entry, theme));
+            const savedMatch = current.nitroSaved.find(entry => sameNitro(entry, theme));
+            const pick = entry => save({ id: "nitro", nitro: { colors: entry.colors, stops: entry.stops, angle: entry.angle } });
+            const setColors = colors => save({ id: "nitro", nitro: { ...theme, colors, stops: colors.length === theme.colors.length ? theme.stops : null } });
+            const list = nitroTab === "saved" ? current.nitroSaved : nitroPresets.filter(preset => preset.scheme === nitroTab);
+            const nextName = () => { let index = 1; while (current.nitroSaved.some(entry => entry.name === `My theme ${index}`)) index++; return `My theme ${index}`; };
+            const range = (label, value, min, max, unit, onChange) => h("label", { className: "lowcord-nitro-range" },
+                h("span", { className: "lowcord-theme-editor-label" }, label),
+                h("input", { type: "range", min, max, step: 1, value, "aria-label": label, onChange: event => onChange(Number(event.target.value)) }),
+                h("output", null, `${value}${unit}`));
+            return h("div", { className: "lowcord-theme-editor lowcord-nitro-editor", "data-active": true },
+                h("div", { className: "lowcord-theme-editor-head" },
+                    h("span", null, h("h3", null, "Nitro theme"),
+                        description("Discord’s gradient themes. Only you see them, and only on this device.")),
+                    h("button", { type: "button", className: "lowcord-theme-use", onClick: () => {
+                        save({ id: "nitro", nitro: generateNitro(nitroTab === "light" ? "light" : "dark") });
+                    } }, "Generate")),
+                h("div", { className: "lowcord-nitro-bar", style: { background: nitroGradient(theme) } },
+                    h("strong", null, named?.name ?? "Your mix"),
+                    savedMatch ? h("button", { type: "button", className: "lowcord-nitro-action",
+                            onClick: () => save({ nitroSaved: current.nitroSaved.filter(entry => entry !== savedMatch) }) }, "Remove from saved")
+                        : named ? null : h("button", { type: "button", className: "lowcord-nitro-action",
+                            onClick: () => { const name = nextName(); save({ nitroSaved: [...current.nitroSaved, { name, ...theme }].slice(-30) }); setNitroTab("saved"); } },
+                            "Save")),
+                h("div", { className: "lowcord-theme-editor-row lowcord-nitro-presets" },
+                    h("div", { className: "lowcord-segmented", role: "radiogroup", "aria-label": "Nitro themes" },
+                        ...[["dark", "Dark"], ["light", "Light"], ["saved", "Saved"]].map(([id, label]) => h("button", { key: id, type: "button",
+                            role: "radio", "aria-checked": nitroTab === id, onClick: () => setNitroTab(id) }, label))),
+                    list.length ? h("div", { className: "lowcord-nitro-swatches" }, ...list.map(entry => h("button", { key: entry.name, type: "button",
+                            className: "lowcord-nitro-swatch", title: entry.name, "aria-label": entry.name, "aria-pressed": sameNitro(entry, theme),
+                            style: { background: nitroGradient(entry) }, onClick: () => pick(entry) })))
+                        : description("Themes you save show up here.")),
+                h("div", { className: "lowcord-theme-editor-row" },
+                    h("span", { className: "lowcord-theme-editor-label" }, "Colors"),
+                    h("div", { className: "lowcord-nitro-stops" },
+                        ...theme.colors.map((color, index) => h("span", { key: index, className: "lowcord-nitro-stop" },
+                            h("label", { className: "lowcord-color-swatch", style: { "--lowcord-swatch": color } },
+                                h("input", { type: "color", value: color, "aria-label": `Color ${index + 1}`,
+                                    onChange: event => setColors(theme.colors.map((value, at) => at === index ? event.target.value : value)) })),
+                            theme.colors.length > 2 ? h("button", { type: "button", className: "lowcord-nitro-remove", "aria-label": `Remove color ${index + 1}`,
+                                onClick: () => setColors(theme.colors.filter((_, at) => at !== index)) }, "×") : null)),
+                        theme.colors.length < 5 ? h("button", { type: "button", className: "lowcord-nitro-add", "aria-label": "Add a color",
+                            onClick: () => setColors([...theme.colors, mix(theme.colors.at(-1), theme.colors[0], .5)]) }, "+") : null)),
+                h("div", { className: "lowcord-theme-editor-row lowcord-nitro-ranges" },
+                    range("Angle", theme.angle, 0, 359, "°", angle => save({ id: "nitro", nitro: { ...theme, angle } })),
+                    range("Strength", current.nitroStrength, 0, 100, "%", nitroStrength => save({ id: "nitro", nitroStrength }))));
+        };
+
         // One typeface control for every theme. "" keeps the theme's own (or
         // Discord's); "discord" turns a theme's typefaces off.
         const themeFonts = Boolean(active?.fonts);
@@ -367,6 +562,7 @@ function setupLowcordThemes() {
             h("p", { className: "lowcord-chat-intro" },
                 "Restyle all of Discord. Themes are plain CSS, so they add no background work and switch instantly."),
             h("div", { className: "lowcord-theme-grid", role: "radiogroup", "aria-label": "Theme" }, ...choices.map(card)),
+            nitroOn && current.id === "nitro" ? nitroEditor() : null,
             editor, options,
             error ? h("p", { role: "alert" }, error) : null);
     }

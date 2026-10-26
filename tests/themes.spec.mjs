@@ -17,8 +17,8 @@ const token = (page, name) => page.locator("#themed").evaluate((node, name) => g
 
 test("Discord's own look adds nothing to the page", async ({ page }) => {
     expect(await applied(page)).toEqual({ id: null, sheets: 0 });
-    expect(await page.evaluate(() => window.__lowcordThemes.state)).toEqual({ id: "discord", fonts: true, bubbles: true, font: "",
-        custom: { background: "#1e1f24", accent: "#5865f2", text: null, radius: 8 } });
+    expect(await page.evaluate(() => window.__lowcordThemes.state)).toMatchObject({ id: "discord", fonts: true, bubbles: true, font: "",
+        custom: { background: "#1e1f24", accent: "#5865f2", text: null, radius: 8 }, nitroStrength: 74, nitroSaved: [] });
     await page.evaluate(() => localStorage.setItem("lowcord.theme", JSON.stringify({ id: "retired" })));
     await page.reload();
     await expect.poll(() => page.evaluate(() => window.fixtureReady)).toBe(true);
@@ -195,4 +195,70 @@ test("an OrbitCord page covers Discord's page, including its layered parts", asy
     });
     expect(await top()).toBe("orbitcord");
     expect(await page.locator('.content_test button[aria-label="Close"]').isVisible()).toBe(true);
+});
+
+test("Nitro themes paint Discord's gradient, keep their classes, save mixes and follow Fake Nitro", async ({ page }) => {
+    const nitro = () => page.evaluate(() => ({ classes: ["custom-theme-background", "custom-client-theme"].filter(name => document.documentElement.classList.contains(name)),
+        theme: document.documentElement.dataset.orbitcordTheme ?? null }));
+    await page.evaluate(() => window.__lowcordOpenSettings("themes"));
+    await page.getByRole("radio", { name: /^Nitro/ }).click();
+    await expect.poll(nitro).toEqual({ classes: ["custom-theme-background", "custom-client-theme"], theme: null });
+    // Discord's Aurora preset, drawn by Discord's stylesheet from the variables
+    // its own custom theme code would set.
+    expect(await css(page)).toContain("--custom-theme-background:linear-gradient(239deg, #062053 10.4%, #191fbb 26.9%");
+    expect(await css(page)).toContain("--custom-theme-base-color-dark:rgb(");
+    const editor = page.locator(".lowcord-nitro-editor");
+    await expect(editor.locator(".lowcord-nitro-bar strong")).toHaveText("Aurora");
+
+    // Discord rewrites <html>'s classes when the window gains or loses focus.
+    await page.evaluate(() => { document.documentElement.className = "theme-dark app-focused"; });
+    await expect.poll(nitro).toEqual({ classes: ["custom-theme-background", "custom-client-theme"], theme: null });
+
+    await editor.getByRole("radio", { name: "Light" }).click();
+    await editor.getByRole("button", { name: "Candyfloss" }).click();
+    await expect(editor.locator(".lowcord-nitro-bar strong")).toHaveText("Candyfloss");
+    await expect(editor.getByRole("button", { name: "Candyfloss" })).toHaveAttribute("aria-pressed", "true");
+
+    // Edits make a mix of your own, which can be saved and survives a reload.
+    await editor.getByRole("slider", { name: "Angle" }).fill("90");
+    await editor.getByRole("button", { name: "Add a color" }).click();
+    await editor.getByLabel("Color 1", { exact: true }).fill("#ff0000");
+    await editor.getByRole("slider", { name: "Strength" }).fill("30");
+    await expect(editor.locator(".lowcord-nitro-bar strong")).toHaveText("Your mix");
+    await expect.poll(() => css(page)).toContain("linear-gradient(90deg, #ff0000, ");
+    expect(await css(page)).toContain("--custom-background-gradient-opacity-mix-amount:0.79");
+    await editor.getByRole("button", { name: "Save" }).click();
+    await expect(editor.getByRole("radio", { name: "Saved" })).toHaveAttribute("aria-checked", "true");
+    await expect(editor.getByRole("button", { name: "My theme 1" })).toHaveAttribute("aria-pressed", "true");
+    const saved = await page.evaluate(() => window.__lowcordThemes.state);
+    expect(saved).toMatchObject({ id: "nitro", nitroStrength: 30, nitroSaved: [{ name: "My theme 1", angle: 90 }] });
+    expect(saved.nitro.colors).toHaveLength(3);
+    await page.reload();
+    await expect.poll(() => page.evaluate(() => window.fixtureReady)).toBe(true);
+    await expect.poll(nitro).toEqual({ classes: ["custom-theme-background", "custom-client-theme"], theme: null });
+    expect(await css(page)).toContain("linear-gradient(90deg, #ff0000, ");
+
+    // Generate makes a new mix of two to four colors; a saved one can be removed.
+    await page.evaluate(() => window.__lowcordOpenSettings("themes"));
+    await editor.getByRole("button", { name: "Generate" }).click();
+    const generated = await page.evaluate(() => window.__lowcordThemes.state.nitro);
+    expect(generated.colors.length).toBeGreaterThanOrEqual(2);
+    expect(generated.colors.length).toBeLessThanOrEqual(4);
+    expect(generated.stops).toBe(null);
+    await editor.getByRole("radio", { name: "Saved" }).click();
+    await editor.getByRole("button", { name: "My theme 1" }).click();
+    await editor.getByRole("button", { name: "Remove from saved" }).click();
+    await expect(editor).toContainText("Themes you save show up here.");
+
+    // With Fake Nitro off, the choice is kept but nothing is drawn.
+    await page.evaluate(() => Lowcord.extensions.set("fakeNitro", false));
+    await expect.poll(nitro).toEqual({ classes: [], theme: null });
+    await expect(page.getByRole("radio", { name: /^Nitro/ })).toHaveCount(0);
+    expect(await page.evaluate(() => window.__lowcordThemes.state.id)).toBe("nitro");
+    await page.evaluate(() => Lowcord.extensions.set("fakeNitro", true));
+    await expect.poll(nitro).toEqual({ classes: ["custom-theme-background", "custom-client-theme"], theme: null });
+
+    // Another theme takes the classes away.
+    await page.getByRole("radio", { name: /^Fjord/ }).click();
+    await expect.poll(nitro).toEqual({ classes: [], theme: "fjord" });
 });

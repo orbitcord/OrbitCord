@@ -22,7 +22,7 @@
         { id: "dmQuickReply", title: "DM quick reply", description: "Hover over a DM in the list to read and reply without switching chats." },
         { id: "quickReply", title: "Quick reply", description: "Shift + ↑/↓ in an empty box picks a message to reply to. Esc cancels. Replaces the edit shortcut." },
         { id: "clickReply", title: "Click to reply", description: "Click a chat bubble to reply to it. Works when chat appearance uses bubbles." },
-        { id: "fakeNitro", title: "Fake Nitro", description: "Use any server's emojis and stickers without Nitro." },
+        { id: "fakeNitro", title: "Fake Nitro", description: "Use any server's emojis, stickers and Nitro themes without Nitro." },
         { id: "cleanUrls", title: "Clean links", description: "Remove tracking parameters from links you send." },
         { id: "silentTyping", title: "Silent typing", description: "Hide your typing indicator." },
         { id: "noTracking", title: "No tracking", description: "Block Discord analytics, crash reports and desktop app prompts." },
