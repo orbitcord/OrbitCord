@@ -563,6 +563,9 @@
 }
 /* Nitro theme: the gradient is the header, then one grid of presets and controls. */
 .lowcord-nitro-editor { gap: 0; padding: 0; overflow: hidden; }
+/* The gradient header already marks it as active; a neutral hairline keeps
+   the edge without a color that fights the theme. */
+.lowcord-nitro-editor[data-active="true"] { box-shadow: inset 0 0 0 1px var(--border-subtle, rgb(255 255 255 / .07)); }
 .lowcord-nitro-bar {
     position: relative; display: flex; flex-direction: column; justify-content: space-between; gap: 16px;
     min-height: 116px; padding: 16px 18px; box-sizing: border-box; color: #fff;
