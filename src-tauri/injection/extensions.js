@@ -594,7 +594,7 @@
     // delegated listener; nothing runs per message.
     // Shorter than the pause inside an ordinary double click; slower ones
     // are taken back below.
-    const clickReplyDelay = 150;
+    const clickReplyDelay = 80;
     const sendMessages = 1n << 11n;
     // Inside message text, these keep Discord's own click behaviour.
     const clickReplyExcluded = 'a, button, input, textarea, select, img, svg, video, audio, canvas, iframe, pre, code, time, '

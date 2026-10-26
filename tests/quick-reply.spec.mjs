@@ -267,7 +267,7 @@ test.describe("click to reply", () => {
         await page.evaluate(() => getSelection().removeAllRanges());
         const middle = await words.boundingBox();
         await page.mouse.click(middle.x + 20, middle.y + middle.height / 2);
-        await page.waitForTimeout(80);
+        await page.waitForTimeout(30);
         await page.mouse.click(middle.x + 20, middle.y + middle.height / 2, { clickCount: 2 });
         await expectNoReply(page);
         await page.evaluate(() => getSelection().removeAllRanges());
