@@ -126,7 +126,10 @@ test("fake nitro unlocks chat emojis and Nitro-locked stickers, sends them as li
         const premium = Object.freeze({ canUseEmojisEverywhere: () => false, canUseAnimatedEmojis: () => false, canUseCustomStickersEverywhere: () => false });
         const reason = ({ intention, bypassPremiumEmojiEntitlement }) => bypassPremiumEmojiEntitlement ? null : `locked:${intention}`;
         const emojiHelpers = { getEmojiUnavailableReason: reason, isEmojiPremiumLocked: options => reason(options) !== null,
-            getEmojiUnavailableReasons: options => ({ locked: reason(options) !== null }),
+            getEmojiUnavailableReasons: options => {
+                const disabled = (options.categoryEmojis ?? []).filter(emoji => reason({ ...options, emoji }) !== null).map(emoji => emoji.id);
+                return { locked: reason(options) !== null, emojisDisabled: new Set(disabled), emojisPremiumLockedCount: disabled.length };
+            },
             // Discord's version checks each emoji without the bypass flag.
             isEmojiCategoryNitroLocked: () => true };
         const intentions = { EmojiIntention: { REACTION: 0, STATUS: 1, CHAT: 3, AUTO_SUGGESTION: 9 }, isExternalEmojiAllowedForIntention: () => true };
@@ -151,6 +154,8 @@ test("fake nitro unlocks chat emojis and Nitro-locked stickers, sends them as li
             ChannelStore: { getChannel: id => ({ id, guild_id: id === String(channel) ? "home" : null }) },
             EmojiStore: { getCustomEmojiById: id => ({ 111: { guildId: "home" }, 222: { guildId: "home" }, 333: { guildId: "away" }, 555: { guildId: "away", managed: true } })[id] },
             StickersStore: { getStickerById: id => stickers[id] },
+            MessageStore: { getMessage: (channelId, id) => channelId === String(channel) && id === "77"
+                ? { id, reactions: [{ emoji: { id: "333", name: "away" }, count: 1, me: false }] } : null },
             PermissionStore: { can: () => fixture.canExternal },
             StickerMessagePreviewStore: { getStickerPreview: id => fixture.previews[id] },
             UploadAttachmentStore: { getUploads: () => [] },
@@ -199,6 +204,22 @@ test("fake nitro unlocks chat emojis and Nitro-locked stickers, sends them as li
     // A server's section in the chat picker loses its locked look and upsell.
     expect(await page.evaluate(() => [3, 0].map(intention => fakeNitroFixture.emojiHelpers.isEmojiCategoryNitroLocked({ intention }))))
         .toEqual([false, true]);
+
+    // Discord refuses a new reaction with a locked emoji but lets one join an
+    // existing reaction, so the reaction picker unlocks just those emojis.
+    await page.evaluate(channel => document.querySelector("main").insertAdjacentHTML("beforeend",
+        `<ol><li id="chat-messages-${channel}-77"><button aria-label="Add Reaction">+</button></li><li id="chat-messages-${channel}-78"><button aria-label="Add Reaction">+</button></li></ol>`), channel);
+    const reactionLocks = () => page.evaluate(channel => {
+        const helpers = fakeNitroFixture.emojiHelpers, options = { channel: { id: String(channel) }, intention: 0 };
+        const emojis = [{ id: "333" }, { id: "444" }];
+        return { single: emojis.map(emoji => helpers.isEmojiDisabled?.({ ...options, emoji }) ?? helpers.getEmojiUnavailableReason({ ...options, emoji })),
+            bulk: [...helpers.getEmojiUnavailableReasons({ ...options, categoryEmojis: emojis }).emojisDisabled],
+            otherChannel: helpers.getEmojiUnavailableReason({ ...options, channel: { id: "1" }, emoji: emojis[0] }) };
+    }, channel);
+    await page.locator(`[id="chat-messages-${channel}-77"] button`).click();
+    expect(await reactionLocks()).toEqual({ single: [null, "locked:0"], bulk: ["444"], otherChannel: "locked:0" });
+    await page.locator(`[id="chat-messages-${channel}-78"] button`).click();
+    expect(await reactionLocks()).toEqual({ single: ["locked:0", "locked:0"], bulk: ["333", "444"], otherChannel: "locked:0" });
 
     // Stickers OrbitCord can send lose the locked look in both of Discord's styles;
     // a section keeps it while any of its stickers stays locked.

@@ -846,24 +846,61 @@
     // On send, each emoji or sticker the account can't use natively becomes a
     // link to its image; received links show as the emoji or sticker again.
     let chatIntentions = new Set([3, 9]); // CHAT, AUTO_SUGGESTION
+    let reactionIntention = 0;
     let premium, pickerStore;
     const store = name => window.Lowcord.store(name);
+    // Discord's server refuses a new reaction with an emoji the account can't
+    // use, but lets it join one already on the message. The reaction picker
+    // unlocks just those, for the message it was opened from: the toolbar,
+    // reaction bar and context menu all live in the message's row.
+    let reactionTarget = null;
+    window.addEventListener("pointerdown", event => {
+        const row = event.target instanceof Element ? event.target.closest('[id^="chat-messages-"]') : null;
+        const match = row && /^chat-messages-(\d+)-(\d+)$/.exec(row.id);
+        if (match) reactionTarget = { channelId: match[1], messageId: match[2] };
+    }, true);
+    function joinableEmojiIds(options) {
+        if (!reactionTarget || options.channel?.id !== reactionTarget.channelId) return null;
+        const reactions = store("MessageStore")?.getMessage?.(reactionTarget.channelId, reactionTarget.messageId)?.reactions;
+        const ids = new Set((Array.isArray(reactions) ? reactions : []).map(reaction => reaction?.emoji?.id).filter(Boolean));
+        return ids.size ? ids : null;
+    }
     window.Lowcord.waitFor(window.Lowcord.filters.byProps("getEmojiUnavailableReason", "getEmojiUnavailableReasons", "isEmojiPremiumLocked"), helpers => {
+        const unavailable = helpers.getEmojiUnavailableReason;
         for (const [name, helper] of Object.entries(helpers)) {
             if (typeof helper !== "function") continue;
             helpers[name] = function (options, ...rest) {
-                if (enabled("fakeNitro") && options && typeof options === "object" && chatIntentions.has(options.intention)) {
+                if (!enabled("fakeNitro") || !options || typeof options !== "object") return helper.call(this, options, ...rest);
+                if (chatIntentions.has(options.intention)) {
                     // This one drops the flag before checking each emoji, so a
                     // server's section would keep its locked look and upsell.
                     if (name === "isEmojiCategoryNitroLocked") return false;
                     options = { ...options, bypassPremiumEmojiEntitlement: true };
+                } else if (options.intention === reactionIntention) {
+                    const joinable = joinableEmojiIds(options);
+                    // The flag lifts only the Nitro lock; any other reason stays.
+                    if (joinable && name === "getEmojiUnavailableReasons") {
+                        const result = helper.call(this, options, ...rest);
+                        for (const emoji of options.categoryEmojis ?? []) {
+                            if (!joinable.has(emoji?.id) || !result?.emojisDisabled?.has?.(emoji.id)) continue;
+                            if (unavailable.call(this, { emoji, channel: options.channel, guildId: options.guildId, intention: options.intention,
+                                bypassPremiumEmojiEntitlement: true }) !== null) continue;
+                            result.emojisDisabled.delete(emoji.id);
+                            if (result.emojisPremiumLockedCount > 0) result.emojisPremiumLockedCount--;
+                        }
+                        return result;
+                    }
+                    if (joinable?.has(options.emoji?.id)) options = { ...options, bypassPremiumEmojiEntitlement: true };
                 }
                 return helper.call(this, options, ...rest);
             };
         }
     });
     window.Lowcord.waitFor(value => typeof value?.isExternalEmojiAllowedForIntention === "function" && Number.isInteger(value.EmojiIntention?.CHAT),
-        ({ EmojiIntention: intention }) => { chatIntentions = new Set([intention.CHAT, intention.AUTO_SUGGESTION].filter(Number.isInteger)); });
+        ({ EmojiIntention: intention }) => {
+            chatIntentions = new Set([intention.CHAT, intention.AUTO_SUGGESTION].filter(Number.isInteger));
+            if (Number.isInteger(intention.REACTION)) reactionIntention = intention.REACTION;
+        });
     window.Lowcord.waitFor(window.Lowcord.filters.byProps("canUseEmojisEverywhere", "canUseAnimatedEmojis", "canUseCustomStickersEverywhere"), checks => { premium = checks; markStickers(); });
     // The expression picker's state store; clearing activeView closes it.
     window.Lowcord.waitFor(value => typeof value === "function" && typeof value.getState === "function" && typeof value.setState === "function"
