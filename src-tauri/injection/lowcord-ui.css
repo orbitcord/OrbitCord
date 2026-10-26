@@ -957,3 +957,11 @@
     font: inherit; font-size: 14px; line-height: 18px;
 }
 .lowcord-dm-input::placeholder { color: var(--text-muted, #949ba4); }
+
+/* Fake Nitro: stickers OrbitCord can send drop Discord's locked look. */
+[data-lowcord-unlocked][data-type="sticker"] [class*="stickerUnsendable_"],
+[data-lowcord-unlocked][data-type="sticker"] [class*="stickerLocked_"] { filter: none; opacity: 1; }
+[data-lowcord-unlocked][data-type="sticker"] [class*="lockIconContainer_"] { display: none; }
+[class*="categorySectionNitroLocked_"][data-lowcord-unlocked] { background: none; }
+[data-lowcord-unlocked-stickers] [class*="nitroTopDividerContainer_"],
+[data-lowcord-unlocked-stickers] [class*="upsellContainerFloating_"] { display: none; }

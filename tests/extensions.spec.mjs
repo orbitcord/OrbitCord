@@ -126,7 +126,9 @@ test("fake nitro unlocks chat emojis and Nitro-locked stickers, sends them as li
         const premium = Object.freeze({ canUseEmojisEverywhere: () => false, canUseAnimatedEmojis: () => false, canUseCustomStickersEverywhere: () => false });
         const reason = ({ intention, bypassPremiumEmojiEntitlement }) => bypassPremiumEmojiEntitlement ? null : `locked:${intention}`;
         const emojiHelpers = { getEmojiUnavailableReason: reason, isEmojiPremiumLocked: options => reason(options) !== null,
-            getEmojiUnavailableReasons: options => ({ locked: reason(options) !== null }) };
+            getEmojiUnavailableReasons: options => ({ locked: reason(options) !== null }),
+            // Discord's version checks each emoji without the bypass flag.
+            isEmojiCategoryNitroLocked: () => true };
         const intentions = { EmojiIntention: { REACTION: 0, STATUS: 1, CHAT: 3, AUTO_SUGGESTION: 9 }, isExternalEmojiAllowedForIntention: () => true };
         let pickerState = { activeView: "sticker", activeChannelId: String(channel), isNitroLockedSectionVisible: false };
         const picker = () => pickerState;
@@ -160,12 +162,20 @@ test("fake nitro unlocks chat emojis and Nitro-locked stickers, sends them as li
         }
         window.fakeNitroFixture = fixture;
         window.webpackChunkdiscord_app[0][2]({ c: { fakeNitro: { exports: { premium, emojiHelpers, intentions, picker, dispatcher, ...stores } } } });
-        // Discord's picker markup: a locked sticker has an unsendable node.
+        // Discord's picker markup in both looks: an older greyed-out
+        // unsendable node, and a newer darkened one with a lock icon inside a
+        // tinted section under a lock divider, with a floating upsell.
         const sticker = (id, locked) => `<div role="gridcell" id="sticker-picker-grid-0-${id}"><div role="button" tabindex="0" data-type="sticker"
             data-id="${id}" data-name="${stickers[id].name}" data-format-type="${stickers[id].format_type}"><div aria-hidden="true">
-            <div class="stickerNode_x${locked ? " stickerUnsendable_x" : ""}"><img data-type="sticker" alt=""></div></div></div></div>`;
-        document.querySelector("main").insertAdjacentHTML("beforeend", `<div id="sticker-picker"><input aria-label="Search stickers">
-            ${sticker(7, true)}${sticker(8, true)}${sticker(9, false)}${sticker(10, true)}${sticker(11, true)}</div>
+            <div class="stickerNode_x${locked === "new" ? " stickerLocked_x" : locked ? " stickerUnsendable_x" : ""}"><img data-type="sticker" alt=""></div>
+            ${locked === "new" ? '<div class="lockIconContainer_x">🔒</div>' : ""}</div></div></div>`;
+        const lockedLook = `<style>.stickerUnsendable_x { filter: grayscale(1); } .stickerLocked_x { filter: brightness(.4); }
+            .categorySectionNitroLocked_x { background: linear-gradient(90deg, purple, blue); }</style>`;
+        document.querySelector("main").insertAdjacentHTML("beforeend", `${lockedLook}<div id="sticker-picker"><input aria-label="Search stickers">
+            <div class="listWrapper_x"><div class="nitroTopDividerContainer_x">🔒</div>
+            <div class="categorySectionNitroLocked_x" id="away-section">${sticker(7, true)}${sticker(8, "new")}</div>
+            ${sticker(9, false)}<div class="categorySectionNitroLocked_x" id="mixed-section">${sticker(10, "new")}${sticker(11, true)}</div></div>
+            <div class="upsellContainer_x upsellContainerFloating_x">Get Nitro</div></div>
             <div class="channelTextArea_x"><div contenteditable="true" role="textbox" aria-label="Fake Nitro composer"></div></div>`);
         document.querySelector("#sticker-picker").addEventListener("click", event => fixture.picked.push(event.target.closest("[data-id]")?.dataset.id));
         document.querySelector("#sticker-picker input").addEventListener("keydown", () => fixture.picked.push("search"));
@@ -186,6 +196,23 @@ test("fake nitro unlocks chat emojis and Nitro-locked stickers, sends them as li
         .toEqual([null, null, "locked:0", "locked:1"]);
     expect(await page.evaluate(() => [fakeNitroFixture.emojiHelpers.isEmojiPremiumLocked({ intention: 3 }),
         fakeNitroFixture.emojiHelpers.getEmojiUnavailableReasons({ intention: 0 }).locked])).toEqual([false, true]);
+    // A server's section in the chat picker loses its locked look and upsell.
+    expect(await page.evaluate(() => [3, 0].map(intention => fakeNitroFixture.emojiHelpers.isEmojiCategoryNitroLocked({ intention }))))
+        .toEqual([false, true]);
+
+    // Stickers OrbitCord can send lose the locked look in both of Discord's styles;
+    // a section keeps it while any of its stickers stays locked.
+    const look = () => page.evaluate(() => {
+        const style = selector => document.querySelector(selector) && getComputedStyle(document.querySelector(selector));
+        const filter = id => style(`[data-id="${id}"][role="button"] [class*="stickerNode_"]`)?.filter ?? null;
+        const shown = selector => style(selector) ? style(selector).display !== "none" : null;
+        return { filters: ["7", "8", "10", "11"].map(filter), lockIcons: ["8", "10"].map(id => shown(`[data-id="${id}"] [class*="lockIconContainer_"]`)),
+            sections: ["#away-section", "#mixed-section"].map(id => style(id)?.backgroundImage !== "none"),
+            divider: shown('[class*="nitroTopDividerContainer_"]'), upsell: shown('[class*="upsellContainerFloating_"]') };
+    });
+    await expect.poll(look).toEqual({ filters: ["none", "none", "brightness(0.4)", "grayscale(1)"], lockIcons: [false, true],
+        sections: [false, true], divider: true, upsell: true });
+
 
     const content = "hi <:wave:111> <a:dance:222> <:away:333> <:twitch:555> `<:code:333>` <:unknown:444>";
     await xhr(page, "POST", `/api/v9/channels/${channel}/messages`, JSON.stringify({ content }));
@@ -234,8 +261,15 @@ test("fake nitro unlocks chat emojis and Nitro-locked stickers, sends them as li
     await xhr(page, "PATCH", `/api/v9/channels/${channel}/messages/900`, JSON.stringify({ content: "edited" }));
     expect(JSON.parse((await received(page))[3].body).content).toBe("edited\n[party cat](https://media.discordapp.net/stickers/7.gif?size=160)");
 
+    // With only unlocked sections left, the lock divider and upsell go too.
+    await page.evaluate(() => { fakeNitroFixture.canExternal = true; document.querySelector("#mixed-section").remove(); });
+    await expect.poll(async () => { const { sections, divider, upsell } = await look(); return { sections, divider, upsell }; })
+        .toEqual({ sections: [false, true], divider: false, upsell: false });
+
     // Turned off, Discord's checks, messages and picker are its own.
     await setExtension(page, "fakeNitro", false);
+    expect(await page.evaluate(() => getComputedStyle(document.querySelector('[data-id="7"][role="button"] [class*="stickerNode_"]')).filter)).toBe("grayscale(1)");
+    expect(await page.evaluate(() => fakeNitroFixture.emojiHelpers.isEmojiCategoryNitroLocked({ intention: 3 }))).toBe(true);
     expect(await page.evaluate(() => fakeNitroFixture.emojiHelpers.getEmojiUnavailableReason({ intention: 3 }))).toBe("locked:3");
     await xhr(page, "POST", `/api/v9/channels/${channel}/messages`, JSON.stringify({ content }));
     expect(JSON.parse((await received(page))[4].body).content).toBe(content);

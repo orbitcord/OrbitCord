@@ -852,18 +852,22 @@
         for (const [name, helper] of Object.entries(helpers)) {
             if (typeof helper !== "function") continue;
             helpers[name] = function (options, ...rest) {
-                if (enabled("fakeNitro") && options && typeof options === "object" && chatIntentions.has(options.intention))
+                if (enabled("fakeNitro") && options && typeof options === "object" && chatIntentions.has(options.intention)) {
+                    // This one drops the flag before checking each emoji, so a
+                    // server's section would keep its locked look and upsell.
+                    if (name === "isEmojiCategoryNitroLocked") return false;
                     options = { ...options, bypassPremiumEmojiEntitlement: true };
+                }
                 return helper.call(this, options, ...rest);
             };
         }
     });
     window.Lowcord.waitFor(value => typeof value?.isExternalEmojiAllowedForIntention === "function" && Number.isInteger(value.EmojiIntention?.CHAT),
         ({ EmojiIntention: intention }) => { chatIntentions = new Set([intention.CHAT, intention.AUTO_SUGGESTION].filter(Number.isInteger)); });
-    window.Lowcord.waitFor(window.Lowcord.filters.byProps("canUseEmojisEverywhere", "canUseAnimatedEmojis", "canUseCustomStickersEverywhere"), checks => { premium = checks; });
+    window.Lowcord.waitFor(window.Lowcord.filters.byProps("canUseEmojisEverywhere", "canUseAnimatedEmojis", "canUseCustomStickersEverywhere"), checks => { premium = checks; markStickers(); });
     // The expression picker's state store; clearing activeView closes it.
     window.Lowcord.waitFor(value => typeof value === "function" && typeof value.getState === "function" && typeof value.setState === "function"
-        && value.getState()?.isNitroLockedSectionVisible !== undefined, picker => { pickerStore = picker; });
+        && value.getState()?.isNitroLockedSectionVisible !== undefined, picker => { pickerStore = picker; markStickers(); });
 
     // Only the Nitro lock is lifted. A server that turns off external stickers,
     // a sticker its server lost with its boosts, and Lottie stickers, which
@@ -927,7 +931,7 @@
         // In search, Enter picks the highlighted sticker; focus stays in the box.
         if (!item && event.type === "keydown" && event.key === "Enter" && event.target.matches("input"))
             item = document.querySelector('[id^="sticker-picker-grid"] [role="button"][data-type="sticker"][class*="stickerInspected_"]');
-        return item?.querySelector('[class*="stickerUnsendable_"]') ? item : null;
+        return item;
     }
     function pickSticker(event) {
         const item = pickedSticker(event);
@@ -948,6 +952,30 @@
         editor.focus();
         if (!draft) editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
     }
+    // Discord greys out or darkens locked stickers, adds a lock, and tints a
+    // locked server's section with an upsell. Stickers OrbitCord can send are
+    // marked so lowcord-ui.css drops that look; a section loses it only when
+    // every sticker in it is marked.
+    const stickerItems = '[id^="sticker-picker-grid"] [role="button"][data-type="sticker"][data-id]';
+    function markStickers(records) {
+        if (!window.Lowcord.domChanged(records, '[data-type="sticker"], [class*="categorySectionNitroLocked_"]')) return;
+        const channelId = pickerStore?.getState().activeChannelId ?? store("SelectedChannelStore")?.getChannelId?.();
+        const stickers = store("StickersStore");
+        for (const item of document.querySelectorAll(stickerItems))
+            item.toggleAttribute("data-lowcord-unlocked", fakeableSticker(stickers?.getStickerById?.(item.dataset.id), channelId));
+        for (const grid of document.querySelectorAll('[id^="sticker-picker-grid"]')) {
+            const picker = grid.closest('[class*="listWrapper_"]')?.parentElement;
+            if (!picker) continue;
+            const sections = [...picker.querySelectorAll('[class*="categorySectionNitroLocked_"]')];
+            for (const section of sections) {
+                const items = section.querySelectorAll('[role="button"][data-type="sticker"]');
+                section.toggleAttribute("data-lowcord-unlocked", items.length > 0 && [...items].every(item => item.hasAttribute("data-lowcord-unlocked")));
+            }
+            picker.toggleAttribute("data-lowcord-unlocked-stickers", enabled("fakeNitro") && sections.every(section => section.hasAttribute("data-lowcord-unlocked")));
+        }
+    }
+    window.Lowcord.onDomChange(markStickers);
+    window.addEventListener(changeEvent, () => markStickers());
     // Capturing on window runs before Discord's root listeners.
     window.addEventListener("click", pickSticker, true);
     window.addEventListener("keydown", event => {
