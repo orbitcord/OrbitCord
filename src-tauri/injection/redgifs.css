@@ -91,7 +91,24 @@
 .lowcord-redgifs-verified { display: flex; flex-shrink: 0; color: var(--text-link, #82b7ff); }
 .lowcord-redgifs-creator-stats { display: flex; flex-direction: column; color: var(--text-muted, #b5b5c0); font-size: 11px; line-height: 14px; }
 .lowcord-redgifs-creator-stats > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lowcord-redgifs-creator > svg { flex-shrink: 0; transform: rotate(180deg); color: var(--text-muted, #b5b5c0); }
+.lowcord-redgifs-creators .lowcord-redgifs-creator { padding-right: 34px; }
+.lowcord-redgifs-creators > .lowcord-redgifs-card > .lowcord-redgifs-star[aria-pressed="true"] { color: #ffdb78; }
+.lowcord-redgifs-segments { display: flex; flex-shrink: 0; gap: 2px; padding: 2px; border-radius: 7px; background: var(--input-background, #151518); }
+.lowcord-redgifs-segments button {
+    flex: 1; padding: 3px 0; border: 0; border-radius: 5px; background: transparent;
+    color: var(--text-muted, #b5b5c0); font: inherit; font-weight: 600; cursor: pointer;
+}
+.lowcord-redgifs-segments button:hover { color: var(--text-normal, #eee); }
+.lowcord-redgifs-segments button[aria-pressed="true"] { background: var(--background-modifier-selected, #ffffff20); color: var(--text-normal, #eee); }
+.lowcord-redgifs-segments span { margin-left: 4px; color: var(--text-muted, #b5b5c0); font-weight: 400; font-variant-numeric: tabular-nums; }
+.lowcord-redgifs-creator-save {
+    display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; margin-left: auto !important; height: 22px; padding: 0 7px;
+    border: 1px solid var(--border-subtle, #ffffff18); border-radius: 6px; background: transparent;
+    color: var(--text-normal, #eee); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.lowcord-redgifs-creator-save:hover { background: var(--background-modifier-hover, #ffffff0c); }
+.lowcord-redgifs-creator-save svg { display: block; width: 12px; height: 12px; }
+.lowcord-redgifs-creator-save[aria-pressed="true"] svg { color: #ffdb78; fill: currentColor; }
 .lowcord-redgifs-thumb {
     position: relative; display: block; width: 100%; min-width: 0; aspect-ratio: var(--lowcord-redgifs-ratio, 9 / 16);
     max-height: 420px; overflow: hidden; padding: 0;

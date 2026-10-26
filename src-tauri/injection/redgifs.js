@@ -9,34 +9,58 @@
     const layoutKey = 'lowcord.redgifs.layout.v1';
     const categories = ['videos', 'explore', 'creators', 'niches', 'favorites'];
     const categoryNames = { videos: 'Trending', explore: 'Explore', creators: 'Creators', niches: 'Niches', favorites: 'Favorites' };
-    const directory = state => state.mode === 'niches' || (state.mode === 'creators' && !state.creator);
+    // Favorites holds two lists: saved clips and saved creators.
+    const savedClips = state => state.mode === 'favorites' && !state.creator && state.favoriteKind === 'clips';
+    const creatorList = state => !state.creator && (state.mode === 'creators' || (state.mode === 'favorites' && state.favoriteKind === 'creators'));
+    const directory = state => state.mode === 'niches' || creatorList(state);
+    const queryKey = state => state.mode === 'favorites' ? `favorites-${state.favoriteKind}` : state.mode;
+    // Collections are stored oldest first; show the newest saved first.
+    const newest = list => list.slice().reverse();
     let saved;
     // Discord deletes window.localStorage during startup; use the handle
     // retained by Lowcord's preload, as the other settings pages do.
     try { saved = JSON.parse(storage.getItem(storageKey)); } catch {}
     saved = { favorites: Array.isArray(saved?.favorites) ? saved.favorites.slice(0, 200).filter(x => typeof x?.id === 'string' && /^[a-z0-9]{1,100}$/i.test(x.id)).map(x => ({ id: x.id, author: String(x.author || '').slice(0, 100) })) : [],
         niches: Array.isArray(saved?.niches) ? saved.niches.slice(0, 30).filter(x => typeof x?.id === 'string' && /^[a-z0-9_-]{1,100}$/i.test(x.id)).map(x => ({ id: x.id, name: String(x.name || '').slice(0, 160) })) : [],
+        creators: Array.isArray(saved?.creators) ? saved.creators.slice(0, 100).filter(x => typeof x?.id === 'string' && /^[a-z0-9_-]{1,100}$/i.test(x.id)).map(x => ({ id: x.id,
+            name: String(x.name || '').slice(0, 160), verified: x.verified === true,
+            ...(Number.isFinite(x.followers) ? { followers: x.followers } : {}), ...(Number.isFinite(x.videos) ? { videos: x.videos } : {}) })) : [],
         background: saved?.background === true };
+    const limits = { favorites: 200, niches: 30, creators: 100 };
+    const savedLabels = { favorites: 'favorite', niches: 'pinned niche', creators: 'favorite creator' };
     function persist() { try { storage.setItem(storageKey, JSON.stringify(saved)); } catch { extensions.toast('Could not save RedGIFs preferences.', true); } }
     function toggleSaved(kind, item) {
         const index = saved[kind].findIndex(x => x.id === item.id);
         if (index >= 0) saved[kind].splice(index, 1);
-        else if (saved[kind].length < (kind === 'favorites' ? 200 : 30)) saved[kind].push(kind === 'favorites'
-            ? { id: item.id, author: String(item.author || '').slice(0, 100) } : { id: item.id, name: String(item.name || '').slice(0, 160) });
+        else if (saved[kind].length < limits[kind]) saved[kind].push(kind === 'favorites' ? { id: item.id, author: String(item.author || '').slice(0, 100) }
+            : kind === 'creators' ? { id: item.id, name: String(item.name || '').slice(0, 160), verified: item.verified === true,
+                ...(Number.isFinite(item.followers) ? { followers: item.followers } : {}), ...(Number.isFinite(item.videos) ? { videos: item.videos } : {}) }
+                : { id: item.id, name: String(item.name || '').slice(0, 160) });
         else { extensions.toast('Saved collection is full. Remove an item first.', true); return; }
         persist();
         if (current) {
             for (const entry of current.items) updateStar(current, entry);
-            pinned(current);
-            if (kind === 'favorites' && current.mode === 'favorites') void search(current, true);
+            pinned(current); favoriteControls(current);
+            if (kind !== 'niches' && current.mode === 'favorites' && !current.creator && (kind === 'favorites') === (current.favoriteKind === 'clips')) void search(current, true);
         }
     }
     function updateStar(state, item) {
         if (!item.star) return;
-        const kind = state.mode === 'niches' ? 'niches' : 'favorites';
-        const on = saved[kind].some(x => x.id === item.id);
+        const on = saved[item.saveKind].some(x => x.id === item.id);
         setIcon(item.star, 'star'); item.star.setAttribute('aria-pressed', String(on));
-        item.star.setAttribute('aria-label', `${on ? 'Remove' : 'Save'} ${kind === 'niches' ? 'pinned niche' : 'favorite'} ${item.name || item.author || item.id}`);
+        item.star.setAttribute('aria-label', `${on ? 'Remove' : 'Save'} ${savedLabels[item.saveKind]} ${item.name || item.author || item.id}`);
+    }
+    function favoriteControls(state) {
+        state.favoriteKinds.hidden = state.mode !== 'favorites' || Boolean(state.creator);
+        for (const button of state.favoriteKinds.children) {
+            button.setAttribute('aria-pressed', String(button.dataset.kind === state.favoriteKind));
+            button.lastChild.textContent = String(saved[button.dataset.kind === 'clips' ? 'favorites' : 'creators'].length);
+        }
+        const creator = state.creator, on = Boolean(creator && saved.creators.some(x => x.id === creator.id));
+        state.creatorSave.hidden = !creator;
+        state.creatorSave.setAttribute('aria-pressed', String(on));
+        state.creatorSave.setAttribute('aria-label', `${on ? 'Remove' : 'Save'} favorite creator ${creator?.name || creator?.id || ''}`);
+        state.creatorSave.lastChild.textContent = on ? 'Saved' : 'Save';
     }
     function pinned(state) {
         state.pins.replaceChildren(...saved.niches.map(niche => ui('button', { type: 'button',
@@ -312,20 +336,21 @@
             if (item) preview(state, item);
         }, 120);
     }
-    function mode(state, value, niche = null, creator = null) {
+    function mode(state, value, niche = null, creator = null, kind = state.favoriteKind) {
         if (!alive(state)) return;
-        if (value === 'favorites') window.__LOWCORD_NATIVE__.redgifsCancel?.('browse').catch(() => {});
-        if (!state.niche && !state.creator) state.queries[state.mode] = state.input.value;
-        state.mode = value; state.niche = niche; state.creator = creator;
-        state.input.value = niche || creator ? '' : state.queries[value] || '';
-        state.input.placeholder = value === 'favorites' ? 'Search saved videos' : value === 'creators' && !creator ? 'Search creators' : value === 'niches' ? 'Search niches' : 'Search topics';
+        if (value === 'favorites' && !creator) window.__LOWCORD_NATIVE__.redgifsCancel?.('browse').catch(() => {});
+        if (!state.niche && !state.creator) state.queries[queryKey(state)] = state.input.value;
+        state.mode = value; state.niche = niche; state.creator = creator; state.favoriteKind = kind;
+        state.input.value = niche || creator ? '' : state.queries[queryKey(state)] || '';
+        state.input.placeholder = savedClips(state) ? 'Search saved videos' : value === 'favorites' && !creator ? 'Search saved creators'
+            : creatorList(state) ? 'Search creators' : value === 'niches' ? 'Search niches' : 'Search topics';
         for (const tab of state.tabs) { const selected = tab.dataset.mode === value; tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1; }
         state.grid.classList.toggle('lowcord-redgifs-niches', directory(state));
-        state.grid.classList.toggle('lowcord-redgifs-favorites', value === 'favorites');
-        state.grid.classList.toggle('lowcord-redgifs-creators', value === 'creators' && !creator);
-        state.favoritesHelp.hidden = value !== 'favorites' && !(value === 'creators' && !creator);
-        state.favoritesHelp.textContent = value === 'favorites' ? 'Hover to preview · Click to send' : 'Choose a creator to browse their videos';
-        pinned(state);
+        state.grid.classList.toggle('lowcord-redgifs-favorites', savedClips(state));
+        state.grid.classList.toggle('lowcord-redgifs-creators', creatorList(state));
+        state.favoritesHelp.hidden = !savedClips(state) && !creatorList(state);
+        state.favoritesHelp.textContent = savedClips(state) ? 'Hover to preview · Click to send' : 'Choose a creator to browse their videos';
+        pinned(state); favoriteControls(state);
         state.results.setAttribute('aria-labelledby', `lowcord-redgifs-tab-${value}`);
         void search(state, true);
     }
@@ -360,24 +385,29 @@
             state.grid.replaceChildren(); state.windowStart = -1; state.windowEnd = -1;
             state.results.scrollTop = 0;
         }
+        const back = state.creator ? state.mode === 'favorites' ? 'Favorites' : 'Creators' : 'Niches';
         state.back.hidden = !state.niche && !state.creator;
-        state.back.setAttribute('aria-label', state.creator ? 'Back to creators' : 'Back to niches');
-        state.back.lastChild.textContent = state.creator ? 'Creators' : 'Niches';
+        state.back.setAttribute('aria-label', `Back to ${back.toLowerCase()}`);
+        state.back.lastChild.textContent = back;
         state.resultHeading.hidden = state.mode !== 'favorites' && state.mode !== 'creators' && !state.query && !state.niche && !state.creator;
-        state.grid.setAttribute('aria-label', directory(state) ? `RedGIFs ${state.mode}` : 'RedGIFs videos');
-        state.heading.textContent = state.niche?.name || state.creator?.name || (state.mode === 'favorites' ? 'Saved videos' : state.mode === 'creators'
+        state.grid.setAttribute('aria-label', directory(state) ? `RedGIFs ${state.mode === 'niches' ? 'niches' : 'creators'}` : 'RedGIFs videos');
+        state.heading.textContent = state.niche?.name || state.creator?.name || state.creator?.id || (state.mode === 'favorites' ? 'Saved videos' : state.mode === 'creators'
             ? state.query ? `Creators for ${state.query}` : 'Trending creators' : state.mode === 'niches'
             ? state.query ? `Niches for ${state.query}` : 'Popular niches'
             : state.query ? `Videos for ${state.query}` : 'Trending videos');
+        favoriteControls(state);
         state.loading = true; state.more.disabled = true;
         state.results.setAttribute('aria-busy', 'true');
         status(state, directory(state) ? state.mode === 'niches' ? 'Finding niches...' : 'Finding creators...' : 'Finding videos...');
         try {
-            const favorites = saved.favorites.filter(item => !state.query || `${item.author} ${item.id}`.toLowerCase().includes(state.query.toLowerCase()));
-            if (state.mode === 'favorites') state.heading.textContent = `${favorites.length} saved${state.query ? ' matching this search' : ''}`;
-            const result = state.mode === 'favorites' ? await favoritePage(state, favorites, generation)
+            const query = state.query.toLowerCase();
+            const favorites = newest(savedClips(state) ? saved.favorites : saved.creators).filter(item => !query
+                || `${item.author ?? item.name} ${item.id}`.toLowerCase().includes(query));
+            if (state.mode === 'favorites' && !state.creator) state.heading.textContent = `${favorites.length} saved${savedClips(state) ? '' : ` creator${favorites.length === 1 ? '' : 's'}`}${state.query ? ' matching this search' : ''}`;
+            const result = savedClips(state) ? await favoritePage(state, favorites, generation)
+                : state.mode === 'favorites' && !state.creator ? { creators: favorites.slice(state.page * 24, (state.page + 1) * 24), more: (state.page + 1) * 24 < favorites.length }
                 : await window.__LOWCORD_NATIVE__.redgifsSearch(state.query, state.page + 1,
-                    { mode: state.mode, ...(state.niche ? { nicheId: state.niche.id } : {}), ...(state.creator ? { creator: state.creator.id } : {}) });
+                    { mode: state.creator ? 'creators' : state.mode, ...(state.niche ? { nicheId: state.niche.id } : {}), ...(state.creator ? { creator: state.creator.id } : {}) });
             if (!alive(state) || generation !== state.generation) return;
             if (result.error) throw new Error(result.error);
             state.page++;
@@ -390,7 +420,8 @@
             renderWindow(state, true);
             state.more.hidden = !result.more;
             state.more.textContent = 'Load more';
-            status(state, state.items.length ? '' : state.mode === 'favorites' ? state.query ? 'No saved videos match this search.' : 'No saved videos yet. Star a video to add it here.'
+            status(state, state.items.length ? '' : savedClips(state) ? state.query ? 'No saved videos match this search.' : 'No saved videos yet. Star a video to add it here.'
+                : state.mode === 'favorites' && !state.creator ? state.query ? 'No saved creators match this search.' : 'No saved creators yet. Star a creator to add them here.'
                 : state.mode === 'niches' ? 'No niches found. Try another topic.' : directory(state) ? 'No creators found. Try another name.' : 'No videos found. Try another topic or browse Niches.');
         } catch (error) {
             if (alive(state) && generation === state.generation) {
@@ -422,7 +453,7 @@
         return { items: items.filter(Boolean), more: (state.page + 1) * 24 < favorites.length };
     }
     function createCard(state, item) {
-        if (state.mode === 'creators' && !state.creator) {
+        if (creatorList(state)) {
             const parts = item.id.split(/[_-]+/).filter(Boolean);
             const initials = (parts.length > 1 ? parts[0][0] + parts[1][0] : item.id.slice(0, 2)).toUpperCase();
             let color = 0;
@@ -430,18 +461,17 @@
             const colors = ['#386b40', '#29689a', '#875e20', '#7052a0', '#237577', '#99455d'];
             item.button = ui('button', { type: 'button', className: 'lowcord-redgifs-creator',
                 'aria-label': `Browse creator ${item.name || item.id}`, title: `@${item.id}${item.verified ? ' · Verified' : ''}`,
-                onClick: () => mode(state, 'creators', null, item) },
+                onClick: () => mode(state, state.mode, null, item) },
                 ui('span', { className: 'lowcord-redgifs-monogram', 'aria-hidden': 'true', style: `background:${colors[color % colors.length]}` }, initials),
                 ui('span', { className: 'lowcord-redgifs-creator-copy' },
                     ui('span', { className: 'lowcord-redgifs-creator-name' }, ui('strong', {}, `@${item.id}`),
                         ...(item.verified ? [ui('span', { className: 'lowcord-redgifs-verified', role: 'img', 'aria-label': 'Verified' }, icon('verified', 12))] : [])),
                     ui('span', { className: 'lowcord-redgifs-creator-stats' },
                         ...(item.followers != null ? [ui('span', {}, `${compact.format(item.followers)} followers`)] : []),
-                        ...(item.videos != null ? [ui('span', {}, `${compact.format(item.videos)} videos`)] : []))),
-                icon('back', 12));
+                        ...(item.videos != null ? [ui('span', {}, `${compact.format(item.videos)} videos`)] : []))));
             return item.button;
         }
-        if (state.mode === 'favorites' && item.unavailable) {
+        if (savedClips(state) && item.unavailable) {
             item.button = ui('button', { type: 'button', className: 'lowcord-redgifs-thumb lowcord-redgifs-unavailable',
                 'aria-label': `Retry favorite ${item.author || item.id}`, title: errorText(item.unavailable),
                 onClick: () => void search(state, true) }, icon('retry', 22), ui('span', {}, 'Retry preview'));
@@ -475,13 +505,13 @@
             ui('span', { className: 'lowcord-redgifs-play' }, icon('play', 22)),
             item.timer,
             ui('span', { className: 'lowcord-redgifs-progress', 'aria-hidden': 'true' }),
-            ...(state.mode === 'favorites' ? [] : [ui('span', { className: 'lowcord-redgifs-author' }, item.author || 'Preview video')]));
+            ...(savedClips(state) ? [] : [ui('span', { className: 'lowcord-redgifs-author' }, item.author || 'Preview video')]));
         item.button = button; syncTile(state, item); return button;
     }
     function renderWindow(state, force = false) {
         if (!alive(state) || state.collapsed) return;
         const width = state.grid.clientWidth || 360, top = state.results.scrollTop;
-        const favorites = state.mode === 'favorites', creators = state.mode === 'creators' && !state.creator;
+        const favorites = savedClips(state), creators = creatorList(state);
         const columns = favorites ? 3 : creators ? 2 : 1;
         const tileWidth = (width - (columns - 1) * 8) / columns;
         const gap = favorites ? 6 : 8;
@@ -518,11 +548,11 @@
         const cards = state.items.slice(start, end).map((item, index) => {
             if (!item.card) {
                 const button = createCard(state, item);
-                item.star = directory(state) && state.mode === 'creators' ? null : ui('button', { type: 'button', className: 'lowcord-redgifs-star',
-                    onClick: () => toggleSaved(state.mode === 'niches' ? 'niches' : 'favorites', item) });
+                item.saveKind = state.mode === 'niches' ? 'niches' : creators ? 'creators' : 'favorites';
+                item.star = ui('button', { type: 'button', className: 'lowcord-redgifs-star', onClick: () => toggleSaved(item.saveKind, item) });
                 updateStar(state, item);
                 item.card = ui('div', { className: `lowcord-redgifs-card${!favorites && (directory(state) || item.unavailable) ? ' lowcord-redgifs-niche-card' : ''}` },
-                    button, ...(item.star ? [item.star] : []), ...(favorites ? [ui('span', { className: 'lowcord-redgifs-favorite-author', title: item.author || item.id }, item.author ? `@${item.author}` : item.id)] : []));
+                    button, item.star, ...(favorites ? [ui('span', { className: 'lowcord-redgifs-favorite-author', title: item.author || item.id }, item.author ? `@${item.author}` : item.id)] : []));
             }
             const row = Math.floor((start + index) / columns);
             item.card.style.height = `${offsets[row + 1] - offsets[row] - gap}px`;
@@ -734,7 +764,12 @@
         const tablist = ui('div', { className: 'lowcord-redgifs-tabs', role: 'tablist', 'aria-label': 'Search category' }, ...tabs);
         const heading = ui('span', { className: 'lowcord-redgifs-heading' });
         const back = ui('button', { type: 'button', className: 'lowcord-redgifs-back', 'aria-label': 'Back to niches', hidden: true,
-            onClick: () => mode(state, state.creator ? 'creators' : 'niches') }, icon('back', 12), 'Niches');
+            onClick: () => mode(state, state.creator ? state.mode : 'niches') }, icon('back', 12), 'Niches');
+        const favoriteKinds = ui('div', { className: 'lowcord-redgifs-segments', role: 'group', 'aria-label': 'Saved type', hidden: true },
+            ...[['clips', 'Clips'], ['creators', 'Creators']].map(([kind, label]) => ui('button', { type: 'button', 'data-kind': kind, 'aria-pressed': String(kind === 'clips'),
+                onClick: () => { if (state.favoriteKind !== kind) mode(state, 'favorites', null, null, kind); } }, label, ' ', ui('span', {}))));
+        const creatorSave = ui('button', { type: 'button', className: 'lowcord-redgifs-creator-save', hidden: true,
+            onClick: () => { if (state.creator) toggleSaved('creators', state.creator); } }, icon('star', 12), ui('span', {}, 'Save'));
         const grid = ui('div', { className: 'lowcord-redgifs-grid', 'aria-label': 'RedGIFs videos' });
         const more = ui('button', { type: 'button', className: 'lowcord-redgifs-more', hidden: true, onClick: () => void search(state, false) }, 'Load more');
         const results = ui('div', { className: 'lowcord-redgifs-results', id: 'lowcord-redgifs-results', role: 'tabpanel', tabindex: '-1',
@@ -774,8 +809,8 @@
         const resize = ui('button', { type: 'button', className: 'lowcord-redgifs-resize', 'aria-label': 'Resize RedGIFs picker',
             title: 'Drag to resize · Arrow keys to resize · Home to reset', onKeydown: event => keyboardLayout(state, event, 'resize'),
             onPointerdown: event => beginGesture(state, event, 'resize') }, icon('resize', 16));
-        const resultHeading = ui('div', { className: 'lowcord-redgifs-result-heading', hidden: true }, back, heading);
-        const body = ui('div', { className: 'lowcord-redgifs-body', id: 'lowcord-redgifs-body' }, form, tablist,
+        const resultHeading = ui('div', { className: 'lowcord-redgifs-result-heading', hidden: true }, back, heading, creatorSave);
+        const body = ui('div', { className: 'lowcord-redgifs-body', id: 'lowcord-redgifs-body' }, form, tablist, favoriteKinds,
             resultHeading, pins, results, uploadStatus, statusNode, favoritesHelp, options);
         const header = ui('header', { className: 'lowcord-redgifs-titlebar', onPointerdown: event => beginGesture(state, event, 'move') },
             drag, ui('h2', {}, ui('span', {}, 'Red'), 'GIFs'), collapse, closeButton);
@@ -791,7 +826,7 @@
             onLostpointercapture: () => finishGesture(state, true) }, header, body, resize);
         const state = { node, input, searchButton, grid, more, video, status: statusNode,
             editor, channelId, query: '', page: 0, items: [], generation: 0, abort: new AbortController(),
-            mode: 'videos', niche: null, creator: null, queries: {}, tabs, results, heading, back, queueStatus: uploadStatus,
+            mode: 'videos', niche: null, creator: null, favoriteKind: 'clips', favoriteKinds, creatorSave, queries: {}, tabs, results, heading, back, queueStatus: uploadStatus,
             pins, pause, queueList, queueToggle, queueSummary, queueCount, resultHeading, favoritesHelp,
             body, header, drag, collapse, resize, options, optionsButton, layout: readLayout(), collapsed: false };
         video.addEventListener('playing', () => { if (state.previewing) state.previewing.button.dataset.previewing = 'true'; });

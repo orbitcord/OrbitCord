@@ -628,7 +628,7 @@ test('favorites, pinned niches and background preference persist after Discord d
     await page.getByRole('checkbox', { name: 'Keep uploading when picker closes' }).check();
     const saved = await page.evaluate(() => JSON.parse(Lowcord.storage.getItem('lowcord.redgifs.saved.v1')));
     expect(saved).toEqual({ favorites: [{ id: 'feed10', author: 'fixture10' }],
-        niches: [{ id: 'neutral-animation', name: 'Neutral animation' }], background: true });
+        niches: [{ id: 'neutral-animation', name: 'Neutral animation' }], creators: [], background: true });
     expect(await page.evaluate(() => redgifsFixture.toasts)).toEqual([]);
 });
 
@@ -648,6 +648,83 @@ test('favorites do not inherit topic searches, and removing one updates the coll
     await expect(status(page)).toContainText('No saved videos');
     await page.getByRole('tab', { name: 'Trending', exact: true }).click();
     await expect(page.getByRole('searchbox')).toHaveValue('animation');
+});
+
+test('favorites list the newest saved video first without reordering stored favorites', async ({ page }) => {
+    await open(page);
+    await page.evaluate(() => {
+        __LOWCORD_NATIVE__.redgifsResolve = async id => ({ id, key: 'fresh', author: `fixture${id.slice(4)}`, preview: '/media/sample.mp4', poster: '/media/sample.png' });
+    });
+    for (const name of ['fixture10', 'fixture11', 'fixture12']) await page.getByRole('button', { name: `Save favorite ${name}`, exact: true }).click();
+    await page.getByRole('tab', { name: 'Favorites', exact: true }).click();
+    await expect(page.locator('.lowcord-redgifs-favorite-author')).toHaveText(['@fixture12', '@fixture11', '@fixture10']);
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('lowcord.redgifs.saved.v1')));
+    expect(stored.favorites.map(item => item.id)).toEqual(['feed10', 'feed11', 'feed12']);
+});
+
+test('creators can be saved from the directory and creator view, then opened from Favorites', async ({ page }) => {
+    await open(page);
+    await page.getByRole('tab', { name: 'Creators', exact: true }).click();
+    await page.getByRole('button', { name: 'Save favorite creator Neutral Creator', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Remove favorite creator Neutral Creator', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    let stored = await page.evaluate(() => JSON.parse(localStorage.getItem('lowcord.redgifs.saved.v1')));
+    expect(stored.creators).toEqual([{ id: 'neutral_creator', name: 'Neutral Creator', verified: true, followers: 34, videos: 12 }]);
+    await page.getByRole('button', { name: 'Browse creator Neutral Creator', exact: true }).click();
+    const pill = page.locator('.lowcord-redgifs-creator-save');
+    await expect(pill).toHaveText('Saved');
+    await pill.click();
+    await expect(pill).toHaveText('Save');
+    await expect(pill).toHaveAttribute('aria-label', 'Save favorite creator Neutral Creator');
+    stored = await page.evaluate(() => JSON.parse(localStorage.getItem('lowcord.redgifs.saved.v1')));
+    expect(stored.creators).toEqual([]);
+    await pill.click();
+    await expect(pill).toHaveText('Saved');
+
+    await page.getByRole('tab', { name: 'Favorites', exact: true }).click();
+    const kinds = page.getByRole('group', { name: 'Saved type' });
+    await expect(kinds.getByRole('button', { name: 'Clips 0', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await kinds.getByRole('button', { name: 'Creators 1', exact: true }).click();
+    await expect(page.getByRole('searchbox')).toHaveAttribute('placeholder', 'Search saved creators');
+    await expect(page.locator('.lowcord-redgifs-heading')).toHaveText('1 saved creator');
+    await expect(page.locator('.lowcord-redgifs-creators')).toHaveCount(1);
+    await page.locator('.lowcord-redgifs').screenshot({ path: '/tmp/lowcord-redgifs-favorite-creators.png' });
+    await page.evaluate(() => { redgifsFixture.searches = []; });
+    await page.getByRole('button', { name: 'Browse creator Neutral Creator', exact: true }).click();
+    await expect(page.getByRole('button', { name: /Send video by/ })).toHaveCount(3);
+    expect(await page.evaluate(() => redgifsFixture.searches)).toEqual([{ query: '', page: 1, mode: 'creators', creator: 'neutral_creator' }]);
+    await expect(page.getByRole('tab', { name: 'Favorites', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(kinds).toBeHidden();
+    await expect(pill).toHaveText('Saved');
+    await page.locator('.lowcord-redgifs').screenshot({ path: '/tmp/lowcord-redgifs-favorite-creator-view.png' });
+    await page.getByRole('button', { name: 'Back to favorites', exact: true }).click();
+    await expect(kinds.getByRole('button', { name: 'Creators 1', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: 'Remove favorite creator Neutral Creator', exact: true }).click();
+    await expect(page.locator('.lowcord-redgifs-card')).toHaveCount(0);
+    await expect(status(page)).toContainText('No saved creators yet');
+    await expect(kinds.getByRole('button', { name: 'Creators 0', exact: true })).toBeVisible();
+});
+
+test.describe('saved creators', () => {
+    test.use({ storageState: { cookies: [], origins: [{ origin: 'http://127.0.0.1:4318', localStorage: [{
+        name: 'lowcord.redgifs.saved.v1', value: JSON.stringify({ favorites: [], creators: [{ id: 'oldest_creator', name: 'Oldest' },
+            { id: 'middle_creator', name: 'Middle', followers: 5 }, { id: 'newest_creator', name: 'Newest', verified: true }, { id: 'bad id!', name: 'Rejected' }] }),
+    }] }] } });
+
+    test('list newest first, filter by search and keep searches separate from clips', async ({ page }) => {
+        await open(page);
+        await page.getByRole('tab', { name: 'Favorites', exact: true }).click();
+        await page.getByRole('button', { name: 'Creators 3', exact: true }).click();
+        await expect(page.locator('.lowcord-redgifs-creator-name strong')).toHaveText(['@newest_creator', '@middle_creator', '@oldest_creator']);
+        await expect(page.getByRole('button', { name: 'Browse creator Middle', exact: true })).toContainText('5 followers');
+        await page.getByRole('searchbox').fill('mid');
+        await page.getByRole('button', { name: 'Search', exact: true }).click();
+        await expect(page.locator('.lowcord-redgifs-heading')).toHaveText('1 saved creator matching this search');
+        await page.getByRole('button', { name: 'Clips 0', exact: true }).click();
+        await expect(page.getByRole('searchbox')).toHaveValue('');
+        await page.getByRole('button', { name: 'Creators 3', exact: true }).click();
+        await expect(page.getByRole('searchbox')).toHaveValue('mid');
+        expect(await page.evaluate(() => redgifsFixture.searches.some(search => search.mode === 'favorites'))).toBe(false);
+    });
 });
 
 test('failed favorites stay removable and retryable without hiding healthy favorites', async ({ page }) => {
@@ -750,7 +827,7 @@ test('Explore and Creators browse independently, creator pagination and back nav
     await page.getByRole('button', { name: 'Back to creators', exact: true }).click();
     await expect(page.getByRole('searchbox')).toHaveValue('neutral');
     await expect(page.getByRole('button', { name: 'Browse creator Neutral Creator', exact: true })).toBeVisible();
-    await expect(page.locator('.lowcord-redgifs-star')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Save favorite creator Neutral Creator', exact: true })).toBeVisible();
     await page.getByRole('tab', { name: 'Creators', exact: true }).press('ArrowRight');
     await expect(page.getByRole('tab', { name: 'Niches', exact: true })).toBeFocused();
     await page.getByRole('tab', { name: 'Niches', exact: true }).press('End');
@@ -936,7 +1013,7 @@ test.describe('compact Favorites gallery', () => {
         for (const box of metrics.first) expect(box.width / box.height).toBeCloseTo(9 / 8, 2);
         expect(metrics.first[0].y).toBe(metrics.first[1].y); expect(metrics.first[1].y).toBe(metrics.first[2].y);
         expect(metrics.first[3].y).toBeGreaterThan(metrics.first[0].y);
-        await expect(page.locator('.lowcord-redgifs-favorite-author').first()).toHaveText('@creator0');
+        await expect(page.locator('.lowcord-redgifs-favorite-author').first()).toHaveText('@creator79');
         expect(await tile(page).locator('img').evaluate(node => getComputedStyle(node).objectFit)).toBe('cover');
         await page.locator('.lowcord-redgifs').screenshot({ path: '/tmp/lowcord-redgifs-favorites-grid.png' });
         await page.setViewportSize({ width: 360, height: 520 });
@@ -961,19 +1038,19 @@ test.describe('compact Favorites gallery', () => {
         const box = await tile(page).boundingBox();
         await page.mouse.move(box.x + box.width * .8, box.y + box.height / 2);
         await expect.poll(() => tile(page).locator('video').evaluate(node => node.currentTime)).toBeGreaterThan(1.2);
-        await page.getByRole('button', { name: 'Send video by creator1', exact: true }).focus();
+        await page.getByRole('button', { name: 'Send video by creator78', exact: true }).focus();
         await expect(page.locator('.lowcord-redgifs video')).toHaveCount(1);
-        await page.getByRole('button', { name: 'Send video by creator1', exact: true }).press('Enter');
+        await page.getByRole('button', { name: 'Send video by creator78', exact: true }).press('Enter');
         await expect.poll(() => page.evaluate(() => redgifsFixture.posts.length)).toBe(1);
-        await expect(page.getByRole('button', { name: 'Send video by creator1', exact: true })).toHaveAttribute('data-sent', '');
-        await page.getByRole('button', { name: 'Remove favorite creator0', exact: true }).click();
-        await expect(page.getByRole('button', { name: 'Send video by creator0', exact: true })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Send video by creator78', exact: true })).toHaveAttribute('data-sent', '');
+        await page.getByRole('button', { name: 'Remove favorite creator79', exact: true }).click();
+        await expect(page.getByRole('button', { name: 'Send video by creator79', exact: true })).toHaveCount(0);
         await expect(page.locator('.lowcord-redgifs-heading')).toHaveText('79 saved');
         expect(await page.evaluate(() => redgifsFixture.posts.length)).toBe(1);
         await page.getByRole('searchbox').fill('creator7');
         await page.getByRole('button', { name: 'Search', exact: true }).click();
-        await expect(page.locator('.lowcord-redgifs-heading')).toHaveText('11 saved matching this search');
-        await expect(page.locator('.lowcord-redgifs-thumb')).toHaveCount(11);
+        await expect(page.locator('.lowcord-redgifs-heading')).toHaveText('10 saved matching this search');
+        await expect(page.locator('.lowcord-redgifs-thumb')).toHaveCount(10);
         expect(errors).toEqual([]);
     });
 
@@ -985,11 +1062,11 @@ test.describe('compact Favorites gallery', () => {
         }
         await expect(page.getByRole('button', { name: 'Load more', exact: true })).toBeHidden();
         await page.locator('.lowcord-redgifs-results').evaluate(node => { node.scrollTop = node.scrollHeight; });
-        await expect(page.getByRole('button', { name: 'Send video by creator79', exact: true })).toBeVisible();
-        expect(await page.locator('.lowcord-redgifs-card').count()).toBeLessThan(36);
-        await expect(page.getByRole('button', { name: 'Send video by creator0', exact: true })).toHaveCount(0);
-        await page.locator('.lowcord-redgifs-results').evaluate(node => { node.scrollTop = 0; });
         await expect(page.getByRole('button', { name: 'Send video by creator0', exact: true })).toBeVisible();
+        expect(await page.locator('.lowcord-redgifs-card').count()).toBeLessThan(36);
+        await expect(page.getByRole('button', { name: 'Send video by creator79', exact: true })).toHaveCount(0);
+        await page.locator('.lowcord-redgifs-results').evaluate(node => { node.scrollTop = 0; });
+        await expect(page.getByRole('button', { name: 'Send video by creator79', exact: true })).toBeVisible();
         const firstRow = await page.locator('.lowcord-redgifs-thumb').evaluateAll(tiles => tiles.slice(0, 3).map(tile => tile.getBoundingClientRect().y));
         expect(new Set(firstRow).size).toBe(1);
     });
