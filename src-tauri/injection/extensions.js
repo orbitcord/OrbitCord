@@ -592,7 +592,9 @@
     // main chat starts Discord's own pending reply. The bubble attributes come
     // from chat-appearance.js, so this is off whenever bubbles are. One
     // delegated listener; nothing runs per message.
-    const clickReplyDelay = 300;
+    // Shorter than the pause inside an ordinary double click; slower ones
+    // are taken back below.
+    const clickReplyDelay = 150;
     const sendMessages = 1n << 11n;
     // Inside message text, these keep Discord's own click behaviour.
     const clickReplyExcluded = 'a, button, input, textarea, select, img, svg, video, audio, canvas, iframe, pre, code, time, '
@@ -664,8 +666,9 @@
     function clickReplyDown(event) {
         cancelClickReply();
         // A late second click of a double click (slower than the delay above)
-        // takes back the reply its first click started.
-        if (event.detail > 1 && clickUndo && performance.now() - clickUndo.time < 800 && clickUndo.row.contains(event.target)) {
+        // takes back the reply its first click started. The reply bar can
+        // push the chat up, so that click may land on another message.
+        if (event.detail > 1 && clickUndo && performance.now() - clickUndo.time < 800) {
             const { previous, channelId } = clickUndo;
             if (previous) createReply?.({ channel: previous.channel, message: previous.message,
                 shouldMention: previous.shouldMention, showMentionToggle: previous.showMentionToggle });
@@ -701,7 +704,7 @@
                 createReply({ channel, message,
                     shouldMention: message.author.id !== window.Lowcord.store("UserStore")?.getCurrentUser()?.id,
                     showMentionToggle: true });
-                clickUndo = { row, channelId: channel.id, previous, time: performance.now() };
+                clickUndo = { channelId: channel.id, previous, time: performance.now() };
             }
             composer.focus({ preventScroll: true });
         }, clickReplyDelay);

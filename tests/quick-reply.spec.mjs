@@ -189,7 +189,7 @@ async function bubbles(page) {
     await expect(page.locator('[id="chat-messages-100-3"] > [data-lowcord-bubble]')).toHaveCount(0);
 }
 const text = (page, id) => page.locator(`[id="message-content-${id}"] > .text_t`);
-// The reply starts after the double-click window; give it time to (not)
+// The reply starts after a short double-click window; give it time to (not)
 // happen. No reply may have been created even briefly.
 async function expectNoReply(page) {
     await page.waitForTimeout(450);
@@ -267,7 +267,7 @@ test.describe("click to reply", () => {
         await page.evaluate(() => getSelection().removeAllRanges());
         const middle = await words.boundingBox();
         await page.mouse.click(middle.x + 20, middle.y + middle.height / 2);
-        await page.waitForTimeout(150);
+        await page.waitForTimeout(80);
         await page.mouse.click(middle.x + 20, middle.y + middle.height / 2, { clickCount: 2 });
         await expectNoReply(page);
         await page.evaluate(() => getSelection().removeAllRanges());
@@ -295,6 +295,15 @@ test.describe("click to reply", () => {
         await page.mouse.down({ clickCount: 2 });
         await page.mouse.up({ clickCount: 2 });
         await expect(target(page)).toHaveText("2");
+        // Even when the reply bar moved another message under the pointer.
+        await resetReply(page);
+        await page.mouse.click(...point);
+        await expect(target(page)).toHaveText("1");
+        const other = await text(page, "2").boundingBox();
+        await page.mouse.move(other.x + 20, other.y + other.height / 2);
+        await page.mouse.down({ clickCount: 2 });
+        await page.mouse.up({ clickCount: 2 });
+        await expect(target(page)).toHaveText("none");
     });
 
     test("right, middle and modifier clicks never reply", async ({ page }) => {
