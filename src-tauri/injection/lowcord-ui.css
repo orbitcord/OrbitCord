@@ -561,55 +561,83 @@
     .lowcord-theme-colors { grid-template-columns: 1fr; }
     .lowcord-theme-editor-row { flex-direction: column; align-items: flex-start; gap: 10px; }
 }
-/* Nitro theme: a gradient bar, Discord's presets as swatches, then controls. */
+/* Nitro theme: the gradient is the header, then one grid of presets and controls. */
+.lowcord-nitro-editor { gap: 0; padding: 0; overflow: hidden; }
 .lowcord-nitro-bar {
-    display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 0 14px;
-    border-radius: 10px; color: #fff; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .12);
+    position: relative; display: flex; flex-direction: column; justify-content: space-between; gap: 16px;
+    min-height: 116px; padding: 16px 18px; box-sizing: border-box; color: #fff;
+    background: linear-gradient(to top, rgb(0 0 0 / .38), transparent 70%), var(--nitro-gradient);
 }
-.lowcord-nitro-bar strong { font-size: 15px; text-shadow: 0 1px 3px rgb(0 0 0 / .45); }
-.lowcord-nitro-action {
-    height: 28px; padding: 0 12px; border: 0; border-radius: 8px; cursor: pointer; font: inherit; font-size: 13px; font-weight: 500;
-    color: #fff; background: rgb(0 0 0 / .35); transition: background-color .15s;
+.lowcord-nitro-bar-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.lowcord-nitro-bar h3 { color: #fff; text-shadow: 0 1px 3px rgb(0 0 0 / .45); }
+.lowcord-nitro-note { display: block; margin-top: 2px; font-size: 13px; color: rgb(255 255 255 / .78); text-shadow: 0 1px 2px rgb(0 0 0 / .4); }
+.lowcord-nitro-bar strong { font-size: 22px; line-height: 28px; font-weight: 600; text-shadow: 0 1px 4px rgb(0 0 0 / .5); }
+.lowcord-nitro-actions { display: flex; flex: none; gap: 6px; }
+.lowcord-nitro-glass {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 34px; height: 34px; padding: 0 10px;
+    border: 0; border-radius: 8px; cursor: pointer; font: inherit; font-size: 13px; font-weight: 500; color: #fff;
+    background: rgb(0 0 0 / .32); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .16);
+    backdrop-filter: blur(8px); transition: background-color .15s;
 }
-.lowcord-nitro-action:hover { background: rgb(0 0 0 / .5); }
-.lowcord-nitro-presets { flex-direction: column; align-items: flex-start; gap: 12px; }
-.lowcord-nitro-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.lowcord-nitro-glass:hover { background: rgb(0 0 0 / .48); }
+.lowcord-nitro-body { display: grid; gap: 18px; padding: 18px; }
+.lowcord-nitro-tabs { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
+.lowcord-nitro-editor .lowcord-nitro-tabs button { min-width: 0; justify-content: center; }
+/* Fixed-size swatches spread edge to edge; rows line up in columns. */
+.lowcord-nitro-swatches { display: grid; grid-template-columns: repeat(auto-fill, 48px); justify-content: space-between; gap: 12px 10px; }
 .lowcord-nitro-swatch {
-    width: 36px; height: 36px; padding: 0; border: 0; border-radius: 10px; cursor: pointer;
-    box-shadow: inset 0 0 0 1px rgb(255 255 255 / .16); transition: translate .15s ease;
+    aspect-ratio: 1; padding: 0; border: 0; border-radius: 10px; cursor: pointer;
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / .16); transition: translate .15s ease, box-shadow .15s;
 }
 .lowcord-nitro-swatch:hover { translate: 0 -2px; }
 .lowcord-nitro-swatch[aria-pressed="true"] {
     box-shadow: 0 0 0 2px var(--background-base-lower, #2b2d31), 0 0 0 4px var(--brand-500, #5865f2);
 }
-.lowcord-nitro-stops { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.lowcord-nitro-stop { position: relative; display: block; }
-.lowcord-nitro-stop .lowcord-color-swatch {
-    position: relative; display: block; width: 34px; height: 34px; border-radius: 10px; background: var(--lowcord-swatch);
-    box-shadow: inset 0 0 0 1px rgb(255 255 255 / .14), 0 0 0 1px rgb(0 0 0 / .28);
+.lowcord-nitro-empty { margin: 0; padding: 14px 0; font-size: 13px; color: var(--text-muted, #949ba4); }
+.lowcord-nitro-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.lowcord-nitro-tile {
+    display: grid; align-content: center; gap: 12px; padding: 14px; border-radius: 10px;
+    background: var(--background-base-lowest, var(--background-tertiary, #1e1f22));
 }
-.lowcord-nitro-stop input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; opacity: 0; cursor: pointer; }
-.lowcord-nitro-stop:has(input:focus-visible) .lowcord-color-swatch { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px; }
+.lowcord-nitro-eyebrow { font-size: 11px; line-height: 14px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted, #949ba4); }
+.lowcord-nitro-stops { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.lowcord-nitro-stop { position: relative; display: block; }
+.lowcord-nitro-chip {
+    position: relative; display: block; width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / .18), 0 0 0 1px rgb(0 0 0 / .3);
+}
+.lowcord-nitro-chip input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; opacity: 0; cursor: pointer; }
+.lowcord-nitro-stop:has(input:focus-visible) .lowcord-nitro-chip { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px; }
 .lowcord-nitro-remove {
-    position: absolute; top: -6px; right: -6px; display: grid; place-items: center; width: 18px; height: 18px; padding: 0;
-    border: 0; border-radius: 50%; cursor: pointer; font: inherit; font-size: 13px; line-height: 1;
+    position: absolute; top: -5px; right: -5px; display: grid; place-items: center; width: 16px; height: 16px; padding: 0;
+    border: 0; border-radius: 50%; cursor: pointer; font: inherit; font-size: 12px; line-height: 1;
     color: var(--text-default, #f2f3f5); background: var(--background-base-low, #313338);
     box-shadow: 0 0 0 1px var(--border-subtle, rgb(148 155 164 / .3)); opacity: 0; transition: opacity .15s;
 }
 .lowcord-nitro-stop:is(:hover, :focus-within) .lowcord-nitro-remove { opacity: 1; }
 .lowcord-nitro-add {
-    width: 34px; height: 34px; padding: 0; border: 1px dashed var(--border-strong, rgb(148 155 164 / .5)); border-radius: 10px;
-    cursor: pointer; font: inherit; font-size: 18px; color: var(--text-muted, #949ba4); background: transparent;
+    display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px dashed var(--border-strong, rgb(148 155 164 / .5));
+    border-radius: 50%; cursor: pointer; font: inherit; font-size: 16px; line-height: 1; color: var(--text-muted, #949ba4); background: transparent;
 }
 .lowcord-nitro-add:hover { color: var(--text-default, #f2f3f5); border-color: var(--text-muted, #949ba4); }
-.lowcord-nitro-ranges { flex-direction: column; align-items: stretch; gap: 10px; }
-.lowcord-nitro-range { display: flex; align-items: center; gap: 16px; }
-.lowcord-nitro-range input { flex: 1; accent-color: var(--brand-500, #5865f2); }
-.lowcord-nitro-range output { width: 44px; text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text-muted, #949ba4); }
-:is(.lowcord-nitro-swatch, .lowcord-nitro-action, .lowcord-nitro-remove, .lowcord-nitro-add):focus-visible {
+.lowcord-nitro-range { display: grid; grid-template-columns: 72px minmax(0, 1fr) 48px; align-items: center; gap: 12px; }
+.lowcord-nitro-range input {
+    -webkit-appearance: none; appearance: none; width: 100%; height: 6px; margin: 0; border-radius: 3px; cursor: pointer;
+    background: linear-gradient(var(--brand-500, #5865f2), var(--brand-500, #5865f2)) 0 / var(--fill) 100% no-repeat,
+        var(--background-mod-strong, rgb(148 155 164 / .28));
+}
+.lowcord-nitro-range input::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / .4);
+}
+.lowcord-nitro-range output {
+    padding: 3px 0; border-radius: 6px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums;
+    color: var(--text-default, #dbdee1); background: var(--background-base-lower, #2b2d31);
+}
+:is(.lowcord-nitro-swatch, .lowcord-nitro-glass, .lowcord-nitro-remove, .lowcord-nitro-add, .lowcord-nitro-range input):focus-visible {
     outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px; opacity: 1;
 }
-@media (prefers-reduced-motion: reduce) { .lowcord-nitro-swatch, .lowcord-nitro-remove { transition: none; } }
+@media (max-width: 640px) { .lowcord-nitro-controls { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .lowcord-nitro-swatch, .lowcord-nitro-remove, .lowcord-nitro-glass { transition: none; } }
 .lowcord-theme-options { display: grid; gap: 22px; margin-top: 36px; padding-top: 24px; border-top: 1px solid var(--border-subtle, rgb(78 80 88 / .48)); }
 .lowcord-theme-typeface .lowcord-position-control { margin-bottom: 12px; }
 .lowcord-theme-typeface select { min-width: 180px; }

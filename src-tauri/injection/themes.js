@@ -492,46 +492,52 @@ function setupLowcordThemes() {
             const setColors = colors => save({ id: "nitro", nitro: { ...theme, colors, stops: colors.length === theme.colors.length ? theme.stops : null } });
             const list = nitroTab === "saved" ? current.nitroSaved : nitroPresets.filter(preset => preset.scheme === nitroTab);
             const nextName = () => { let index = 1; while (current.nitroSaved.some(entry => entry.name === `My theme ${index}`)) index++; return `My theme ${index}`; };
+            const icon = path => h("svg", { viewBox: "0 0 24 24", width: 16, height: 16, "aria-hidden": "true" },
+                h("path", { d: path, fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }));
+            const bookmark = "M7 4h10a1 1 0 0 1 1 1v15l-6-4-6 4V5a1 1 0 0 1 1-1z";
+            const shuffle = "M4 7h3.5c2.4 0 3.6 1.3 5 3.5L14 13c1.4 2.2 2.6 3.5 5 3.5h1M17 14l3 2.5-3 2.5M4 17h3.5c1.3 0 2.2-.4 3-1.1M14 8.1c.8-.7 1.7-1.1 3-1.1h3M17 4.5 20 7l-3 2.5";
+            const glass = (label, path, onClick, text) => h("button", { type: "button", className: "lowcord-nitro-glass", "aria-label": label,
+                title: label, onClick }, icon(path), text ? h("span", null, text) : null);
             const range = (label, value, min, max, unit, onChange) => h("label", { className: "lowcord-nitro-range" },
-                h("span", { className: "lowcord-theme-editor-label" }, label),
-                h("input", { type: "range", min, max, step: 1, value, "aria-label": label, onChange: event => onChange(Number(event.target.value)) }),
+                h("span", { className: "lowcord-nitro-eyebrow" }, label),
+                h("input", { type: "range", min, max, step: 1, value, "aria-label": label, style: { "--fill": `${(value - min) / (max - min) * 100}%` },
+                    onChange: event => onChange(Number(event.target.value)) }),
                 h("output", null, `${value}${unit}`));
             return h("div", { className: "lowcord-theme-editor lowcord-nitro-editor", "data-active": true },
-                h("div", { className: "lowcord-theme-editor-head" },
-                    h("span", null, h("h3", null, "Nitro theme"),
-                        description("Discord’s gradient themes. Only you see them, and only on this device.")),
-                    h("button", { type: "button", className: "lowcord-theme-use", onClick: () => {
-                        save({ id: "nitro", nitro: generateNitro(nitroTab === "light" ? "light" : "dark") });
-                    } }, "Generate")),
-                h("div", { className: "lowcord-nitro-bar", style: { background: nitroGradient(theme) } },
-                    h("strong", null, named?.name ?? "Your mix"),
-                    savedMatch ? h("button", { type: "button", className: "lowcord-nitro-action",
-                            onClick: () => save({ nitroSaved: current.nitroSaved.filter(entry => entry !== savedMatch) }) }, "Remove from saved")
-                        : named ? null : h("button", { type: "button", className: "lowcord-nitro-action",
-                            onClick: () => { const name = nextName(); save({ nitroSaved: [...current.nitroSaved, { name, ...theme }].slice(-30) }); setNitroTab("saved"); } },
-                            "Save")),
-                h("div", { className: "lowcord-theme-editor-row lowcord-nitro-presets" },
-                    h("div", { className: "lowcord-segmented", role: "radiogroup", "aria-label": "Nitro themes" },
+                h("div", { className: "lowcord-nitro-bar", style: { "--nitro-gradient": nitroGradient(theme) } },
+                    h("div", { className: "lowcord-nitro-bar-top" },
+                        h("span", null, h("h3", null, "Nitro theme"), h("span", { className: "lowcord-nitro-note" }, "Only you see it, on this device.")),
+                        h("span", { className: "lowcord-nitro-actions" },
+                            savedMatch ? glass("Remove from saved", bookmark, () => save({ nitroSaved: current.nitroSaved.filter(entry => entry !== savedMatch) }))
+                                : named ? null : glass("Save", bookmark, () => {
+                                    save({ nitroSaved: [...current.nitroSaved, { name: nextName(), ...theme }].slice(-30) });
+                                    setNitroTab("saved");
+                                }),
+                            glass("Generate", shuffle, () => save({ id: "nitro", nitro: generateNitro(nitroTab === "light" ? "light" : "dark") }), "Generate"))),
+                    h("strong", null, named?.name ?? "Your mix")),
+                h("div", { className: "lowcord-nitro-body" },
+                    h("div", { className: "lowcord-segmented lowcord-nitro-tabs", role: "radiogroup", "aria-label": "Nitro themes" },
                         ...[["dark", "Dark"], ["light", "Light"], ["saved", "Saved"]].map(([id, label]) => h("button", { key: id, type: "button",
                             role: "radio", "aria-checked": nitroTab === id, onClick: () => setNitroTab(id) }, label))),
                     list.length ? h("div", { className: "lowcord-nitro-swatches" }, ...list.map(entry => h("button", { key: entry.name, type: "button",
                             className: "lowcord-nitro-swatch", title: entry.name, "aria-label": entry.name, "aria-pressed": sameNitro(entry, theme),
                             style: { background: nitroGradient(entry) }, onClick: () => pick(entry) })))
-                        : description("Themes you save show up here.")),
-                h("div", { className: "lowcord-theme-editor-row" },
-                    h("span", { className: "lowcord-theme-editor-label" }, "Colors"),
-                    h("div", { className: "lowcord-nitro-stops" },
-                        ...theme.colors.map((color, index) => h("span", { key: index, className: "lowcord-nitro-stop" },
-                            h("label", { className: "lowcord-color-swatch", style: { "--lowcord-swatch": color } },
-                                h("input", { type: "color", value: color, "aria-label": `Color ${index + 1}`,
-                                    onChange: event => setColors(theme.colors.map((value, at) => at === index ? event.target.value : value)) })),
-                            theme.colors.length > 2 ? h("button", { type: "button", className: "lowcord-nitro-remove", "aria-label": `Remove color ${index + 1}`,
-                                onClick: () => setColors(theme.colors.filter((_, at) => at !== index)) }, "×") : null)),
-                        theme.colors.length < 5 ? h("button", { type: "button", className: "lowcord-nitro-add", "aria-label": "Add a color",
-                            onClick: () => setColors([...theme.colors, mix(theme.colors.at(-1), theme.colors[0], .5)]) }, "+") : null)),
-                h("div", { className: "lowcord-theme-editor-row lowcord-nitro-ranges" },
-                    range("Angle", theme.angle, 0, 359, "°", angle => save({ id: "nitro", nitro: { ...theme, angle } })),
-                    range("Strength", current.nitroStrength, 0, 100, "%", nitroStrength => save({ id: "nitro", nitroStrength }))));
+                        : h("p", { className: "lowcord-nitro-empty" }, "Themes you save show up here."),
+                    h("div", { className: "lowcord-nitro-controls" },
+                        h("div", { className: "lowcord-nitro-tile" },
+                            h("span", { className: "lowcord-nitro-eyebrow" }, "Colors"),
+                            h("div", { className: "lowcord-nitro-stops" },
+                                ...theme.colors.map((color, index) => h("span", { key: index, className: "lowcord-nitro-stop" },
+                                    h("label", { className: "lowcord-nitro-chip", style: { background: color } },
+                                        h("input", { type: "color", value: color, "aria-label": `Color ${index + 1}`,
+                                            onChange: event => setColors(theme.colors.map((value, at) => at === index ? event.target.value : value)) })),
+                                    theme.colors.length > 2 ? h("button", { type: "button", className: "lowcord-nitro-remove", "aria-label": `Remove color ${index + 1}`,
+                                        onClick: () => setColors(theme.colors.filter((_, at) => at !== index)) }, "×") : null)),
+                                theme.colors.length < 5 ? h("button", { type: "button", className: "lowcord-nitro-add", "aria-label": "Add a color",
+                                    onClick: () => setColors([...theme.colors, mix(theme.colors.at(-1), theme.colors[0], .5)]) }, "+") : null)),
+                        h("div", { className: "lowcord-nitro-tile" },
+                            range("Angle", theme.angle, 0, 359, "°", angle => save({ id: "nitro", nitro: { ...theme, angle } })),
+                            range("Strength", current.nitroStrength, 0, 100, "%", nitroStrength => save({ id: "nitro", nitroStrength }))))));
         };
 
         // One typeface control for every theme. "" keeps the theme's own (or
