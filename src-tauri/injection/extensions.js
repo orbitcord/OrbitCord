@@ -877,32 +877,49 @@
 
     // Discord's server refuses a new reaction with an emoji the account can't
     // use, but lets it join one already on the message. Any other locked
-    // emoji picked as a reaction is answered here, Discord's own optimistic
-    // reaction is taken back, and the emoji goes as a reply that doesn't ping.
-    function reactAsReply(path) {
-        const match = /^\/channels\/(\d+)\/messages\/(\d+)\/reactions\/([^/]+)\/@me$/.exec(path ?? "");
-        if (!match || !enabled("fakeNitro") || !premium) return false;
-        const [, channelId, messageId] = match;
-        let name, id;
-        try { [name, id] = decodeURIComponent(match[3]).split(":"); } catch { return false; }
+    // emoji picked as a reaction never shows as one: Discord's on-screen
+    // reaction is held back, its request is answered here, and the emoji goes
+    // as a reply that doesn't ping.
+    function lockedReaction(channelId, messageId, id) {
+        if (!enabled("fakeNitro") || !premium || !id || !/^\d+$/.test(id) || !window.Lowcord.RestAPI?.post) return null;
         const user = store("UserStore")?.getCurrentUser?.();
-        if (!id || !/^\d+$/.test(id) || !user || premium.canUseEmojisEverywhere(user)) return false;
+        if (!user || premium.canUseEmojisEverywhere(user)) return null;
         const emoji = store("EmojiStore")?.getCustomEmojiById?.(id);
         const guildId = store("ChannelStore")?.getChannel?.(channelId)?.guild_id ?? null;
-        if (!emoji || (guildId && emoji.guildId === guildId) || emoji.managed) return false;
+        if (!emoji || (guildId && emoji.guildId === guildId) || emoji.managed) return null;
         const message = store("MessageStore")?.getMessage?.(channelId, messageId);
-        if (message?.reactions?.some?.(reaction => reaction?.emoji?.id === id)) return false;
-        if (!window.Lowcord.RestAPI?.post) return false;
-        setTimeout(() => {
-            window.Lowcord.Dispatcher?.dispatch({ type: "MESSAGE_REACTION_REMOVE", channelId, messageId, userId: user.id,
-                emoji: { id, name: emoji.name ?? name, animated: Boolean(emoji.animated) }, optimistic: true, reactionType: 0 });
-            window.Lowcord.RestAPI.post({ url: `/channels/${channelId}/messages`, body: {
-                content: `<${emoji.animated ? "a" : ""}:${emoji.name ?? name}:${id}>`, channel_id: channelId, type: 0, sticker_ids: [],
-                nonce: String((BigInt(Date.now()) - 1420070400000n) << 22n),
-                message_reference: { channel_id: channelId, message_id: messageId, fail_if_not_exists: false },
-                allowed_mentions: { parse: ["users", "roles", "everyone"], replied_user: false } } })
-                .catch(failure => { console.warn("[lowcord] Fake Nitro reaction:", failure); toast("Couldn’t send that reaction. Please try again.", true); });
-        });
+        if (message?.reactions?.some?.(reaction => reaction?.emoji?.id === id)) return null;
+        return emoji;
+    }
+    const repliedReactions = new Set();
+    function replyWithEmoji(channelId, messageId, emoji) {
+        const key = `${channelId}:${messageId}:${emoji.id}`;
+        if (repliedReactions.has(key)) return;
+        repliedReactions.add(key);
+        // Discord sends the request right after drawing the reaction; a retry
+        // of the same pick within a few seconds is still the same reply.
+        setTimeout(() => repliedReactions.delete(key), 5000);
+        window.Lowcord.RestAPI.post({ url: `/channels/${channelId}/messages`, body: {
+            content: `<${emoji.animated ? "a" : ""}:${emoji.name}:${emoji.id}>`, channel_id: channelId, type: 0, sticker_ids: [],
+            nonce: String((BigInt(Date.now()) - 1420070400000n) << 22n),
+            message_reference: { channel_id: channelId, message_id: messageId, fail_if_not_exists: false },
+            allowed_mentions: { parse: ["users", "roles", "everyone"], replied_user: false } } })
+            .catch(failure => { console.warn("[lowcord] Fake Nitro reaction:", failure); toast("Couldn’t send that reaction. Please try again.", true); });
+    }
+    // Discord's request path escapes the @ of @me.
+    function reactAsReply(path) {
+        const match = /^\/channels\/(\d+)\/messages\/(\d+)\/reactions\/([^/]+)\/(?:@|%40)me$/i.exec(path ?? "");
+        if (!match) return false;
+        let id;
+        try { id = decodeURIComponent(match[3]).split(":")[1]; } catch { return false; }
+        const emoji = lockedReaction(match[1], match[2], id);
+        if (!emoji) return false;
+        // Normally the reaction was held back already and its reply sent.
+        if (!repliedReactions.has(`${match[1]}:${match[2]}:${id}`)) {
+            setTimeout(() => window.Lowcord.Dispatcher?.dispatch({ type: "MESSAGE_REACTION_REMOVE", channelId: match[1], messageId: match[2],
+                userId: store("UserStore")?.getCurrentUser?.()?.id, emoji: { id, name: emoji.name, animated: Boolean(emoji.animated) }, optimistic: true, reactionType: 0 }));
+            replyWithEmoji(match[1], match[2], emoji);
+        }
         return true;
     }
 
@@ -1073,6 +1090,10 @@
         dispatcher.addInterceptor(action => {
             if (!enabled("fakeNitro")) return false;
             try {
+                if (action.type === "MESSAGE_REACTION_ADD" && action.optimistic && action.userId === store("UserStore")?.getCurrentUser?.()?.id) {
+                    const emoji = lockedReaction(action.channelId, action.messageId, action.emoji?.id);
+                    if (emoji) { replyWithEmoji(action.channelId, action.messageId, emoji); return true; }
+                }
                 if (action.message) showFakeNitro(action.message);
                 if (Array.isArray(action.messages)) for (const message of action.messages.flat()) showFakeNitro(message);
             } catch (error) { console.warn("[lowcord] Fake Nitro:", error); }

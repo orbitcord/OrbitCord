@@ -153,7 +153,7 @@ test("fake nitro unlocks chat emojis and Nitro-locked stickers, sends them as li
             SelectedChannelStore: { getChannelId: () => String(channel) },
             ChannelStore: { getChannel: id => ({ id, guild_id: id === String(channel) ? "home" : null }) },
             EmojiStore: { getCustomEmojiById: id => ({ 111: { guildId: "home" }, 222: { guildId: "home" }, 333: { guildId: "away" }, 555: { guildId: "away", managed: true },
-                666: { id: "666", name: "spin", guildId: "away", animated: true } })[id] },
+                666: { id: "666", name: "spin", guildId: "away", animated: true }, 888: { id: "888", name: "nod", guildId: "away" } })[id] },
             StickersStore: { getStickerById: id => stickers[id] },
             MessageStore: { getMessage: (channelId, id) => channelId === String(channel) && id === "77"
                 ? { id, reactions: [{ emoji: { id: "333", name: "away" }, count: 1, me: false }] } : null },
@@ -300,6 +300,22 @@ test("fake nitro unlocks chat emojis and Nitro-locked stickers, sends them as li
     expect(await page.evaluate(() => fakeNitroFixture.actions.filter(action => action.type === "MESSAGE_REACTION_REMOVE")
         .map(({ messageId, userId, emoji, optimistic }) => ({ messageId, userId, emoji, optimistic }))))
         .toEqual([{ messageId: "77", userId: "self", emoji: { id: "666", name: "spin", animated: true }, optimistic: true }]);
+
+    // Picked in Discord, the reaction is held back before it shows and the
+    // reply goes once; Discord's request, with its escaped @me, stays local.
+    const held = await page.evaluate(channel => {
+        Lowcord.Dispatcher.dispatch({ type: "MESSAGE_REACTION_ADD", channelId: String(channel), messageId: "77", userId: "self",
+            emoji: { id: "888", name: "nod", animated: false }, optimistic: true });
+        return fakeNitroFixture.actions.some(action => action.type === "MESSAGE_REACTION_ADD");
+    }, channel);
+    expect(held).toBe(false);
+    expect(await xhr(page, "PUT", `/api/v9/channels/${channel}/messages/77/reactions/nod%3A888/%40me?location=Message&type=0`, null, null)).toBe(204);
+    await expect.poll(async () => (await received(page)).length).toBe(10);
+    await page.waitForTimeout(300);
+    expect((await received(page)).length).toBe(10);
+    expect(JSON.parse((await received(page))[9].body)).toMatchObject({ content: "[nod](https://cdn.discordapp.com/emojis/888.webp?size=48&name=nod)",
+        message_reference: { message_id: "77" } });
+    expect(await page.evaluate(() => fakeNitroFixture.actions.filter(action => action.type === "MESSAGE_REACTION_REMOVE").length)).toBe(1);
 });
 
 test("anonymised uploads get 7 random letters, keep extension and spoiler, and match the message", async ({ page }) => {
