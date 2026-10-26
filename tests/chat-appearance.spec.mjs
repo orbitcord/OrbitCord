@@ -862,6 +862,22 @@ test("keycap and subdivision flag emoji show without a bubble", async ({ page })
     await expect(page.locator('#chat-messages-100-95 [data-lowcord-emoji="true"]')).toHaveCount(1);
 });
 
+test("an emoji-only reply shows without a bubble, under its quote", async ({ page }) => {
+    await load(page);
+    await page.evaluate(() => {
+        const content = "<:wave:111>";
+        window.fixture.add(97, "self", `<div class="messageContent_test"><span class="emojiContainer_test"><img class="emoji_test jumboable_test" alt=":wave:" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'/%3E" width="48" height="48"></span></div>`,
+            { content, messageReference: { channel_id: "100", message_id: "1" } }, true);
+    });
+    const row = page.locator('#chat-messages-100-97 > .message_test');
+    await expect(row).toHaveAttribute("data-lowcord-emoji", "true");
+    await expect(row).not.toHaveAttribute("data-lowcord-bubble", /.*/);
+    const quote = await page.locator('#chat-messages-100-97 .repliedMessage_test').boundingBox(), emoji = await page.locator('#chat-messages-100-97 .emoji_test').boundingBox();
+    expect(quote.y + quote.height).toBeLessThanOrEqual(emoji.y + 1);
+    const rowBox = await page.locator('#chat-messages-100-97').boundingBox();
+    expect(emoji.y + emoji.height).toBeLessThanOrEqual(rowBox.y + rowBox.height + 1);
+});
+
 test("the bubble side dropdown moves your bubbles and is saved", async ({ page }) => {
     await load(page);
     const side = page.getByRole("combobox", { name: "Bubble side" });

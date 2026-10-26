@@ -473,7 +473,8 @@ function setupLowcordChatAppearance() {
         const invoker = message.interactionMetadata?.user?.id ?? message.interaction_metadata?.user?.id ?? message.interaction?.user?.id;
         const isCommand = message.type === 20 || message.type === 23;
         const side = message.author?.id === userID || (isCommand && invoker === userID) ? "outgoing" : "incoming";
-        const emoji = isEmojiOnly(message) && !message.messageReference && !message.message_reference;
+        // A reply that is only emoji, such as a Fake Nitro reaction, has no bubble either.
+        const emoji = isEmojiOnly(message);
         return { message, inputs: inputs(message), entry: { row, surface, message, side,
             alignment: side === "outgoing" ? options.outgoingPosition : "left", emoji,
             media: emoji || hasRichContent(message, surface), date: new Date(message.timestamp), author: message.author?.id,

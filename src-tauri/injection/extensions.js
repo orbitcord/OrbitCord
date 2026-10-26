@@ -8,7 +8,7 @@
     const storageKey = "lowcord.extensions";
     const catalog = [
         { id: "anonymiseFileNames", title: "Anonymise file names", description: "Randomise upload names. Keep file types and spoiler tags." },
-        { id: "compressVideos", title: "Compress media", description: "Shrink large images, videos and GIFs below 20 MB in DMs and 100 MB in servers. Images retain transparency; GIFs stay GIFs. Requires FFmpeg; optionally uses Gifsicle for GIF optimization." },
+        { id: "compressVideos", title: "Compress media", description: "Shrink large videos, images and GIFs to fit Discord's upload limit. Needs FFmpeg." },
         { id: "voiceMessages", title: "Voice messages", description: "Use the waveform button to record a voice message." },
         { id: "redgifsPicker", title: "RedGIFs picker", description: "Browse and search RedGIFs, then send a video as an MP4 file." },
         { id: "mediaSources", title: "Media sources", description: "Browse GifReels and XXXTik and send original images or videos with one click." },
@@ -22,7 +22,7 @@
         { id: "dmQuickReply", title: "DM quick reply", description: "Hover over a DM in the list to read and reply without switching chats." },
         { id: "quickReply", title: "Quick reply", description: "Shift + ↑/↓ in an empty box picks a message to reply to. Esc cancels. Replaces the edit shortcut." },
         { id: "clickReply", title: "Click to reply", description: "Click a chat bubble to reply to it. Works when chat appearance uses bubbles." },
-        { id: "fakeNitro", title: "Fake Nitro", description: "Use any server's emojis and stickers in chat and reactions. Ones your account can't send go as image links; a reaction Discord won't take goes as a reply. Does nothing on accounts with Nitro." },
+        { id: "fakeNitro", title: "Fake Nitro", description: "Use any server's emojis and stickers without Nitro." },
         { id: "cleanUrls", title: "Clean links", description: "Remove tracking parameters from links you send." },
         { id: "silentTyping", title: "Silent typing", description: "Hide your typing indicator." },
         { id: "noTracking", title: "No tracking", description: "Block Discord analytics, crash reports and desktop app prompts." },
