@@ -613,8 +613,22 @@
         const content = surface.querySelector(`[id="message-content-${messageId}"]`);
         if (content?.contains(target)) {
             for (let node = target; node && node !== content; node = node.parentElement) if (node.matches(clickReplyExcluded)) return null;
-        } else if (!surface.hasAttribute("data-lowcord-bubble")
-            || (target !== surface && !(target.parentElement === surface && !target.id && target.matches('[class*="contents_"]')))) return null;
+            return surface.parentElement;
+        }
+        if (!surface.hasAttribute("data-lowcord-bubble")) return null;
+        // The rest of a text bubble: its padding, the contents column, and the
+        // empty space around its reactions. The pills and the add-reaction
+        // button keep their clicks; embeds and attachments aren't wrappers.
+        const accessories = surface.querySelector(`:scope > [id="message-accessories-${messageId}"]`);
+        const reactions = accessories?.querySelector(`[id="message-reactions-${messageId}"]`);
+        if (reactions?.contains(target)) {
+            for (let node = target; node !== reactions; node = node.parentElement) {
+                if (node.matches(clickReplyExcluded) || node.matches('[class*="reaction"]')) return null;
+            }
+            return surface.parentElement;
+        }
+        if (target !== surface && target !== accessories
+            && !(target.parentElement === surface && !target.id && target.matches('[class*="contents_"]'))) return null;
         return surface.parentElement;
     }
     // Everything needed to reply to a row, or null if it can't be replied to

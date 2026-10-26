@@ -162,6 +162,7 @@ async function bubbles(page) {
             .media_t { display: block; width: 120px; height: 60px; background: #444; }
             .reactions_t { display: flex; }
             .buttons_t { pointer-events: auto; }
+            .reaction_t { padding: 4px; }
             .buttonContainer_t { z-index: 5; }</style>`);
         for (const id of ["1", "2", "3", "5", "6"]) {
             document.querySelector(`[id="chat-messages-100-${id}"] > div`).innerHTML = `<div class="contents_t"><div class="header_t"><span class="username_t" role="button">Name ${id}</span></div>
@@ -170,7 +171,10 @@ async function bubbles(page) {
                     <img class="emoji_t" alt=":)" width="16" height="16" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
                     <span class="spoilerContent_t" role="button"><span>secret</span></span> <code class="inlineCode_t">code</code>
                     <time datetime="2024-01-01">today</time></div></div>
-                <div class="container_t"><div class="reactions_t"><div class="reaction_t" role="button">👍 1</div></div></div>
+                <div id="message-accessories-${id}" class="container_t"><div id="message-reactions-${id}" class="reactions_t" role="group">
+                    <div></div><div><div class="reaction_t reactionMe_t"><div class="reactionInner_t" role="button">👍 1</div></div></div>
+                    <span><div class="reactionBtn_t" role="button" aria-label="Add reaction ${id}">+</div></span></div>
+                    ${id === "2" ? '<div class="linkPreview_t">Preview 2</div>' : ""}</div>
                 <div class="buttonContainer_t"><div class="buttons_t"><div class="buttonsInner_t"><button aria-label="More ${id}">…</button></div></div></div>`;
         }
         // Message 4 is media with a caption bubble.
@@ -219,6 +223,24 @@ test.describe("click to reply", () => {
         // A caption bubble replies to its media message.
         await page.getByText("Caption 4").click();
         await expect(target(page)).toHaveText("4");
+    });
+
+    test("empty space around reactions replies; reaction pills and other accessories don't", async ({ page }) => {
+        const reactions = page.locator('[id="message-reactions-1"]');
+        const box = await reactions.boundingBox();
+        await reactions.click({ position: { x: box.width - 4, y: box.height / 2 } });
+        await expect(target(page)).toHaveText("1");
+        await resetReply(page);
+        // The gap between the text and the reaction row.
+        await page.locator('[id="message-accessories-1"]').evaluate(node => node.style.setProperty("padding-top", "6px", "important"));
+        await page.locator('[id="message-accessories-1"]').click({ position: { x: 40, y: 2 } });
+        await expect(target(page)).toHaveText("1");
+        await resetReply(page);
+        const row = page.locator('[id="chat-messages-100-1"]');
+        for (const part of [row.locator(".reaction_t"), row.getByRole("button", { name: "Add reaction 1" }), page.getByText("Preview 2")]) {
+            await part.click({ position: { x: 1, y: 1 } });
+            await expectNoReply(page);
+        }
     });
 
     test("links, mentions, emojis, spoilers, code, times, reactions, the toolbar and media keep their own clicks", async ({ page }) => {
