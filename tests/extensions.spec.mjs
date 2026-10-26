@@ -152,7 +152,8 @@ test("fake nitro unlocks chat emojis and Nitro-locked stickers, sends them as li
             UserStore: { getCurrentUser: () => ({ id: "self", premiumType: 0 }) },
             SelectedChannelStore: { getChannelId: () => String(channel) },
             ChannelStore: { getChannel: id => ({ id, guild_id: id === String(channel) ? "home" : null }) },
-            EmojiStore: { getCustomEmojiById: id => ({ 111: { guildId: "home" }, 222: { guildId: "home" }, 333: { guildId: "away" }, 555: { guildId: "away", managed: true } })[id] },
+            EmojiStore: { getCustomEmojiById: id => ({ 111: { guildId: "home" }, 222: { guildId: "home" }, 333: { guildId: "away" }, 555: { guildId: "away", managed: true },
+                666: { id: "666", name: "spin", guildId: "away", animated: true } })[id] },
             StickersStore: { getStickerById: id => stickers[id] },
             MessageStore: { getMessage: (channelId, id) => channelId === String(channel) && id === "77"
                 ? { id, reactions: [{ emoji: { id: "333", name: "away" }, count: 1, me: false }] } : null },
@@ -166,7 +167,9 @@ test("fake nitro unlocks chat emojis and Nitro-locked stickers, sends them as li
             Object.setPrototypeOf(store, Store.prototype);
         }
         window.fakeNitroFixture = fixture;
-        window.webpackChunkdiscord_app[0][2]({ c: { fakeNitro: { exports: { premium, emojiHelpers, intentions, picker, dispatcher, ...stores } } } });
+        const rest = { get() {}, put() {}, patch() {}, del() {},
+            post: ({ url, body }) => fetch(`/api/v9${url}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }) };
+        window.webpackChunkdiscord_app[0][2]({ c: { fakeNitro: { exports: { premium, emojiHelpers, intentions, picker, dispatcher, rest, ...stores } } } });
         // Discord's picker markup in both looks: an older greyed-out
         // unsendable node, and a newer darkened one with a lock icon inside a
         // tinted section under a lock divider, with a floating upsell.
@@ -196,30 +199,14 @@ test("fake nitro unlocks chat emojis and Nitro-locked stickers, sends them as li
         });
     }, channel);
     await expect.poll(() => page.evaluate(() => fakeNitroFixture.emojiHelpers.getEmojiUnavailableReason({ intention: 3 }))).toBe(null);
-    // Chat intentions are unlocked; reactions and statuses keep Discord's answer.
+    // Chat and reactions are unlocked; statuses and the rest keep Discord's answer.
     expect(await page.evaluate(() => [3, 9, 0, 1].map(intention => fakeNitroFixture.emojiHelpers.getEmojiUnavailableReason({ intention }))))
-        .toEqual([null, null, "locked:0", "locked:1"]);
+        .toEqual([null, null, null, "locked:1"]);
     expect(await page.evaluate(() => [fakeNitroFixture.emojiHelpers.isEmojiPremiumLocked({ intention: 3 }),
-        fakeNitroFixture.emojiHelpers.getEmojiUnavailableReasons({ intention: 0 }).locked])).toEqual([false, true]);
-    // A server's section in the chat picker loses its locked look and upsell.
-    expect(await page.evaluate(() => [3, 0].map(intention => fakeNitroFixture.emojiHelpers.isEmojiCategoryNitroLocked({ intention }))))
-        .toEqual([false, true]);
-
-    // Discord refuses a new reaction with a locked emoji but lets one join an
-    // existing reaction, so the reaction picker unlocks just those emojis.
-    await page.evaluate(channel => document.querySelector("main").insertAdjacentHTML("beforeend",
-        `<ol><li id="chat-messages-${channel}-77"><button aria-label="Add Reaction">+</button></li><li id="chat-messages-${channel}-78"><button aria-label="Add Reaction">+</button></li></ol>`), channel);
-    const reactionLocks = () => page.evaluate(channel => {
-        const helpers = fakeNitroFixture.emojiHelpers, options = { channel: { id: String(channel) }, intention: 0 };
-        const emojis = [{ id: "333" }, { id: "444" }];
-        return { single: emojis.map(emoji => helpers.isEmojiDisabled?.({ ...options, emoji }) ?? helpers.getEmojiUnavailableReason({ ...options, emoji })),
-            bulk: [...helpers.getEmojiUnavailableReasons({ ...options, categoryEmojis: emojis }).emojisDisabled],
-            otherChannel: helpers.getEmojiUnavailableReason({ ...options, channel: { id: "1" }, emoji: emojis[0] }) };
-    }, channel);
-    await page.locator(`[id="chat-messages-${channel}-77"] button`).click();
-    expect(await reactionLocks()).toEqual({ single: [null, "locked:0"], bulk: ["444"], otherChannel: "locked:0" });
-    await page.locator(`[id="chat-messages-${channel}-78"] button`).click();
-    expect(await reactionLocks()).toEqual({ single: ["locked:0", "locked:0"], bulk: ["333", "444"], otherChannel: "locked:0" });
+        fakeNitroFixture.emojiHelpers.getEmojiUnavailableReasons({ intention: 1 }).locked])).toEqual([false, true]);
+    // A server's section in the picker loses its locked look and upsell.
+    expect(await page.evaluate(() => [3, 0, 1].map(intention => fakeNitroFixture.emojiHelpers.isEmojiCategoryNitroLocked({ intention }))))
+        .toEqual([false, false, true]);
 
     // Stickers OrbitCord can send lose the locked look in both of Discord's styles;
     // a section keeps it while any of its stickers stays locked.
@@ -297,6 +284,22 @@ test("fake nitro unlocks chat emojis and Nitro-locked stickers, sends them as li
     await page.evaluate(() => { fakeNitroFixture.canExternal = true; });
     await page.locator('[data-id="8"][role="button"]').click();
     expect(await page.evaluate(() => fakeNitroFixture.picked.at(-1))).toBe("8");
+
+    await setExtension(page, "fakeNitro", true);
+    // Discord refuses a new reaction with a locked emoji but lets one join an
+    // existing reaction. Joining, a usable emoji and a Unicode one react for
+    // real; any other locked emoji goes as a reply that doesn't ping.
+    const react = emoji => xhr(page, "PUT", `/api/v9/channels/${channel}/messages/77/reactions/${encodeURIComponent(emoji)}/@me`, null, null);
+    for (const emoji of ["away:333", "wave:111", "👍", "spin:666"]) expect(await react(emoji)).toBe(emoji === "spin:666" ? 204 : 200);
+    await expect.poll(async () => (await received(page)).length).toBe(9);
+    const reactions = (await received(page)).slice(5);
+    expect(reactions.slice(0, 3).map(entry => [entry.method, decodeURIComponent(entry.path.split("/reactions/")[1])]))
+        .toEqual([["PUT", "away:333/@me"], ["PUT", "wave:111/@me"], ["PUT", "👍/@me"]]);
+    expect(JSON.parse(reactions[3].body)).toMatchObject({ content: "[spin](https://cdn.discordapp.com/emojis/666.gif?size=48&name=spin)",
+        message_reference: { channel_id: String(channel), message_id: "77" }, allowed_mentions: { replied_user: false } });
+    expect(await page.evaluate(() => fakeNitroFixture.actions.filter(action => action.type === "MESSAGE_REACTION_REMOVE")
+        .map(({ messageId, userId, emoji, optimistic }) => ({ messageId, userId, emoji, optimistic }))))
+        .toEqual([{ messageId: "77", userId: "self", emoji: { id: "666", name: "spin", animated: true }, optimistic: true }]);
 });
 
 test("anonymised uploads get 7 random letters, keep extension and spoiler, and match the message", async ({ page }) => {

@@ -22,7 +22,7 @@
         { id: "dmQuickReply", title: "DM quick reply", description: "Hover over a DM in the list to read and reply without switching chats." },
         { id: "quickReply", title: "Quick reply", description: "Shift + ↑/↓ in an empty box picks a message to reply to. Esc cancels. Replaces the edit shortcut." },
         { id: "clickReply", title: "Click to reply", description: "Click a chat bubble to reply to it. Works when chat appearance uses bubbles." },
-        { id: "fakeNitro", title: "Fake Nitro", description: "Use any server's emojis and stickers in chat. Ones your account can't send go as image links." },
+        { id: "fakeNitro", title: "Fake Nitro", description: "Use any server's emojis and stickers in chat and reactions. Ones your account can't send go as image links; a reaction Discord won't take goes as a reply." },
         { id: "cleanUrls", title: "Clean links", description: "Remove tracking parameters from links you send." },
         { id: "silentTyping", title: "Silent typing", description: "Hide your typing indicator." },
         { id: "noTracking", title: "No tracking", description: "Block Discord analytics, crash reports and desktop app prompts." },
@@ -730,6 +730,7 @@
         if (!target) return null;
         const { path } = target;
         if (enabled("silentTyping") && method === "POST" && /^\/channels\/\d+\/typing$/.test(path ?? "")) return "ok";
+        if (method === "PUT" && reactAsReply(path)) return "ok";
         if (enabled("noTracking")) {
             if (/^\/(science|track|metrics(\/v2)?)$/.test(path ?? "")) return "ok";
             // Discord tunnels Sentry crash reports through its own origin.
@@ -849,48 +850,16 @@
     let reactionIntention = 0;
     let premium, pickerStore;
     const store = name => window.Lowcord.store(name);
-    // Discord's server refuses a new reaction with an emoji the account can't
-    // use, but lets it join one already on the message. The reaction picker
-    // unlocks just those, for the message it was opened from: the toolbar,
-    // reaction bar and context menu all live in the message's row.
-    let reactionTarget = null;
-    window.addEventListener("pointerdown", event => {
-        const row = event.target instanceof Element ? event.target.closest('[id^="chat-messages-"]') : null;
-        const match = row && /^chat-messages-(\d+)-(\d+)$/.exec(row.id);
-        if (match) reactionTarget = { channelId: match[1], messageId: match[2] };
-    }, true);
-    function joinableEmojiIds(options) {
-        if (!reactionTarget || options.channel?.id !== reactionTarget.channelId) return null;
-        const reactions = store("MessageStore")?.getMessage?.(reactionTarget.channelId, reactionTarget.messageId)?.reactions;
-        const ids = new Set((Array.isArray(reactions) ? reactions : []).map(reaction => reaction?.emoji?.id).filter(Boolean));
-        return ids.size ? ids : null;
-    }
     window.Lowcord.waitFor(window.Lowcord.filters.byProps("getEmojiUnavailableReason", "getEmojiUnavailableReasons", "isEmojiPremiumLocked"), helpers => {
-        const unavailable = helpers.getEmojiUnavailableReason;
         for (const [name, helper] of Object.entries(helpers)) {
             if (typeof helper !== "function") continue;
             helpers[name] = function (options, ...rest) {
-                if (!enabled("fakeNitro") || !options || typeof options !== "object") return helper.call(this, options, ...rest);
-                if (chatIntentions.has(options.intention)) {
+                if (enabled("fakeNitro") && options && typeof options === "object"
+                    && (chatIntentions.has(options.intention) || options.intention === reactionIntention)) {
                     // This one drops the flag before checking each emoji, so a
                     // server's section would keep its locked look and upsell.
                     if (name === "isEmojiCategoryNitroLocked") return false;
                     options = { ...options, bypassPremiumEmojiEntitlement: true };
-                } else if (options.intention === reactionIntention) {
-                    const joinable = joinableEmojiIds(options);
-                    // The flag lifts only the Nitro lock; any other reason stays.
-                    if (joinable && name === "getEmojiUnavailableReasons") {
-                        const result = helper.call(this, options, ...rest);
-                        for (const emoji of options.categoryEmojis ?? []) {
-                            if (!joinable.has(emoji?.id) || !result?.emojisDisabled?.has?.(emoji.id)) continue;
-                            if (unavailable.call(this, { emoji, channel: options.channel, guildId: options.guildId, intention: options.intention,
-                                bypassPremiumEmojiEntitlement: true }) !== null) continue;
-                            result.emojisDisabled.delete(emoji.id);
-                            if (result.emojisPremiumLockedCount > 0) result.emojisPremiumLockedCount--;
-                        }
-                        return result;
-                    }
-                    if (joinable?.has(options.emoji?.id)) options = { ...options, bypassPremiumEmojiEntitlement: true };
                 }
                 return helper.call(this, options, ...rest);
             };
@@ -905,6 +874,37 @@
     // The expression picker's state store; clearing activeView closes it.
     window.Lowcord.waitFor(value => typeof value === "function" && typeof value.getState === "function" && typeof value.setState === "function"
         && value.getState()?.isNitroLockedSectionVisible !== undefined, picker => { pickerStore = picker; markStickers(); });
+
+    // Discord's server refuses a new reaction with an emoji the account can't
+    // use, but lets it join one already on the message. Any other locked
+    // emoji picked as a reaction is answered here, Discord's own optimistic
+    // reaction is taken back, and the emoji goes as a reply that doesn't ping.
+    function reactAsReply(path) {
+        const match = /^\/channels\/(\d+)\/messages\/(\d+)\/reactions\/([^/]+)\/@me$/.exec(path ?? "");
+        if (!match || !enabled("fakeNitro") || !premium) return false;
+        const [, channelId, messageId] = match;
+        let name, id;
+        try { [name, id] = decodeURIComponent(match[3]).split(":"); } catch { return false; }
+        const user = store("UserStore")?.getCurrentUser?.();
+        if (!id || !/^\d+$/.test(id) || !user || premium.canUseEmojisEverywhere(user)) return false;
+        const emoji = store("EmojiStore")?.getCustomEmojiById?.(id);
+        const guildId = store("ChannelStore")?.getChannel?.(channelId)?.guild_id ?? null;
+        if (!emoji || (guildId && emoji.guildId === guildId) || emoji.managed) return false;
+        const message = store("MessageStore")?.getMessage?.(channelId, messageId);
+        if (message?.reactions?.some?.(reaction => reaction?.emoji?.id === id)) return false;
+        if (!window.Lowcord.RestAPI?.post) return false;
+        setTimeout(() => {
+            window.Lowcord.Dispatcher?.dispatch({ type: "MESSAGE_REACTION_REMOVE", channelId, messageId, userId: user.id,
+                emoji: { id, name: emoji.name ?? name, animated: Boolean(emoji.animated) }, optimistic: true, reactionType: 0 });
+            window.Lowcord.RestAPI.post({ url: `/channels/${channelId}/messages`, body: {
+                content: `<${emoji.animated ? "a" : ""}:${emoji.name ?? name}:${id}>`, channel_id: channelId, type: 0, sticker_ids: [],
+                nonce: String((BigInt(Date.now()) - 1420070400000n) << 22n),
+                message_reference: { channel_id: channelId, message_id: messageId, fail_if_not_exists: false },
+                allowed_mentions: { parse: ["users", "roles", "everyone"], replied_user: false } } })
+                .catch(failure => { console.warn("[lowcord] Fake Nitro reaction:", failure); toast("Couldn’t send that reaction. Please try again.", true); });
+        });
+        return true;
+    }
 
     // Only the Nitro lock is lifted. A server that turns off external stickers,
     // a sticker its server lost with its boosts, and Lottie stickers, which
