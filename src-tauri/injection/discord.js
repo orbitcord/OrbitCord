@@ -7,17 +7,20 @@
     const chunks = (window.webpackChunkdiscord_app ??= []);
     chunks.push([[Symbol("lowcord")], {}, require => { wreq = require; }]);
 
-    function* exportsOf() {
+    // Visits every module export and its properties until visit() returns
+    // true. A plain loop: a generator costs a resumption per value, and a
+    // Discord-sized cache yields hundreds of thousands of them.
+    function eachExport(visit) {
         if (!wreq?.c) return;
         for (const id in wreq.c) {
             const exports = wreq.c[id]?.exports;
             if (exports == null || exports === window) continue;
-            yield exports;
+            if (visit(exports)) return;
             if (typeof exports !== "object") continue;
             for (const key in exports) {
                 let value;
                 try { value = exports[key]; } catch { continue; }
-                if (value != null && value !== exports && value !== window) yield value;
+                if (value != null && value !== exports && value !== window && visit(value)) return;
             }
         }
     }
@@ -25,10 +28,12 @@
     // anything that has a made-up property is skipped.
     const probe = "__lowcordProbe__";
     function find(filter) {
-        for (const value of exportsOf()) {
-            try { if (value[probe] === undefined && filter(value)) return value; } catch {}
-        }
-        return null;
+        let found = null;
+        eachExport(value => {
+            try { if (value[probe] === undefined && filter(value)) { found = value; return true; } } catch {}
+            return false;
+        });
+        return found;
     }
     const filters = {
         byProps: (...props) => value => props.every(prop => typeof value?.[prop] === "function"),
@@ -48,14 +53,14 @@
         scannedModules = modules; scannedAt = Date.now();
         const unresolved = new Set(pending), resolved = [];
         // Enumerate exports once, rather than once for every pending feature.
-        for (const value of exportsOf()) {
-            try { if (value[probe] !== undefined) continue; } catch { continue; }
+        eachExport(value => {
+            try { if (value[probe] !== undefined) return false; } catch { return false; }
             for (const entry of unresolved) {
                 try { if (!entry.filter(value)) continue; } catch { continue; }
                 unresolved.delete(entry); resolved.push([entry, value]);
             }
-            if (!unresolved.size) break;
-        }
+            return !unresolved.size;
+        });
         for (const [entry, value] of resolved) {
             pending.delete(entry);
             if (entry.name) { pendingStores.delete(entry.name); cache.set(`store:${entry.name}`, value); }
@@ -80,14 +85,19 @@
         pendingStores.set(name, entry); pending.add(entry);
         scannedModules = -1; timer ??= setInterval(poll, 250);
     }
-    const cache = new Map();
+    // A lookup that found nothing is not repeated until the module cache grows
+    // or a second passes: clicks, keys and uploads look up stores Discord may
+    // not have loaded, and each miss would scan the whole cache again.
+    const cache = new Map(), misses = new Map();
     function cached(key, filter) {
-        if (!cache.has(key)) {
-            const value = find(filter);
-            if (!value) return null;
-            cache.set(key, value);
-        }
-        return cache.get(key);
+        if (cache.has(key)) return cache.get(key);
+        const modules = wreq?.c ? Object.keys(wreq.c).length : 0, miss = misses.get(key);
+        if (miss && miss.modules === modules && Date.now() - miss.at < 1000) return null;
+        const value = find(filter);
+        if (!value) { misses.set(key, { modules, at: Date.now() }); return null; }
+        misses.delete(key);
+        cache.set(key, value);
+        return value;
     }
 
     // One observer for every Lowcord feature. onDomMutation listeners get raw

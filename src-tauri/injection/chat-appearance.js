@@ -79,6 +79,8 @@ function setupLowcordChatAppearance() {
     function usersChanged() { avatarsChanged = true; scheduleRefresh(); }
     const storeListeners = new Map();
     let enabled = true;
+    // Whether bubbles may be on the page; cleared once they have been removed.
+    let drawn = true;
     let stopObserving;
     const resizedTimelines = new Set();
     const resizeObserver = new ResizeObserver(() => invalidate());
@@ -488,7 +490,16 @@ function setupLowcordChatAppearance() {
         const userID = stores.get("UserStore")?.getCurrentUser()?.id;
         const channelEnabled = channel?.type === 1 ? options.dms : channel?.type === 3
             ? options.groupDms : false;
-        if (!channelEnabled || !userID) { clearBubbles(); return; }
+        if (!channelEnabled || !userID) {
+            // Servers and disabled chats draw nothing. Clear once, then stop
+            // watching every class change in Discord until a chat needs
+            // bubbles again (a store change brings this refresh back).
+            stopObserving?.(); stopObserving = undefined;
+            if (drawn) { drawn = false; clearBubbles(); }
+            return;
+        }
+        drawn = true;
+        observeTimeline();
         const nextContext = `${channelID}:${channel.type}:${userID}`;
         if (context !== nextContext) { context = nextContext; fullRefresh = structureChanged = true; }
         const format = Intl.DateTimeFormat().resolvedOptions();
@@ -594,54 +605,64 @@ function setupLowcordChatAppearance() {
         storeListeners.clear();
         if (frame !== undefined) cancelAnimationFrame(frame);
         frame = undefined;
-        if (!enabled) { clearBubbles(); return; }
+        if (!enabled) { drawn = false; clearBubbles(); return; }
         for (const [name, store] of stores) {
             const listener = name === "MessageStore" ? messageChanged : name === "UserStore" ? usersChanged : invalidate;
             storeListeners.set(store, listener); store.addChangeListener?.(listener);
         }
         fullRefresh = structureChanged = true;
-        if (document.body) {
-            // Discord virtualizes the timeline. MutationObserver already
-            // batches each DOM commit and runs before paint. Deferring again
-            // to rAF lets rows committed during a frame paint once without
-            // their bubble (including pending -> confirmed replacements).
-            stopObserving = Lowcord.onDomMutation(records => {
-                // The app shell, member list, composer and settings animate
-                // independently. Only timeline changes need a message scan.
-                let relevant = false;
-                const selector = '[id^="chat-messages-"]';
-                for (const record of records) {
-                    const target = record.target instanceof Element ? record.target : record.target.parentElement;
-                    const row = target?.closest(selector);
-                    const nodes = [...record.addedNodes, ...record.removedNodes];
-                    if (record.type === "childList" && nodes.length && nodes.every(node => node instanceof Element &&
-                        node.matches('.lowcord-bubble-time, .lowcord-bubble-avatar'))) continue;
-                    if (target?.closest('.lowcord-bubble-time, .lowcord-bubble-avatar')) continue;
-                    // Hovering mounts Discord's toolbar; CSS alone places it.
-                    if (target?.closest(actionsSelector) || (nodes.length && nodes.every(node => node instanceof Element && node.matches(actionsSelector)))) continue;
-                    // Hovering swaps faces and avatar decorations to animated
-                    // images. They never change a bubble; refreshing for each
-                    // swap forced layouts while the pointer moved.
-                    if (record.attributeName === "src" && target instanceof HTMLImageElement && isChromeImage(target)) continue;
-                    if (row) { dirtyRows.add(row); relevant = true; }
-                    if (record.attributeName === "id" && row) structureChanged = true;
-                    if (record.attributeName === "id" && renderedRows.has(target)) { structureChanged = true; relevant = true; }
-                    for (const node of nodes) if (node instanceof Element &&
-                        (node.matches(selector) || node.querySelector(selector))) {
-                        if (node.matches(selector)) dirtyRows.add(node);
-                        node.querySelectorAll(selector).forEach(row => dirtyRows.add(row));
-                        structureChanged = true; relevant = true;
-                    }
-                    if (target?.closest(uploaderSelector) || nodes.some(node => node instanceof Element &&
-                        (node.matches(uploaderSelector) || node.querySelector(uploaderSelector)))) { structureChanged = true; relevant = true; }
-                }
-                if (relevant) {
-                    if (frame !== undefined) cancelAnimationFrame(frame);
-                    refresh();
-                }
-            });
-        }
         scheduleRefresh();
+    }
+
+    function observeTimeline() {
+        if (stopObserving || !document.body) return;
+        // Discord virtualizes the timeline. MutationObserver already
+        // batches each DOM commit and runs before paint. Deferring again
+        // to rAF lets rows committed during a frame paint once without
+        // their bubble (including pending -> confirmed replacements).
+        // Subscribing can hand over records queued before it; the full
+        // refresh that subscribes reads every row anyway.
+        let ready = false;
+        stopObserving = Lowcord.onDomMutation(records => {
+            if (!ready) return;
+            // The app shell, member list, composer and settings animate
+            // independently. Only timeline changes need a message scan.
+            let relevant = false;
+            const selector = '[id^="chat-messages-"]', watchedSelector = `${selector}, ${uploaderSelector}`;
+            for (const record of records) {
+                const target = record.target instanceof Element ? record.target : record.target.parentElement;
+                // Most records are class changes across the app (hover, focus,
+                // animations). Outside a row or upload card they change nothing.
+                if (record.attributeName === "class" && !target?.closest(watchedSelector)) continue;
+                const row = target?.closest(selector);
+                const nodes = [...record.addedNodes, ...record.removedNodes];
+                if (record.type === "childList" && nodes.length && nodes.every(node => node instanceof Element &&
+                    node.matches('.lowcord-bubble-time, .lowcord-bubble-avatar'))) continue;
+                if (target?.closest('.lowcord-bubble-time, .lowcord-bubble-avatar')) continue;
+                // Hovering mounts Discord's toolbar; CSS alone places it.
+                if (target?.closest(actionsSelector) || (nodes.length && nodes.every(node => node instanceof Element && node.matches(actionsSelector)))) continue;
+                // Hovering swaps faces and avatar decorations to animated
+                // images. They never change a bubble; refreshing for each
+                // swap forced layouts while the pointer moved.
+                if (record.attributeName === "src" && target instanceof HTMLImageElement && isChromeImage(target)) continue;
+                if (row) { dirtyRows.add(row); relevant = true; }
+                if (record.attributeName === "id" && row) structureChanged = true;
+                if (record.attributeName === "id" && renderedRows.has(target)) { structureChanged = true; relevant = true; }
+                for (const node of nodes) if (node instanceof Element &&
+                    (node.matches(selector) || node.querySelector(selector))) {
+                    if (node.matches(selector)) dirtyRows.add(node);
+                    node.querySelectorAll(selector).forEach(row => dirtyRows.add(row));
+                    structureChanged = true; relevant = true;
+                }
+                if (target?.closest(uploaderSelector) || nodes.some(node => node instanceof Element &&
+                    (node.matches(uploaderSelector) || node.querySelector(uploaderSelector)))) { structureChanged = true; relevant = true; }
+            }
+            if (relevant) {
+                if (frame !== undefined) cancelAnimationFrame(frame);
+                refresh();
+            }
+        });
+        ready = true;
     }
 
     function setEnabled(value) {

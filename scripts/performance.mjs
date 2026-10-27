@@ -14,7 +14,7 @@ const options = Object.fromEntries(process.argv.slice(2).filter(arg => arg !== '
 const scenario = options.scenario || 'all', iterations = Number(options.iterations || 3);
 const rows = String(options.rows || '50,200,500').split(',').map(Number);
 const clipMiB = Number(options['clip-mib'] ?? 64), idleSeconds = Number(options['idle-seconds'] ?? 10);
-if (!['all', 'chat', 'media', 'startup', 'idle', 'visual', 'playback', 'dom', 'modules'].includes(scenario) || !Number.isInteger(iterations) || iterations < 1 || iterations > 30
+if (!['all', 'chat', 'media', 'startup', 'idle', 'visual', 'playback', 'dom', 'modules', 'guild', 'embeds', 'lookups'].includes(scenario) || !Number.isInteger(iterations) || iterations < 1 || iterations > 30
     || rows.some(value => !Number.isInteger(value) || value < 1 || value > 2000)
     || !Number.isInteger(clipMiB) || clipMiB < 1 || clipMiB > 80
     || !Number.isInteger(idleSeconds) || idleSeconds < 1 || idleSeconds > 60) throw new Error('Invalid benchmark options');
@@ -269,6 +269,138 @@ async function moduleBenchmarks() {
         } finally { await page.close(); }
     }
 }
+// Bubbles are on but the open channel is a server channel: Discord's stores
+// and timeline keep changing while Lowcord has nothing to draw.
+async function guildBenchmarks() {
+    browser ??= await chromium.launch({ headless: true }); report.environment.chromium = browser.version();
+    for (let repeat = 0; repeat < iterations; repeat++) for (const variant of repeat % 2 ? variants.slice().reverse() : variants) {
+        const page = await chatPage(variant);
+        try {
+            await page.evaluate(async () => {
+                const frame = () => new Promise(requestAnimationFrame);
+                fixture.channel = { type: 0 }; fixture.emit('SelectedChannelStore');
+                for (let i = 0; i < 4; i++) await frame();
+                document.querySelector('#timeline').replaceChildren();
+                for (const key of Object.keys(fixture.messages)) delete fixture.messages[key];
+                for (let i = 0; i < 200; i++) fixture.add(1000 + i, i % 2 ? 'self' : 'other', `<div class="messageContent_test">Message ${i}</div>`);
+                for (let i = 0; i < 6; i++) await frame();
+                window.__perf = [];
+            });
+            const cdp = await page.context().newCDPSession(page); await cdp.send('Performance.enable');
+            const metrics = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(item => [item.name, item.value]));
+            const before = await metrics();
+            const data = await page.evaluate(async () => {
+                const frame = () => new Promise(requestAnimationFrame);
+                const rows = [...document.querySelectorAll('[id^="chat-messages-"] .message_test')];
+                for (let i = 0; i < 300; i++) {
+                    // Hover, selection and presence classes change on every frame.
+                    rows[(i + 199) % 200].classList.remove('hovered_test'); rows[i % 200].classList.add('hovered_test');
+                    if (i % 3 === 0) { fixture.messages[1000 + (i % 200)].content = `Edited ${i}`; fixture.emit('MessageStore'); }
+                    if (i % 10 === 0) fixture.emit('UserStore');
+                    if (i % 30 === 0) fixture.add(5000 + i, 'other', `<div class="messageContent_test">New ${i}</div>`);
+                    await frame();
+                }
+                rows.forEach(row => row.classList.remove('hovered_test'));
+                return { refreshes: window.__perf.length, refreshMs: window.__perf.reduce((a, b) => a + b, 0),
+                    bubbles: document.querySelectorAll('[data-lowcord-bubble], [data-lowcord-media]').length, dom: document.querySelector('#timeline').outerHTML };
+            });
+            const after = await metrics();
+            const result = { scenario: 'guild', variant: variant.name, repeat, frames: 300, refreshes: data.refreshes, refreshMs: data.refreshMs,
+                scriptMs: (after.ScriptDuration - before.ScriptDuration) * 1000, taskMs: (after.TaskDuration - before.TaskDuration) * 1000,
+                bubbles: data.bubbles, domHash: hash(data.dom) };
+            report.results.push(result); console.log(JSON.stringify(result));
+            const pair = report.results.find(other => other.scenario === 'guild' && other.repeat === repeat && other.variant !== variant.name);
+            if (data.bubbles || (pair && pair.domHash !== result.domHash)) throw new Error('Guild benchmark behavior differs');
+        } finally { await page.close(); }
+    }
+}
+// Music and social cards re-check rows when MessageStore changes. In a busy
+// session most notifications are for messages that are not on screen.
+async function embedBenchmarks() {
+    browser ??= await chromium.launch({ headless: true }); report.environment.chromium = browser.version();
+    for (let repeat = 0; repeat < iterations; repeat++) for (const variant of repeat % 2 ? variants.slice().reverse() : variants) {
+        const page = await domPage(variant);
+        try {
+            await page.evaluate(async () => {
+                const frame = () => new Promise(requestAnimationFrame);
+                const timeline = document.createElement('ol'); timeline.id = 'timeline';
+                document.querySelector('main').prepend(timeline);
+                window.bench.add = (id, author, content) => {
+                    bench.messages[id] = { id: String(id), channel_id: '100', author: { id: author }, type: 0, flags: 0, embeds: [], content, timestamp: '2026-10-03T05:00:00Z' };
+                    const row = document.createElement('li'); row.id = `chat-messages-100-${id}`;
+                    row.innerHTML = `<div class="message_test" data-list-item-id="chat-messages___100-${id}"><div class="contents_test"><h3 class="header_test">${author} <time>10:30 AM</time></h3><div id="message-content-${id}" class="messageContent_test">${content}</div></div></div>`;
+                    timeline.append(row);
+                };
+                for (let i = 0; i < 150; i++) bench.add(1000 + i, i % 2 ? 'self' : 'other',
+                    i % 10 === 0 ? `listen https://open.spotify.com/track/0Lr4kGOYn9l83EjuK6cZFQ ${i}` : `Message ${i} https://example.com/page/${i}`);
+                bench.emit('MessageStore');
+                for (let i = 0; i < 20; i++) await frame();
+            });
+            const cdp = await page.context().newCDPSession(page); await cdp.send('Performance.enable');
+            const metrics = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(item => [item.name, item.value]));
+            const before = await metrics();
+            const data = await page.evaluate(async () => {
+                const frame = () => new Promise(requestAnimationFrame);
+                const start = performance.now();
+                for (let i = 0; i < 200; i++) {
+                    // Messages arrive in other channels; one visible message is edited now and then.
+                    bench.messages[`other${i}`] = { id: `other${i}`, channel_id: '200', author: { id: 'other' }, type: 0, content: `Elsewhere ${i}` };
+                    if (i % 40 === 0) bench.messages[1001 + i % 150] = { ...bench.messages[1001 + i % 150], content: `Edited https://open.spotify.com/track/0Lr4kGOYn9l83EjuK6cZFQ ${i}` };
+                    bench.emit('MessageStore');
+                    await frame();
+                }
+                const elapsed = performance.now() - start;
+                for (let i = 0; i < 10; i++) await frame();
+                return { elapsed, dom: document.querySelector('#timeline').outerHTML,
+                    players: document.querySelectorAll('#timeline .lowcord-music-player').length };
+            });
+            const after = await metrics();
+            const result = { scenario: 'embeds', variant: variant.name, repeat, updates: 200, players: data.players,
+                scriptMs: (after.ScriptDuration - before.ScriptDuration) * 1000, taskMs: (after.TaskDuration - before.TaskDuration) * 1000,
+                wallMs: data.elapsed, domHash: hash(data.dom) };
+            report.results.push(result); console.log(JSON.stringify(result));
+            const pair = report.results.find(other => other.scenario === 'embeds' && other.repeat === repeat && other.variant !== variant.name);
+            if (pair && pair.domHash !== result.domHash) throw new Error('Embed benchmark output differs between variants');
+        } finally { await page.close(); }
+    }
+}
+// Store and module lookups on Discord-scale caches: a store that is not
+// loaded (looked up on clicks, keys and uploads) and a module found late.
+async function lookupBenchmarks() {
+    browser ??= await chromium.launch({ headless: true });
+    for (let repeat = 0; repeat < iterations; repeat++) for (const variant of repeat % 2 ? variants.slice().reverse() : variants) {
+        const page = await browser.newPage();
+        try {
+            await page.goto(`${url}/electron-child`);
+            await page.evaluate(() => {
+                const cache = {};
+                for (let i = 0; i < 20000; i++) cache[i] = { exports: { default: { id: i }, helper() {}, value: `m${i}`, list: [i], Z: class {} } };
+                window.benchCache = cache;
+                const chunks = []; chunks.push = entry => { entry[2]({ c: cache }); return 1; };
+                window.webpackChunkdiscord_app = chunks;
+                window.__lowcordStorage = localStorage;
+            });
+            await page.addScriptTag({ content: await readFile(join(variant.directory, 'src-tauri/injection/discord.js'), 'utf8') });
+            const data = await page.evaluate(() => {
+                const Last = class {}; Object.defineProperty(Last, 'displayName', { value: 'LastStore' });
+                benchCache.last = { exports: { default: new Last() } };
+                let start = performance.now();
+                for (let i = 0; i < 100; i++) if (Lowcord.store('EditMessageStore') !== null) throw new Error('Unexpected store');
+                const missingMs = (performance.now() - start) / 100;
+                start = performance.now();
+                for (let i = 0; i < 20; i++) if (!Lowcord.find(value => value?.constructor?.displayName === 'LastStore')) throw new Error('Store not found');
+                const scanMs = (performance.now() - start) / 20;
+                // A module that loads later must still be found by the next lookup.
+                const Late = class {}; Object.defineProperty(Late, 'displayName', { value: 'EditMessageStore' });
+                benchCache.late = { exports: { default: new Late() } };
+                return { missingMs, scanMs, lateFound: Lowcord.store('EditMessageStore') instanceof Late };
+            });
+            const result = { scenario: 'lookups', variant: variant.name, repeat, modules: 20000, ...data };
+            report.results.push(result); console.log(JSON.stringify(result));
+            if (!data.lateFound) throw new Error('A late store was not found');
+        } finally { await page.close(); }
+    }
+}
 function mediaChild(directory) {
     return `
         const {createRedditFixture} = require(${JSON.stringify(join(root, 'tests/fixtures/reddit-playback.cjs'))});
@@ -318,11 +450,17 @@ async function electronBenchmarks() {
                 LOWCORD_TEST: '1', LOWCORD_TEST_UPDATER: '0', LOWCORD_TEST_DATA: dataDir, LOWCORD_TEST_URL: `${url}/electron-child` } });
             const page = await app.firstWindow(); await page.waitForLoadState('load');
             const startupMs = performance.now() - begin;
-            const source = await app.evaluate(({ app }) => ({ electron: process.versions.electron, node: process.versions.node,
-                metrics: app.getAppMetrics(), updaterLoaded: Object.keys(process.mainModule.require('node:module')._cache).some(path => path.includes('electron-updater')) }));
+            const source = await app.evaluate(({ app }) => {
+                const cache = Object.keys(process.mainModule.require('node:module')._cache);
+                const memory = process.memoryUsage();
+                return { electron: process.versions.electron, node: process.versions.node, metrics: app.getAppMetrics(),
+                    updaterLoaded: cache.some(path => path.includes('electron-updater')), mainModules: cache.length,
+                    mainHeapMiB: memory.heapUsed / 1024 ** 2, mainRssMiB: memory.rss / 1024 ** 2 };
+            });
             const preloadBytes = (await readFile(join(variant.directory, '.lowcord/preload.cjs'))).length;
             const result = { scenario: 'startup', variant: variant.name, repeat, startupMs, preloadBytes, ...source };
-            report.results.push(result); console.log(JSON.stringify({ scenario: 'startup', variant: variant.name, repeat, startupMs, updaterLoaded: source.updaterLoaded }));
+            report.results.push(result); console.log(JSON.stringify({ scenario: 'startup', variant: variant.name, repeat, startupMs, updaterLoaded: source.updaterLoaded,
+                mainModules: source.mainModules, mainHeapMiB: source.mainHeapMiB, mainRssMiB: source.mainRssMiB }));
             if (wanted('playback')) {
                 await app.evaluate(({ BrowserWindow }, { root, directory }) => {
                     const { createRedditFixture } = process.mainModule.require(`${root}/tests/fixtures/reddit-playback.cjs`);
@@ -386,22 +524,26 @@ try {
     report.sources = {};
     for (const variant of variants) report.sources[variant.name] = Object.fromEntries(await Promise.all(
         ['src-tauri/injection/chat-appearance.js', 'src-tauri/injection/discord.js', 'src-tauri/injection/music-embeds.js', 'src-tauri/injection/social-embeds.js', 'scripts/build.mjs', 'electron/social-posts.cjs', 'electron/main.cjs'].map(async path => [path, hash(await readFile(join(variant.directory, path)))])));
-    if (wanted('chat') || wanted('visual') || wanted('startup') || wanted('idle') || wanted('playback') || wanted('dom') || wanted('modules')) await fixtureServer();
+    if (['chat', 'visual', 'startup', 'idle', 'playback', 'dom', 'modules', 'guild', 'embeds', 'lookups'].some(wanted)) await fixtureServer();
     if (wanted('chat')) await chatBenchmarks();
     if (wanted('visual')) await visualChecks();
     if (wanted('dom')) await domBenchmarks();
     if (wanted('modules')) await moduleBenchmarks();
+    if (wanted('guild')) await guildBenchmarks();
+    if (wanted('embeds')) await embedBenchmarks();
+    if (wanted('lookups')) await lookupBenchmarks();
     if (browser) { await browser.close(); browser = null; }
     if (wanted('media')) mediaBenchmarks();
     if (wanted('startup') || wanted('idle') || wanted('playback')) await electronBenchmarks();
     report.summary = [];
-    for (const name of ['chat', 'media', 'startup', 'idle', 'playback', 'dom', 'modules']) for (const variant of variants) {
+    for (const name of ['chat', 'media', 'startup', 'idle', 'playback', 'dom', 'modules', 'guild', 'embeds', 'lookups']) for (const variant of variants) {
         for (const count of name === 'chat' ? rows : [null]) {
             const results = report.results.filter(result => result.scenario === name && result.variant === variant.name && (count === null || result.rows === count));
             if (!results.length) continue;
             const keys = { chat: ['medianMs', 'p95Ms', 'totalRefreshMs', 'scriptMs'], media: ['peakRssDeltaMiB', 'retainedArrayBuffersMiB', 'elapsedMs', 'cpuMs'],
-                startup: ['startupMs', 'preloadBytes'], idle: ['meanCpuPercent', 'meanWorkingSetMiB'], playback: ['medianMs', 'p95Ms'],
-                dom: ['scriptMs', 'taskMs', 'wallMs'], modules: ['scriptMs', 'lateStoreFoundMs'] }[name];
+                startup: ['startupMs', 'preloadBytes', 'mainModules', 'mainHeapMiB', 'mainRssMiB'], idle: ['meanCpuPercent', 'meanWorkingSetMiB'], playback: ['medianMs', 'p95Ms'],
+                dom: ['scriptMs', 'taskMs', 'wallMs'], modules: ['scriptMs', 'lateStoreFoundMs'],
+                guild: ['scriptMs', 'taskMs', 'refreshMs'], embeds: ['scriptMs', 'taskMs'], lookups: ['missingMs', 'scanMs'] }[name];
             report.summary.push({ scenario: name, variant: variant.name, ...(count === null ? {} : { rows: count }),
                 ...Object.fromEntries(keys.map(key => [key, median(results.map(result => result[key]))])) });
         }

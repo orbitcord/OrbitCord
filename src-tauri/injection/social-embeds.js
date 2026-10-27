@@ -302,10 +302,20 @@
     if (document.body) start(); else document.addEventListener("DOMContentLoaded", start, { once: true });
     window.Lowcord.waitForStore("MessageStore", store => {
         // Store changes cover edits and suppression flags with no DOM change.
+        // Most notifications are for messages in other channels: re-check only
+        // rows whose message changed since the store last reported it.
+        const seen = new WeakMap();
         store.addChangeListener?.(() => {
             if (!extensions.enabled("socialCards")) return;
-            document.querySelectorAll(rowSelector).forEach(row => rows.add(row));
-            schedule();
+            for (const row of document.querySelectorAll(rowSelector)) {
+                const ids = /^chat-messages-(\d+)-(\d+)$/.exec(row.id);
+                const message = ids ? store.getMessage?.(ids[1], ids[2]) : undefined;
+                const inputs = [message, message?.content, message?.flags, message?.embeds, message?.embeds?.length];
+                const prior = seen.get(row);
+                if (prior?.every((value, i) => value === inputs[i])) continue;
+                seen.set(row, inputs); rows.add(row);
+            }
+            if (rows.size) schedule();
         });
         refresh();
     });

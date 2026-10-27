@@ -5,14 +5,6 @@ const { writeFile } = require('node:fs/promises');
 const { NativeBackend } = require('./native.cjs');
 const { migrateProfile } = require('./profile.cjs');
 const { setupEmbedPlugins } = require('./embed-plugins.cjs');
-const { createSocialResolver } = require('./social-resolver.cjs');
-const { createSocialPosts, scheme: mediaScheme } = require('./social-posts.cjs');
-const { createRedgifs } = require('./redgifs.cjs');
-const { createMediaSources, SOURCES: MEDIA_SOURCES } = require('./media-sources.cjs');
-const { createSourceFiles } = require('./media-source-files.cjs');
-const { createReddit } = require('./reddit.cjs');
-const { createVideoAttachments } = require('./video-attachments.cjs');
-const { downloadImage } = require('./image-drop.cjs');
 const { createUpdateController, latestRelease, macAsset, downloadMacInstaller } = require('./updates.cjs');
 const { createBackgroundSaver } = require('./background.cjs');
 const { watchNetwork } = require('./network-watch.cjs');
@@ -28,12 +20,14 @@ if (!userData) throw new Error('Missing test data directory');
 app.setPath('userData', userData);
 app.setPath('sessionData', join(userData, 'Chromium'));
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// social-posts.cjs serves this scheme and checks the name when it loads.
+const mediaScheme = 'lowcord-media';
 // Social card media is proxied through tokens minted in social-posts.cjs, so
 // Discord's CSP stays untouched and remote hosts never see Discord's origin.
 protocol.registerSchemesAsPrivileged([{ scheme: mediaScheme,
     privileges: { standard: true, secure: true, bypassCSP: true, stream: true, supportFetchAPI: true, corsEnabled: true } }]);
 if (dev) app.commandLine.appendSwitch('remote-debugging-port', '9222');
-let mainWindow, tray, backend, socialPosts, socialResolver, redgifs, reddit, videoAttachments, mediaSources, autoUpdater, quitting = false, finished = false;
+let mainWindow, tray, backend, autoUpdater, quitting = false, finished = false;
 let downloadedUpdate = null, updateDismissed = false, updateRestarting = false, updateError = null;
 // Every open Discord window by its webContents id. The main window uses the
 // default session; each extra account has a persistent partition of its own,
@@ -83,6 +77,40 @@ const showLast = () => {
     if (last) showWindow(last); else show();
 };
 const openExternal = url => backend.call('open_external', { url }).catch(error => console.error('[lowcord]', error.message));
+
+// Feature backends load on first use. Most launches never open a picker,
+// compress a video or play a proxied clip, so their code stays unloaded.
+const features = {};
+const feature = (name, create) => () => features[name] ??= create();
+const socialResolver = feature('socialResolver', () => require('./social-resolver.cjs').createSocialResolver());
+const socialPosts = feature('socialPosts', () => {
+    const { createSocialPosts, scheme } = require('./social-posts.cjs');
+    if (scheme !== mediaScheme) throw new Error('Media scheme changed');
+    return createSocialPosts();
+});
+const redgifs = feature('redgifs', () => require('./redgifs.cjs').createRedgifs());
+const reddit = feature('reddit', () => require('./reddit.cjs').createReddit({
+    fetchAccount: (url, init) => redditSession().fetch(url, { ...init, credentials: 'include' }) }));
+const videoAttachments = feature('videoAttachments', () => require('./video-attachments.cjs').createVideoAttachments());
+const mediaSources = feature('mediaSources', () => {
+    const { createMediaSources, SOURCES } = require('./media-sources.cjs');
+    const sourceFixture=testing&&process.env.LOWCORD_TEST_MEDIA_SOURCES==='1';
+    const sourceFixtureURL=async value=>{if(new URL(value).origin!==testURL.origin)throw new Error('Invalid fixture URL');return value;};
+    return createMediaSources({
+        storageFile:join(userData,'media-source-pages.json'),
+        ...(sourceFixture?{
+            sources:SOURCES.map(source=>({...source,home:`${testURL.origin}/source-browser?source=${source.id}`})),
+            allowNavigation:(_source,value)=>{try{return new URL(value).origin===testURL.origin;}catch{return false;}},
+            files:require('./media-source-files.cjs').createSourceFiles({validateURL:sourceFixtureURL}),validateURL:sourceFixtureURL,
+        }:{}),
+        onEvent:(owner,value)=>{if(!owner.isDestroyed()&&trusted(owner.getURL()))owner.send('lowcord:media-source',value);},
+    });
+});
+// Work a window started ends with it. Unloaded backends have none.
+const cancelFeatures = id => {
+    features.redgifs?.cancel(id); features.reddit?.cancel(id);
+    void features.videoAttachments?.cancel(id); void features.mediaSources?.cancel(id);
+};
 
 const accountsFile = join(userData, 'accounts.json');
 const accountId = /^account-\d{1,6}$/;
@@ -299,7 +327,7 @@ function configureSession(ses) {
     ses.setUserAgent(ses.getUserAgent().replace(/\s(?:Electron|Lowcord|Datcord|OrbitCord)\/[\w.-]+/gi, ''));
     ses.protocol.handle(mediaScheme, request => {
         const host = new URL(request.url).hostname;
-        return host === 'redgifs' ? redgifs.serve(request) : host === 'reddit' ? reddit.serve(request) : host === 'sources' ? mediaSources.serve(request) : socialPosts.serve(request);
+        return host === 'redgifs' ? redgifs().serve(request) : host === 'reddit' ? reddit().serve(request) : host === 'sources' ? mediaSources().serve(request) : socialPosts().serve(request);
     });
     // Discord delegates fullscreen to cross-origin video players through its
     // iframe policy. Chromium still requires that delegation and a user gesture;
@@ -369,9 +397,9 @@ async function createDiscordWindow(account) {
     const contents = window.webContents;
     const id = contents.id;
     contents.on('did-start-navigation', details => {
-        if (details.isMainFrame && !details.isInPlace) { redgifs?.cancel(id); reddit?.cancel(id); void videoAttachments?.cancel(id); void mediaSources?.cancel(id); }
+        if (details.isMainFrame && !details.isInPlace) cancelFeatures(id);
     });
-    contents.on('render-process-gone', () => { redgifs?.cancel(id); reddit?.cancel(id); void videoAttachments?.cancel(id); void mediaSources?.cancel(id); });
+    contents.on('render-process-gone', () => cancelFeatures(id));
     const record = { account, window, badge: 0, stateTimer: undefined,
         embedPlugins: setupEmbedPlugins(contents),
         // LOWCORD_FAST_SLEEP counts sleep delays in seconds for manual testing.
@@ -485,10 +513,7 @@ async function createDiscordWindow(account) {
         else if (!main) void saveState(record).catch(console.error);
     });
     window.on('closed', () => {
-        redgifs?.cancel(id);
-        reddit?.cancel(id);
-        void videoAttachments?.cancel(id);
-        void mediaSources?.cancel(id);
+        cancelFeatures(id);
         clearTimeout(record.stateTimer);
         discordWindows.delete(id);
         if (window === mainWindow) mainWindow = null;
@@ -505,7 +530,7 @@ async function createDiscordWindow(account) {
 function registerIpc() {
     ipcMain.handle('lowcord:download-dropped-image', async (event, url) => {
         assertSender(event);
-        try { return await downloadImage(url, { fetchPage: (url, init) => net.fetch(url, init) }); }
+        try { return await require('./image-drop.cjs').downloadImage(url, { fetchPage: (url, init) => net.fetch(url, init) }); }
         catch (error) { return { error: error.code ?? 'download-failed' }; }
     });
     ipcMain.handle('lowcord:app-icon', async (event, id) => {
@@ -577,66 +602,66 @@ function registerIpc() {
     ipcMain.handle('lowcord:resolve-social-link', (event, url, provider) => {
         assertSender(event);
         if (typeof url !== 'string' || url.length > 2048 || typeof provider !== 'string') throw new Error('Invalid link');
-        return socialResolver.resolve(url, provider);
+        return socialResolver().resolve(url, provider);
     });
     ipcMain.handle('lowcord:social-post', (event, url) => {
         assertSender(event);
         if (typeof url !== 'string' || url.length > 2048) throw new Error('Invalid link');
-        return socialPosts.get(url);
+        return socialPosts().get(url);
     });
     ipcMain.handle('lowcord:social-video', async (event, url, limit) => {
         assertSender(event);
         if (typeof url !== 'string' || url.length > 2048) throw new Error('Invalid link');
-        try { return await socialPosts.socialVideo(url, limit); }
+        try { return await socialPosts().socialVideo(url, limit); }
         catch (error) { return { error: error.code ?? 'failed' }; }
     });
     ipcMain.handle('lowcord:social-media', async (event, url, limit) => {
         assertSender(event);
         if (typeof url !== 'string' || url.length > 2048) throw new Error('Invalid link');
-        try { return await socialPosts.socialMedia(url, limit); }
+        try { return await socialPosts().socialMedia(url, limit); }
         catch (error) { return { error: error.code ?? 'failed' }; }
     });
     ipcMain.handle('lowcord:redgifs-search', async (event, query, page, options) => {
         assertSender(event);
-        try { return await redgifs.search(event.sender.id, query, page, options); }
+        try { return await redgifs().search(event.sender.id, query, page, options); }
         catch (error) { return { error: error.code ?? 'failed' }; }
     });
     ipcMain.handle('lowcord:redgifs-prepare', async (event, key, limit) => {
         assertSender(event);
-        try { return await redgifs.prepare(event.sender.id, key, limit); }
+        try { return await redgifs().prepare(event.sender.id, key, limit); }
         catch (error) { return { error: error.code ?? 'failed' }; }
     });
-    ipcMain.handle('lowcord:redgifs-cancel', (event, scope) => { assertSender(event); redgifs.cancel(event.sender.id, scope); });
+    ipcMain.handle('lowcord:redgifs-cancel', (event, scope) => { assertSender(event); features.redgifs?.cancel(event.sender.id, scope); });
     ipcMain.handle('lowcord:redgifs-resolve', async (event, id) => {
         assertSender(event);
-        try { return await redgifs.resolve(event.sender.id, id); }
+        try { return await redgifs().resolve(event.sender.id, id); }
         catch (error) { return { error: error.code ?? 'failed' }; }
     });
-    ipcMain.handle('lowcord:redgifs-release', (event, handle) => { assertSender(event); return redgifs.release(event.sender.id, handle); });
+    ipcMain.handle('lowcord:redgifs-release', (event, handle) => { assertSender(event); return redgifs().release(event.sender.id, handle); });
     ipcMain.handle('lowcord:reddit', async (event, action, ...args) => {
         const record = assertSender(event);
         if (!['account', 'login', 'logout', 'search', 'prepare', 'resolve', 'cancel', 'release'].includes(action)) return { error: 'invalid-action' };
         try {
             if (action === 'login') return { account: await redditLogin(record.window) };
-            if (action === 'logout') { await redditSession().clearStorageData(); reddit.signedOut(); return { account: null }; }
-            if (action === 'account') return { account: await reddit.account() };
-            return await reddit[action](event.sender.id, ...args) ?? null;
+            if (action === 'logout') { await redditSession().clearStorageData(); features.reddit?.signedOut(); return { account: null }; }
+            if (action === 'account') return { account: await reddit().account() };
+            return await reddit()[action](event.sender.id, ...args) ?? null;
         } catch (error) { return { error: error.code ?? 'failed' }; }
     });
     ipcMain.handle('lowcord:video-compression', async (event, action, ...args) => {
         assertSender(event);
         if (!['begin', 'append', 'finish', 'read', 'cancel'].includes(action)) return { error: 'invalid-action' };
-        try { return await videoAttachments[action](event.sender.id, ...args); }
+        try { return await videoAttachments()[action](event.sender.id, ...args); }
         catch (error) { return { error: error.code ?? 'failed' }; }
     });
     ipcMain.handle('lowcord:media-sources',async(event,action,...args)=>{
         const record=assertSender(event);
         try{
-            if(action==='open')return await mediaSources.open(event.sender,record.account.id,args[0]);
-            if(action==='command')return await mediaSources.command(event.sender.id,...args);
-            if(action==='read')return await mediaSources.read(event.sender.id,...args);
-            if(action==='release')return await mediaSources.release(event.sender.id,...args);
-            if(action==='close')return await mediaSources.cancel(event.sender.id);
+            if(action==='open')return await mediaSources().open(event.sender,record.account.id,args[0]);
+            if(action==='command')return await mediaSources().command(event.sender.id,...args);
+            if(action==='read')return await mediaSources().read(event.sender.id,...args);
+            if(action==='release')return await mediaSources().release(event.sender.id,...args);
+            if(action==='close')return await features.mediaSources?.cancel(event.sender.id);
             return {error:'Unknown media source action'};
         }catch(error){return {error:error.code||error.message||'Couldn’t open media sources'};}
     });
@@ -753,7 +778,7 @@ function redditLogin(parent) {
     redditLoginWork = new Promise(resolve => window.once('closed', () => {
         ses.cookies.removeListener('changed', changed);
         redditLoginWindow = undefined;
-        resolve(reddit.account(true).catch(() => null));
+        resolve(reddit().account(true).catch(() => null));
     }));
     void window.loadURL('https://www.reddit.com/login/');
     return redditLoginWork;
@@ -763,22 +788,6 @@ async function start() {
     if (!testing) await migrateProfile(app.getPath('sessionData'));
     backend = new NativeBackend(app.isPackaged ? join(process.resourcesPath, 'native', `lowcord-native${process.platform === 'win32' ? '.exe' : ''}`)
         : join(__dirname, '..', '.lowcord', 'native', `lowcord-native${process.platform === 'win32' ? '.exe' : ''}`), userData);
-    socialResolver = createSocialResolver();
-    socialPosts = createSocialPosts();
-    redgifs = createRedgifs();
-    reddit = createReddit({ fetchAccount: (url, init) => redditSession().fetch(url, { ...init, credentials: 'include' }) });
-    videoAttachments = createVideoAttachments();
-    const sourceFixture=testing&&process.env.LOWCORD_TEST_MEDIA_SOURCES==='1';
-    const sourceFixtureURL=async value=>{if(new URL(value).origin!==testURL.origin)throw new Error('Invalid fixture URL');return value;};
-    mediaSources=createMediaSources({
-        storageFile:join(userData,'media-source-pages.json'),
-        ...(sourceFixture?{
-            sources:MEDIA_SOURCES.map(source=>({...source,home:`${testURL.origin}/source-browser?source=${source.id}`})),
-            allowNavigation:(_source,value)=>{try{return new URL(value).origin===testURL.origin;}catch{return false;}},
-            files:createSourceFiles({validateURL:sourceFixtureURL}),validateURL:sourceFixtureURL,
-        }:{}),
-        onEvent:(owner,value)=>{if(!owner.isDestroyed()&&trusted(owner.getURL()))owner.send('lowcord:media-source',value);},
-    });
     if (testing && process.env.LOWCORD_TEST_UPDATER === '1') updates.initialize();
     registerIpc();
     watchNetwork({ powerMonitor: require('electron').powerMonitor, onChange: () => {
@@ -816,11 +825,7 @@ else {
         if (quitting) return;
         quitting = true;
         void saveAllStates().catch(console.error).finally(async () => {
-            await socialPosts?.close().catch(console.error);
-            await redgifs?.close().catch(console.error);
-            await reddit?.close().catch(console.error);
-            await videoAttachments?.close().catch(console.error);
-            await mediaSources?.close().catch(console.error);
+            for (const value of Object.values(features)) await value.close?.().catch(console.error);
             finished = true; backend?.close(); app.quit();
         });
     });
