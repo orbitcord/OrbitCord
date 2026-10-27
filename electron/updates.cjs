@@ -1,9 +1,10 @@
 const { createHash } = require('node:crypto');
-const { createWriteStream } = require('node:fs');
-const { mkdir, rename, rm } = require('node:fs/promises');
+const { createReadStream, createWriteStream } = require('node:fs');
+const { mkdir, rename, rm, stat } = require('node:fs/promises');
 const { join } = require('node:path');
 const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
+const { setTimeout: delay } = require('node:timers/promises');
 
 // Older installers displayed 0.1.5.1 but stored 0.1.5-1 in package.json.
 // Treat either form as the same fourth numeric revision.
@@ -42,37 +43,84 @@ function macAsset(release, arch) {
         throw new Error('This release does not include a compatible Mac installer.');
     return asset;
 }
-async function downloadMacInstaller({ fetch, directory, asset, onProgress }) {
+function interrupted(error) {
+    return error.retryable || /ECONNRESET|ERR_CONNECTION_|ERR_CONTENT_LENGTH_MISMATCH|ERR_HTTP2_PROTOCOL_ERROR|ERR_QUIC_PROTOCOL_ERROR|ERR_NETWORK_CHANGED|ERR_INTERNET_DISCONNECTED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|UND_ERR|fetch failed|terminated|network|socket|abort|timed? ?out/i
+        .test(`${error.code || ''} ${error.message || ''} ${error.cause?.code || ''}`);
+}
+async function downloadMacInstaller({ fetch, directory, asset, onProgress = () => {}, retryDelays = [500, 1500, 4000], idleTimeout = 30_000 }) {
     await mkdir(directory, { recursive: true });
     const path = join(directory, asset.name), temporary = `${path}.download`;
-    try {
-        const response = await fetch(asset.browser_download_url, { signal: AbortSignal.timeout(30 * 60_000) });
-        if (!response.ok || !response.body) throw new Error(`Installer download failed (HTTP ${response.status}).`);
-        let size = 0;
-        const hash = createHash('sha256');
-        const progress = new Transform({ transform(chunk, _encoding, callback) {
-            size += chunk.length;
-            if (size > asset.size) return callback(new Error('Installer size does not match the release.'));
-            hash.update(chunk);
+    const deadline = AbortSignal.timeout(30 * 60_000);
+    // Only resume across calls when GitHub supplied a digest for this asset.
+    // A partial file is never offered for installation.
+    if (!/^sha256:[a-f0-9]{64}$/.test(asset.digest || '')) await rm(temporary, { force: true });
+    for (let attempt = 0; ; attempt++) {
+        let size = (await stat(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; return { size: 0 }; })).size;
+        if (size > asset.size) { await rm(temporary, { force: true }); size = 0; }
+        let hash = createHash('sha256');
+        // Rehash bytes actually flushed to disk, including after a failed pipeline.
+        if (size) for await (const chunk of createReadStream(temporary)) hash.update(chunk);
+        const control = new AbortController(), signal = AbortSignal.any([deadline, control.signal]);
+        let timer;
+        const watch = () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => control.abort(Object.assign(new Error('Installer download stalled. Please retry.'), { retryable: true })), idleTimeout);
+        };
+        try {
             onProgress(Math.floor(size / asset.size * 100));
-            callback(null, chunk);
-        } });
-        await pipeline(Readable.fromWeb(response.body), progress, createWriteStream(temporary, { mode: 0o600 }));
-        if (size !== asset.size) throw new Error('Installer download is incomplete. Please retry.');
-        const digest = hash.digest('hex');
-        if (asset.digest && asset.digest !== `sha256:${digest}`) throw new Error('Installer checksum does not match the release.');
-        await rename(temporary, path);
-        return path;
-    } catch (error) {
-        await rm(temporary, { force: true });
-        throw error;
+            if (size !== asset.size) {
+                const url = (attempt || size) && Number.isSafeInteger(asset.id) && asset.id > 0
+                    ? `https://api.github.com/repos/orbitcord/OrbitCord/releases/assets/${asset.id}?download=${Date.now()}`
+                    : asset.browser_download_url;
+                watch();
+                const response = await fetch(url, { signal, cache: 'no-store', credentials: 'omit',
+                    headers: { accept: 'application/octet-stream', ...(size ? { range: `bytes=${size}-` } : {}) } });
+                if (!response.ok || !response.body) {
+                    await response.body?.cancel().catch(() => {});
+                    throw Object.assign(new Error(`Installer download failed (HTTP ${response.status}).`),
+                        { retryable: [403, 408, 429, 500, 502, 503, 504].includes(response.status) });
+                }
+                if (response.status === 206) {
+                    const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') || '');
+                    if (!range || Number(range[1]) !== size || Number(range[3]) !== asset.size
+                        || Number(range[2]) < size || Number(range[2]) >= asset.size) {
+                        await response.body.cancel().catch(() => {});
+                        throw new Error('Installer download returned an invalid byte range. Please retry.');
+                    }
+                } else {
+                    // Some servers ignore Range. Truncate and hash the full response.
+                    size = 0; hash = createHash('sha256');
+                }
+                const progress = new Transform({ transform(chunk, _encoding, callback) {
+                    watch();
+                    size += chunk.length;
+                    if (size > asset.size) return callback(new Error('Installer size does not match the release.'));
+                    hash.update(chunk);
+                    onProgress(Math.floor(size / asset.size * 100));
+                    callback(null, chunk);
+                } });
+                await pipeline(Readable.fromWeb(response.body), progress,
+                    createWriteStream(temporary, { flags: response.status === 206 ? 'a' : 'w', mode: 0o600 }), { signal });
+            }
+            if (size !== asset.size) throw Object.assign(new Error('Installer download is incomplete. Please retry.'), { retryable: true });
+            if (asset.digest && asset.digest !== `sha256:${hash.digest('hex')}`) throw new Error('Installer checksum does not match the release.');
+            await rename(temporary, path);
+            return path;
+        } catch (error) {
+            if (control.signal.aborted) error = control.signal.reason;
+            if (!interrupted(error)) { await rm(temporary, { force: true }); throw error; }
+            if (deadline.aborted || attempt >= retryDelays.length) {
+                throw new Error(`${error.message} Please retry; downloaded bytes have been kept.`, { cause: error });
+            }
+        } finally { clearTimeout(timer); }
+        await delay(retryDelays[attempt]);
     }
 }
 
-function createUpdateController({ currentVersion, platform, packaged, getUpdater, getRelease, downloadInstaller, openInstaller, publish = () => {} }) {
+function createUpdateController({ currentVersion, platform, packaged, getUpdater, getRelease, downloadInstaller, openInstaller, publish = () => {}, retryDelays = [500, 1500, 4000] }) {
     let state = { status: 'idle', currentVersion,
         installMode: platform === 'darwin' ? 'dmg' : platform === 'win32' && packaged ? 'automatic' : 'unavailable' };
-    let pending, release, updater, installer;
+    let pending, release, updater, installer, managedDownload = false;
     const snapshot = () => ({ ...state });
     const set = patch => { state = { ...state, error: null, ...patch }; publish(snapshot()); return snapshot(); };
     const fail = error => set({ status: state.status === 'installing' ? 'downloaded' : 'error',
@@ -91,7 +139,7 @@ function createUpdateController({ currentVersion, platform, packaged, getUpdater
         updater.on('update-available', info => set({ status: 'downloading', version: info.version, progress: 0 }));
         updater.on('download-progress', info => set({ status: 'downloading', progress: Math.floor(info.percent) }));
         updater.on('update-downloaded', info => set({ status: 'downloaded', version: info.version, progress: 100 }));
-        updater.on('error', fail);
+        updater.on('error', error => { if (!managedDownload) fail(error); });
         return updater;
     }
     async function check() {
@@ -102,7 +150,24 @@ function createUpdateController({ currentVersion, platform, packaged, getUpdater
             set({ status: 'checking', version: null, progress: null });
             try {
                 if (platform === 'win32' && packaged) {
-                    await initialize().checkForUpdates();
+                    const result = await initialize().checkForUpdates();
+                    if (result?.downloadPromise) {
+                        // electron-updater returns the automatic download as a
+                        // separate promise. Observe it and retry network failures;
+                        // otherwise its rejection escapes and the update stops.
+                        managedDownload = true;
+                        let task = result.downloadPromise;
+                        try {
+                            for (let attempt = 0; ; attempt++) {
+                                try { await task; break; } catch (error) {
+                                    if (!interrupted(error) || attempt >= retryDelays.length) throw error;
+                                    set({ status: 'downloading' });
+                                    await delay(retryDelays[attempt]);
+                                    task = updater.downloadUpdate();
+                                }
+                            }
+                        } finally { managedDownload = false; }
+                    }
                 } else {
                     release = await getRelease();
                     installer = null;

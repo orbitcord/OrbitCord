@@ -32,6 +32,51 @@ async function expectNativeFullscreen(app, fullscreen) {
         && global.fullscreenTransitions.includes(fullscreen ? 'enter-full-screen' : 'leave-full-screen'), fullscreen)).toBe(true);
 }
 
+test('installer download resumes after a real Electron connection reset and verifies all bytes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-updater-reset-'));
+    const instance = await launch(dir);
+    try {
+        const result = await instance.evaluate(async ({ app, net }, directory) => {
+            const require = process.mainModule.require.bind(process.mainModule);
+            const { createServer } = require('node:http');
+            const { stat, readFile } = require('node:fs/promises');
+            const { join } = require('node:path');
+            const { createHash } = require('node:crypto');
+            const { downloadMacInstaller } = require(join(app.getAppPath(), 'electron/updates.cjs'));
+            const data = Buffer.alloc(128 * 1024, 123), prefix = 32 * 1024, requests = [];
+            const name = 'fixture.dmg', partial = join(directory, `${name}.download`);
+            const server = createServer(async (request, response) => {
+                requests.push(request.headers.range || 'full');
+                if (requests.length === 1) {
+                    response.writeHead(200, { 'content-length': data.length });
+                    response.write(data.subarray(0, prefix));
+                    // Reset only after the first bytes reached disk, so this
+                    // verifies real range resume, not just a fresh retry.
+                    for (let i = 0; i < 100; i++) {
+                        if ((await stat(partial).catch(() => ({ size: 0 }))).size === prefix) break;
+                        await new Promise(resolve => setTimeout(resolve, 10));
+                    }
+                    response.destroy();
+                } else {
+                    const start = Number(/^bytes=(\d+)-$/.exec(request.headers.range || '')?.[1] || 0);
+                    response.writeHead(206, { 'content-length': data.length - start,
+                        'content-range': `bytes ${start}-${data.length - 1}/${data.length}` });
+                    response.end(data.subarray(start));
+                }
+            });
+            await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+            try {
+                const path = await downloadMacInstaller({ directory, retryDelays: [0], fetch: (url, init) => net.fetch(url, init),
+                    asset: { name, size: data.length, digest: `sha256:${createHash('sha256').update(data).digest('hex')}`,
+                        browser_download_url: `http://127.0.0.1:${server.address().port}/installer` } });
+                return { requests, matches: (await readFile(path)).equals(data),
+                    partial: await stat(partial).then(() => true, () => false) };
+            } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+        }, dir);
+        expect(result).toEqual({ requests: ['full', 'bytes=32768-'], matches: true, partial: false });
+    } finally { await instance.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('browser image drop crosses the sandbox, bypasses CORS, and attaches original bytes without sending', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'orbitcord-image-drop-'));
     const app = await launch(dir);
