@@ -609,16 +609,16 @@ function registerIpc() {
         if (typeof url !== 'string' || url.length > 2048) throw new Error('Invalid link');
         return socialPosts().get(url);
     });
-    ipcMain.handle('lowcord:social-video', async (event, url, limit) => {
+    ipcMain.handle('lowcord:social-video', async (event, url, limit, compress) => {
         assertSender(event);
         if (typeof url !== 'string' || url.length > 2048) throw new Error('Invalid link');
-        try { return await socialPosts().socialVideo(url, limit); }
+        try { return await socialPosts().socialVideo(url, limit, { compress: compress === true }); }
         catch (error) { return { error: error.code ?? 'failed' }; }
     });
-    ipcMain.handle('lowcord:social-media', async (event, url, limit) => {
+    ipcMain.handle('lowcord:social-media', async (event, url, limit, compress) => {
         assertSender(event);
         if (typeof url !== 'string' || url.length > 2048) throw new Error('Invalid link');
-        try { return await socialPosts().socialMedia(url, limit); }
+        try { return await socialPosts().socialMedia(url, limit, { compress: compress === true }); }
         catch (error) { return { error: error.code ?? 'failed' }; }
     });
     ipcMain.handle('lowcord:redgifs-search', async (event, query, page, options) => {

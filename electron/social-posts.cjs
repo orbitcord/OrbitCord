@@ -11,7 +11,17 @@ const scheme = 'lowcord-media';
 const bot = 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)';
 const browser = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36';
 
-function createSocialPosts(fetchPage = fetch, cacheOptions) {
+// Media transfers: time to response headers, silence between chunks (a
+// player's HTTP range read may idle longer), and the cap on a buffered file.
+// `compress` bounds a too-large video's download and re-encode together.
+const defaultTiming = { headers: 8000, head: 4000, idle: 10_000, serveIdle: 15_000, total: 120_000, compress: 15 * 60_000 };
+// The most a too-large video may weigh before it is compressed.
+const sourceLimit = 256 * 1024 * 1024;
+// FFmpeg loads only when a video needs compressing.
+const compressVideo = (...args) => require('./video-compress.cjs').compressVideo(...args);
+
+function createSocialPosts(fetchPage = fetch, cacheOptions, timings, { compress = compressVideo } = {}) {
+    const timing = { ...defaultTiming, ...timings };
     const posts = new Map(), pending = new Map(), media = new Map(), muxed = new Map();
     const playbackCache = createMediaCache(cacheOptions);
 
@@ -21,20 +31,33 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         return response;
     }
     const failed = response => Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
-    // With `head`, a longer body is cut at `limit` instead of refused.
+    const stalled = message => Object.assign(new Error(message), { code: 'stalled' });
+    // With `head`, a longer body is cut at `limit` instead of refused. A body
+    // that sends nothing for `timing.idle` is cancelled and throws 'stalled'.
     async function read(response, limit, head = false) {
         const declared = Number(response.headers.get('content-length'));
         if (declared > limit && !head) { await response.body?.cancel().catch(() => {}); throw Object.assign(new Error('Too large'), { code: 'too-large' }); }
         const reader = response.body.getReader(), parts = [];
-        let size = 0;
-        for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            size += value.byteLength;
-            if (size > limit && head) { parts.push(value); await reader.cancel().catch(() => {}); break; }
-            if (size > limit) { await reader.cancel().catch(() => {}); throw Object.assign(new Error('Too large'), { code: 'too-large' }); }
-            parts.push(value);
-        }
+        let size = 0, quiet = false, last = Date.now(), timer;
+        const watch = () => {
+            const left = timing.idle - (Date.now() - last);
+            if (left > 0) { timer = setTimeout(watch, left); return; }
+            quiet = true;
+            reader.cancel().catch(() => {});
+        };
+        timer = setTimeout(watch, timing.idle);
+        try {
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                last = Date.now();
+                size += value.byteLength;
+                if (size > limit && head) { parts.push(value); await reader.cancel().catch(() => {}); break; }
+                if (size > limit) { await reader.cancel().catch(() => {}); throw Object.assign(new Error('Too large'), { code: 'too-large' }); }
+                parts.push(value);
+            }
+        } finally { clearTimeout(timer); }
+        if (quiet) throw stalled('Stalled');
         return Buffer.concat(parts);
     }
     async function json(url, options) {
@@ -132,12 +155,18 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
     const slide = limiter(6);
     // Photos download side by side; videos, which can be large, one at a time.
     const photoDownloads = limiter(4), videoDownloads = limiter(1);
+    // Sources of one `group` read the same data: when one answers for good
+    // (`error.final`, e.g. a tombstone), the rest of its group is skipped.
+    // A timeout rests a source briefly, so later posts skip a dead host.
     async function attempt(sources, ...args) {
-        const failures = [];
-        for (const [name, read, rests = true] of sources) {
+        const failures = [], done = new Set();
+        for (const [name, read, rests = true, group] of sources) {
             if (resting.get(name) > Date.now()) { failures.push(`${name}: resting`); continue; }
+            if (group && done.has(group)) { failures.push(`${name}: skipped`); continue; }
             try { return await read(...args); } catch (error) {
                 if (rests && [401, 403, 429].includes(error.status)) resting.set(name, Date.now() + 5 * 60_000);
+                else if (rests && (['AbortError', 'TimeoutError'].includes(error.name) || error.code === 'stalled')) resting.set(name, Date.now() + 2 * 60_000);
+                if (error.final && group) done.add(group);
                 failures.push(`${name}: ${error.message}`);
             }
         }
@@ -162,11 +191,13 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         url: target.canonical, author: {}, text: '', stats: {}, media: [], sensitive: false, ...fields,
         media: (fields.media ?? []).filter(Boolean).slice(0, 20) });
 
-    // X's own embed API, the one behind its embedded posts; no sign-in.
-    async function xSyndication(target, id) {
+    // X's own embed API, the one behind its embedded posts; no sign-in. Two
+    // hosts serve it, on different CDNs, so one can be reachable when the
+    // other is not.
+    const xSyndication = host => async (target, id) => {
         const token = ((Number(id) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, '');
-        const tweet = await json(`https://cdn.syndication.twimg.com/tweet-result?id=${id}&token=${token}&lang=en`);
-        if (!tweet?.id_str || tweet.__typename === 'TweetTombstone') throw new Error('Post not found');
+        const tweet = await json(`https://${host}/tweet-result?id=${id}&token=${token}&lang=en`);
+        if (!tweet?.id_str || tweet.__typename === 'TweetTombstone') throw Object.assign(new Error('Post not found'), { final: true });
         let body = tweet.text ?? '';
         for (const link of tweet.entities?.media ?? []) body = body.replaceAll(link.url, '');
         for (const link of tweet.entities?.urls ?? []) if (link.expanded_url) body = body.replaceAll(link.url, link.expanded_url);
@@ -185,7 +216,7 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
             stats: { replies: number(tweet.conversation_count), likes: number(tweet.favorite_count) },
             sensitive: Boolean(tweet.possibly_sensitive), media: items,
         });
-    }
+    };
     // Age-restricted posts come from here: X's embed API answers them with a tombstone.
     async function fxTwitter(target, id) {
         const { tweet } = await json(`https://api.fxtwitter.com/status/${id}`);
@@ -221,7 +252,10 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
                 : video(item.url, item.thumbnail_url, { width: item.size?.width, height: item.size?.height, ...(item.type === 'gif' ? { loop: true, gif: true } : {}) })),
         });
     }
-    const xSources = [['x', xSyndication], ['fxtwitter', fxTwitter], ['vxtwitter', vxTwitter]];
+    // Third parties come last: they are not X's own, and the embed API
+    // refuses age-restricted posts that they still serve.
+    const xSources = [['x', xSyndication('syndication.twitter.com'), true, 'x-embed'], ['x-cdn', xSyndication('cdn.syndication.twimg.com'), true, 'x-embed'],
+        ['fxtwitter', fxTwitter], ['vxtwitter', vxTwitter]];
     async function twitter(target) {
         return attempt(xSources, target, /\/status\/(\d+)/.exec(target.path)?.[1]);
     }
@@ -550,11 +584,46 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         return work;
     }
 
-    // ----- Reddit video: video and audio are separate DASH streams ---------
-    async function size(url) {
-        const response = await request(url, { method: 'HEAD', timeout: 8000 });
-        return response.ok ? Number(response.headers.get('content-length')) || null : null;
+    // ----- Media transfers ---------------------------------------------------
+    // Fastly (video.twimg.com) can be unreachable where Cloudflare works, so
+    // X's video host has a first-party mirror serving the same files. Each
+    // candidate is tried in turn, never raced; one that fails at the network
+    // is put last for a few minutes. Once a body streams, it is not spliced.
+    const mirrors = { 'video.twimg.com': 'video-cf.twimg.com' }, failing = new Map();
+    function candidates(url) {
+        let parsed;
+        try { parsed = new URL(url); } catch { return [url]; }
+        const mirror = mirrors[parsed.hostname];
+        if (!mirror) return [url];
+        parsed.hostname = mirror;
+        return [parsed.href, url].sort((a, b) => (failing.get(new URL(a).hostname) > Date.now()) - (failing.get(new URL(b).hostname) > Date.now()));
     }
+    async function mirrored(url, attemptOne, signal) {
+        let last;
+        for (const candidate of candidates(url)) {
+            try { return await attemptOne(candidate); } catch (error) {
+                if (signal?.aborted || error.code === 'too-large') throw error;
+                if (!error.status || error.status >= 500) failing.set(new URL(candidate).hostname, Date.now() + 5 * 60_000);
+                last = error;
+            }
+        }
+        throw last;
+    }
+    // Response headers within `wait`, else a 'stalled' error. `control` lets
+    // the caller abort the body later; `total` caps the whole transfer.
+    async function open(url, { method, headers, wait = timing.headers, total, control = new AbortController(), signal } = {}) {
+        const timer = setTimeout(() => control.abort(stalled('No response')), wait);
+        try {
+            return await request(url, { method, headers, signal: AbortSignal.any([control.signal, ...(total ? [AbortSignal.timeout(total)] : []), ...(signal ? [signal] : [])]) });
+        } finally { clearTimeout(timer); }
+    }
+
+    // ----- Reddit video: video and audio are separate DASH streams ---------
+    const size = url => mirrored(url, async candidate => {
+        const response = await open(candidate, { method: 'HEAD', wait: timing.head, total: timing.head });
+        if (!response.ok) throw failed(response);
+        return Number(response.headers.get('content-length')) || null;
+    });
     async function redditStreams(fallback, signal) {
         const folder = /^(https:\/\/v\.redd\.it\/\w+)\//.exec(fallback)?.[1];
         if (!folder) throw new Error('Not a Reddit video');
@@ -570,11 +639,11 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         return { folder, videos: videos.map(name => ({ url: `${folder}/${name}`, height: height(name) })),
             audio: audios.length ? `${folder}/${audios[0]}` : null };
     }
-    async function download(url, limit) {
-        const response = await request(url, { timeout: 120_000 });
-        if (!response.ok) { await response.body?.cancel().catch(() => {}); throw new Error(`HTTP ${response.status}`); }
+    const download = (url, limit) => mirrored(url, async candidate => {
+        const response = await open(candidate, { total: timing.total });
+        if (!response.ok) { await response.body?.cancel().catch(() => {}); throw failed(response); }
         return read(response, limit);
-    }
+    });
     async function combine(streams, choice, limit) {
         const [picture, sound] = await Promise.all([download(choice.url, limit),
             streams.audio ? download(streams.audio, limit).catch(() => null) : null]);
@@ -582,7 +651,7 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         try { return mux(picture, sound); } catch { return picture; }
     }
     // Picks the best quality whose video plus audio fits in `limit` bytes.
-    async function redditVideo(value, limit) {
+    async function redditVideo(value, limit, { compress: shrink = false } = {}) {
         const target = links.parse(value);
         if (target?.site !== 'reddit') throw Object.assign(new Error('Not a Reddit link'), { code: 'not-video' });
         if (!Number.isSafeInteger(limit) || limit < 1024 * 1024 || limit > 1024 ** 3) throw new Error('Invalid limit');
@@ -597,7 +666,11 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
             ...streams.videos.map(item => size(item.url).catch(() => null))]);
         if (audioSize === null) streams.audio = null;
         const choice = streams.videos.find((item, index) => sizes[index] && sizes[index] + (audioSize ?? 0) <= limit);
-        if (!choice) throw Object.assign(new Error('Too large'), { code: 'too-large' });
+        if (!choice) {
+            if (!shrink) throw Object.assign(new Error('Too large'), { code: 'too-large' });
+            const url = await compressionSource(streams.videos.map(item => item.url), limit, sizes);
+            return { name: `reddit-${id}.mp4`, type: 'video/mp4', data: await compressed(url, limit, { audio: streams.audio }), gif: Boolean(clip.is_gif) };
+        }
         const data = await combine(streams, choice, limit);
         if (data.length > limit) throw Object.assign(new Error('Too large'), { code: 'too-large' });
         return { name: `reddit-${id}.mp4`, type: 'video/mp4', data, gif: Boolean(clip.is_gif) };
@@ -633,7 +706,7 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
     // Instagram Reels, X videos and Reddit GIFs are one progressive MP4, taken
     // from the post's own data. X serves GIFs as MP4 too, which the page
     // re-encodes; a Reddit GIF that fits is sent as itself instead.
-    function singleVideo(target, limit) {
+    function singleVideo(target, limit, shrink) {
         return withPost(target, async post => {
             const item = post?.media?.length === 1 && post.media[0].type === 'video' ? post.media[0] : null;
             const source = item && sourceOf(item);
@@ -646,19 +719,23 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
                 const data = await download(source.original, limit).catch(() => null);
                 if (data && sniff(data) === 'image/gif') return { name: `${name}.gif`, type: 'image/gif', data, gif: true };
             }
-            const data = await fitting(source, limit, url => download(url, limit));
+            const data = await fitting(source, limit, url => download(url, limit)).catch(async error => {
+                if (error.code !== 'too-large' || !shrink) throw error;
+                return compressed(await compressionSource(source.variants?.length ? source.variants : [source.url], limit), limit);
+            });
             return { name: `${name}.mp4`, type: 'video/mp4', data, gif: Boolean(item.gif) };
         });
     }
-    async function socialVideo(value, limit) {
+    // With `compress`, a video over the limit at every quality is compressed.
+    async function socialVideo(value, limit, { compress: shrink = false } = {}) {
         const target = links.parse(value);
         if (!Number.isSafeInteger(limit) || limit < 1024 * 1024 || limit > 1024 ** 3) throw new Error('Invalid limit');
         // Reddit's own videos are DASH streams; its GIFs are a single MP4.
-        if (target?.site === 'reddit') return redditVideo(value, limit).catch(error => {
-            if (error.code === 'not-video') return singleVideo(target, limit);
+        if (target?.site === 'reddit') return redditVideo(value, limit, { compress: shrink }).catch(error => {
+            if (error.code === 'not-video') return singleVideo(target, limit, shrink);
             throw error;
         });
-        if (target?.site === 'instagram' || target?.site === 'twitter') return singleVideo(target, limit);
+        if (target?.site === 'instagram' || target?.site === 'twitter') return singleVideo(target, limit, shrink);
         throw Object.assign(new Error('Unsupported link'), { code: 'not-video' });
     }
     // A photo post or carousel as files: every item, in order, each within
@@ -673,7 +750,7 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         if (ascii(4, 8) === 'ftyp') return 'video/mp4';
         return fileTypes[declared] ? declared : null;
     }
-    async function socialMedia(value, limit) {
+    async function socialMedia(value, limit, { compress: shrink = false } = {}) {
         const target = links.parse(value);
         if (!Number.isSafeInteger(limit) || limit < 1024 * 1024 || limit > 1024 ** 3) throw new Error('Invalid limit');
         if (!['reddit', 'instagram', 'twitter'].includes(target?.site)) throw Object.assign(new Error('Unsupported link'), { code: 'not-media' });
@@ -686,19 +763,22 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
                 : target.site === 'instagram' ? /\/(?:p|reel|reels|tv)\/([\w-]+)/.exec(target.path)?.[1]
                 : /\/comments\/(\w+)/.exec(post.url ?? '')?.[1];
             const prefix = `${target.site === 'twitter' ? 'x' : target.site}-${id ?? 'post'}`;
-            const fetchUrl = async (source, url) => {
-                const response = await fetchPage(url, { credentials: 'omit', redirect: 'follow',
-                    headers: { 'user-agent': browser, ...source.headers }, signal: AbortSignal.timeout(120_000) });
+            const fetchUrl = (source, url) => mirrored(url, async candidate => {
+                const response = await open(candidate, { headers: { 'user-agent': browser, ...source.headers }, total: timing.total });
                 const declared = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? '';
-                if (!response.ok || !(response.url || url).startsWith('https:') || /html|xml|javascript/.test(declared)) { await response.body?.cancel().catch(() => {}); throw failed(response); }
+                if (!response.ok || !(response.url || candidate).startsWith('https:') || /html|xml|javascript/.test(declared)) { await response.body?.cancel().catch(() => {}); throw failed(response); }
                 const data = await read(response, limit);
                 const type = sniff(data, declared);
                 if (!type) throw new Error('Unknown file type');
                 return { data, type };
-            };
+            });
             const fetchFile = async (source, index) => {
-                const { data, type } = source.variants?.length > 1
-                    ? await fitting(source, limit, url => fetchUrl(source, url)) : await fetchUrl(source, source.url);
+                const { data, type } = await (source.variants?.length > 1
+                    ? fitting(source, limit, url => fetchUrl(source, url)) : fetchUrl(source, source.url)).catch(async error => {
+                    if (error.code !== 'too-large' || !shrink || post.media[index].type !== 'video') throw error;
+                    const url = await compressionSource(source.variants?.length ? source.variants : [source.url], limit);
+                    return { data: await compressed(url, limit, { headers: { 'user-agent': browser, ...source.headers } }), type: 'video/mp4' };
+                });
                 return { name: `${prefix}${sources.length > 1 ? `-${index + 1}` : ''}.${fileTypes[type]}`, type, data };
             };
             const files = await Promise.all(sources.map((source, index) =>
@@ -707,12 +787,42 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         });
     }
 
+    // ----- Compression: a video over the limit at every quality -------------
+    // The best quality within a few times the limit: the re-encode keeps at
+    // most 720p, and a bitrate that fits cannot carry much more detail.
+    // `urls` run best first; `known` holds sizes already read.
+    async function compressionSource(urls, limit, known) {
+        const sizes = known ?? await Promise.all(urls.map(url => size(url).catch(() => null)));
+        return urls.find((url, index) => sizes[index] && sizes[index] <= limit * 4) ?? urls.at(-1);
+    }
+    // Saves the video (and a separate audio track) to a temporary folder and
+    // re-encodes it with FFmpeg to fit. Only that folder's files reach FFmpeg,
+    // and the folder is removed either way.
+    async function compressed(url, limit, { audio = null, headers } = {}) {
+        const { mkdtemp, readFile, rm } = require('node:fs/promises');
+        const { join } = require('node:path');
+        const { tmpdir } = require('node:os');
+        const directory = await mkdtemp(join(tmpdir(), 'lowcord-social-'));
+        const signal = AbortSignal.timeout(timing.compress);
+        const save = (from, path) => mirrored(from, async candidate => {
+            await rm(path, { force: true });
+            return downloadFile(candidate, path, sourceLimit, signal, headers);
+        }, signal);
+        try {
+            const video = join(directory, 'video.mp4'), track = join(directory, 'audio.mp4');
+            await save(url, video);
+            const audioInput = audio ? await save(audio, track).then(() => track, error => { if (signal.aborted) throw error; return null; }) : null;
+            const output = await compress(video, directory, Math.min(limit, 100_000_000), signal, { general: true, audioInput });
+            return await readFile(output);
+        } finally { await rm(directory, { recursive: true, force: true }); }
+    }
+
     // ----- lowcord-media:// handler ------------------------------------------
-    async function downloadFile(url, path, limit, signal) {
+    async function downloadFile(url, path, limit, signal, headers) {
         const { createWriteStream } = require('node:fs');
         const { Readable, Transform } = require('node:stream');
         const { pipeline } = require('node:stream/promises');
-        const response = await request(url, { timeout: 120_000,
+        const response = await request(url, { headers,
             signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]) });
         const tooLarge = () => Object.assign(new Error('Too large'), { code: 'too-large' });
         if (!response.ok || Number(response.headers.get('content-length')) > limit) {
@@ -789,6 +899,23 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
         return new Response(data.subarray(start, end + 1), { status: 206, headers: { 'content-type': 'video/mp4', 'accept-ranges': 'bytes',
             'content-length': String(end - start + 1), 'content-range': `bytes ${start}-${end}/${data.length}` } });
     }
+    // Passes a body on, aborting upstream after `timing.serveIdle` without
+    // bytes. The clock runs only while a read is wanted, so a paused player
+    // is not mistaken for a stalled server.
+    function watched(upstream, control) {
+        const reader = upstream.getReader();
+        let timer;
+        return new ReadableStream({
+            async pull(sink) {
+                timer = setTimeout(() => control.abort(stalled('Stalled')), timing.serveIdle);
+                try {
+                    const { done, value } = await reader.read();
+                    if (done) sink.close(); else sink.enqueue(value);
+                } catch (error) { sink.error(error); } finally { clearTimeout(timer); }
+            },
+            cancel(reason) { clearTimeout(timer); return reader.cancel(reason).catch(() => {}); },
+        }, { highWaterMark: 0 });
+    }
     async function serve(request) {
         const url = new URL(request.url);
         const source = url.hostname === 'media' ? media.get(url.pathname.slice(1)) : null;
@@ -799,8 +926,13 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
                 return Buffer.isBuffer(value) ? bytes(value, request.headers.get('range')) : playbackCache.response(value, request);
             }
             const range = request.headers.get('range');
-            const upstream = await fetchPage(source.url, { credentials: 'omit', redirect: 'follow',
-                headers: { 'user-agent': browser, ...(range ? { range } : {}), ...source.headers }, signal: AbortSignal.timeout(30_000) });
+            const [upstream, body] = await mirrored(source.url, async candidate => {
+                const control = new AbortController();
+                const response = await open(candidate, { control, signal: request.signal,
+                    headers: { 'user-agent': browser, ...(range ? { range } : {}), ...source.headers } });
+                if (!response.ok) { await response.body?.cancel().catch(() => {}); throw failed(response); }
+                return [response, response.body && watched(response.body, control)];
+            }, request.signal);
             if (!new URL(upstream.url || source.url).protocol.startsWith('https')) return new Response(null, { status: 502 });
             const headers = new Headers({ 'cache-control': 'private, max-age=3600' });
             for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
@@ -808,8 +940,8 @@ function createSocialPosts(fetchPage = fetch, cacheOptions) {
                 if (value) headers.set(name, value);
             }
             // Never let a remote file run as a page from this scheme.
-            if (/html|xml|javascript/i.test(headers.get('content-type') ?? '')) { await upstream.body?.cancel().catch(() => {}); return new Response(null, { status: 415 }); }
-            return new Response(upstream.body, { status: upstream.status, headers });
+            if (/html|xml|javascript/i.test(headers.get('content-type') ?? '')) { await body?.cancel().catch(() => {}); return new Response(null, { status: 415 }); }
+            return new Response(body, { status: upstream.status, headers });
         } catch { return new Response(null, { status: 502 }); }
     }
     return { get, redditVideo, socialVideo, socialMedia, serve, metadata, close: () => { muxed.clear(); return playbackCache.close(); } };

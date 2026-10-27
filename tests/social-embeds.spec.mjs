@@ -219,7 +219,7 @@ test('X is read from its own embed API, and uploads step down to a video quality
     const calls = [];
     const posts = createSocialPosts(async (url, init) => {
         calls.push(`${init.method ?? 'GET'} ${url}`);
-        if (url.startsWith('https://cdn.syndication.twimg.com/tweet-result?id=1&')) return jsonResponse({ __typename: 'Tweet', id_str: '1',
+        if (url.startsWith('https://syndication.twitter.com/tweet-result?id=1&')) return jsonResponse({ __typename: 'Tweet', id_str: '1',
             text: 'Hello &amp; see https://t.co/link https://t.co/media', created_at: '2026-01-01T00:00:00.000Z', favorite_count: 4, conversation_count: 1,
             entities: { urls: [{ url: 'https://t.co/link', expanded_url: 'https://example.com/page' }], media: [{ url: 'https://t.co/media' }] },
             user: { name: 'N', screen_name: 's', profile_image_url_https: 'https://pbs.twimg.com/profile_images/1/a_normal.jpg' },
@@ -227,7 +227,7 @@ test('X is read from its own embed API, and uploads step down to a video quality
                 video_info: { variants: [{ content_type: 'application/x-mpegURL', url: 'https://video.twimg.com/a.m3u8' },
                     { content_type: 'video/mp4', bitrate: 256000, url: 'https://video.twimg.com/low.mp4' },
                     { content_type: 'video/mp4', bitrate: 2176000, url: 'https://video.twimg.com/high.mp4' }] } }] });
-        if (url.startsWith('https://cdn.syndication.twimg.com/')) return jsonResponse({ __typename: 'TweetTombstone' });
+        if (url.startsWith('https://syndication.twitter.com/')) return jsonResponse({ __typename: 'TweetTombstone' });
         if (url.startsWith('https://api.fxtwitter.com/status/2')) return jsonResponse({ tweet: { text: 'fx', author: { name: 'n', screen_name: 's' },
             media: { all: [{ type: 'photo', url: 'https://pbs.twimg.com/a.jpg' }] } } });
         const sizes = { 'https://video.twimg.com/high.mp4': 3 * 1024 * 1024, 'https://video.twimg.com/low.mp4': 12 };
@@ -237,11 +237,128 @@ test('X is read from its own embed API, and uploads step down to a video quality
     const post = await posts.get('https://x.com/s/status/1');
     expect(post).toMatchObject({ text: 'Hello & see https://example.com/page', author: { handle: '@s', url: 'https://x.com/s' }, stats: { likes: 4, replies: 1 } });
     expect(post.media).toEqual([expect.objectContaining({ type: 'video', width: 16, height: 9 })]);
-    expect(calls.some(call => call.includes('fxtwitter'))).toBe(false);
+    expect(calls).toEqual([expect.stringMatching(/^GET https:\/\/syndication\.twitter\.com\/tweet-result\?id=1&/)]);
     const file = await posts.socialVideo('https://x.com/s/status/1', 2 * 1024 * 1024);
     expect(Buffer.from(file.data).toString()).toBe('/low.mp4');
     // A post X's API refuses comes from the next source.
     expect((await posts.get('https://x.com/s/status/2')).text).toBe('fx');
+});
+
+test('an X video over the limit at every quality is compressed from the best quality near the limit, when compression is on', async () => {
+    const { readFile, writeFile, stat } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const sizes = { '/high.mp4': 400 * 1024 * 1024, '/mid.mp4': 6 * 1024 * 1024, '/low.mp4': 3 * 1024 * 1024 };
+    const compressions = [];
+    const posts = createSocialPosts(async (url, init) => {
+        if (url.startsWith('https://syndication.twitter.com/')) return jsonResponse({ __typename: 'Tweet', id_str: '1', text: '', user: { name: 'N', screen_name: 's' },
+            mediaDetails: [{ type: 'video', media_url_https: 'https://pbs.twimg.com/thumb.jpg', video_info: { variants: [
+                { content_type: 'video/mp4', bitrate: 256000, url: 'https://video.twimg.com/low.mp4' },
+                { content_type: 'video/mp4', bitrate: 832000, url: 'https://video.twimg.com/mid.mp4' },
+                { content_type: 'video/mp4', bitrate: 2176000, url: 'https://video.twimg.com/high.mp4' }] } }] });
+        const path = new URL(url).pathname;
+        if (url.startsWith('https://video') && path in sizes) return new Response(init.method === 'HEAD' ? null : `source${path}`,
+            { headers: { 'content-type': 'video/mp4', ...(init.method === 'HEAD' ? { 'content-length': String(sizes[path]) } : {}) } });
+        return new Response('missing', { status: 404 });
+    }, undefined, undefined, { compress: async (input, directory, limit, signal, options) => {
+        compressions.push({ source: await readFile(input, 'utf8'), directory, limit, options, sameFolder: dirname(input) === directory });
+        const output = join(directory, 'compressed.mp4');
+        await writeFile(output, 'ftyp-compressed');
+        return output;
+    } });
+    const limit = 2 * 1024 * 1024;
+    await expect(posts.socialVideo('https://x.com/s/status/1', limit)).rejects.toMatchObject({ code: 'too-large' });
+    expect(compressions).toHaveLength(0);
+    const file = await posts.socialVideo('https://x.com/s/status/1', limit, { compress: true });
+    expect([file.name, file.type, Buffer.from(file.data).toString()]).toEqual(['x-1.mp4', 'video/mp4', 'ftyp-compressed']);
+    expect(compressions).toHaveLength(1);
+    // 400 MB is far over; 6 MB is the best quality within four times the limit.
+    expect(compressions[0]).toMatchObject({ source: 'source/mid.mp4', limit, sameFolder: true, options: { general: true, audioInput: null } });
+    // The temporary folder is removed afterwards.
+    await expect(stat(compressions[0].directory)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('X post data comes from syndication.twitter.com, then the CDN host, then third parties; a tombstone skips the twin host', async () => {
+    const tweet = id => jsonResponse({ __typename: 'Tweet', id_str: id, text: `post ${id}`, user: { screen_name: 's' }, mediaDetails: [] });
+    const calls = [];
+    const run = (hosts, fetchPage) => createSocialPosts(async (url, init) => {
+        calls.push(new URL(url).host);
+        return fetchPage(url, init);
+    });
+    // The first host is unreachable: the same API on the CDN host answers.
+    const down = run(0, async url => {
+        if (url.startsWith('https://syndication.twitter.com/')) throw new Error('connect timeout');
+        if (url.startsWith('https://cdn.syndication.twimg.com/')) return tweet('1');
+        throw new Error(`must not fetch ${url}`);
+    });
+    expect((await down.get('https://x.com/s/status/1')).text).toBe('post 1');
+    expect(calls).toEqual(['syndication.twitter.com', 'cdn.syndication.twimg.com']);
+    // A tombstone is X's answer for both hosts: straight to fxtwitter.
+    calls.length = 0;
+    const tomb = run(0, async url => {
+        if (url.startsWith('https://syndication.twitter.com/')) return jsonResponse({ __typename: 'TweetTombstone' });
+        if (url.startsWith('https://api.fxtwitter.com/')) return jsonResponse({ tweet: { text: 'fx', author: {}, media: { all: [] } } });
+        throw new Error(`must not fetch ${url}`);
+    });
+    expect((await tomb.get('https://x.com/s/status/2')).text).toBe('fx');
+    expect(calls).toEqual(['syndication.twitter.com', 'api.fxtwitter.com']);
+    // A host that timed out rests, so the next post does not wait on it again.
+    calls.length = 0;
+    const slow = run(0, async url => {
+        if (url.startsWith('https://syndication.twitter.com/')) throw Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+        return tweet('3');
+    });
+    await slow.get('https://x.com/s/status/3');
+    await slow.get('https://x.com/s/status/4');
+    expect(calls).toEqual(['syndication.twitter.com', 'cdn.syndication.twimg.com', 'cdn.syndication.twimg.com']);
+});
+
+test('an X video downloads from the Cloudflare mirror first and falls back to video.twimg.com, keeping the query', async () => {
+    const original = 'https://video.twimg.com/amplify_video/9/vid/avc1/1280x720/a.mp4?tag=14';
+    const mirror = original.replace('video.twimg.com', 'video-cf.twimg.com');
+    const calls = [];
+    let mirrorUp = true;
+    const posts = createSocialPosts(async (url, init) => {
+        calls.push(`${init.method ?? 'GET'} ${url}`);
+        if (url.startsWith('https://syndication.twitter.com/')) return jsonResponse({ __typename: 'Tweet', id_str: '1', text: 't', user: { screen_name: 's' },
+            mediaDetails: [{ type: 'video', media_url_https: 'https://pbs.twimg.com/t.jpg', video_info: { variants: [{ content_type: 'video/mp4', bitrate: 1, url: original }] } }] });
+        if (url === mirror && !mirrorUp) throw new Error('connect failed');
+        if (url === mirror || url === original) return new Response(init.method === 'HEAD' ? null : `ftyp-${new URL(url).host}`, { headers: { 'content-length': init.method === 'HEAD' ? '9999' : '21' } });
+        return new Response('missing', { status: 404 });
+    });
+    const first = await posts.socialVideo('https://x.com/s/status/1', 10 * 1024 * 1024);
+    expect(Buffer.from(first.data).toString()).toBe('ftyp-video-cf.twimg.com');
+    expect(calls.filter(call => call.includes('video'))).toEqual([`HEAD ${mirror}`, `GET ${mirror}`]);
+    // The mirror goes down: the original answers, and is asked first afterwards.
+    mirrorUp = false;
+    calls.length = 0;
+    const second = await posts.socialVideo('https://x.com/s/status/1', 10 * 1024 * 1024);
+    expect(Buffer.from(second.data).toString()).toBe('ftyp-video.twimg.com');
+    expect(calls.filter(call => call.includes('video'))).toEqual([`HEAD ${mirror}`, `HEAD ${original}`, `GET ${original}`]);
+    calls.length = 0;
+    await posts.socialVideo('https://x.com/s/status/1', 10 * 1024 * 1024);
+    expect(calls.filter(call => call.includes('video'))).toEqual([`HEAD ${original}`, `GET ${original}`]);
+});
+
+test('a body that sends one chunk and hangs fails as stalled, and the mirror is tried', async () => {
+    const original = 'https://video.twimg.com/a.mp4';
+    const hanging = () => new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('ftyp-part')); } }), { headers: { 'content-length': '99' } });
+    const posts = createSocialPosts(async (url, init) => {
+        if (url.startsWith('https://syndication.twitter.com/')) return jsonResponse({ __typename: 'Tweet', id_str: '1', text: 't', user: { screen_name: 's' },
+            mediaDetails: [{ type: 'video', media_url_https: 'https://pbs.twimg.com/t.jpg', video_info: { variants: [{ content_type: 'video/mp4', bitrate: 1, url: original }] } }] });
+        if (init.method === 'HEAD') return new Response(null, { headers: { 'content-length': '12' } });
+        if (url.startsWith('https://video-cf.twimg.com/')) return hanging();
+        if (url === original) return new Response('ftyp-whole', { headers: { 'content-length': '10' } });
+        return new Response('missing', { status: 404 });
+    }, undefined, { idle: 150, headers: 500, head: 500 });
+    const started = Date.now();
+    const file = await posts.socialVideo('https://x.com/s/status/1', 10 * 1024 * 1024);
+    expect(Buffer.from(file.data).toString()).toBe('ftyp-whole');
+    expect(Date.now() - started).toBeLessThan(3000);
+    // With nowhere else to go, the stall is the failure.
+    const stuck = createSocialPosts(async url => url.startsWith('https://syndication.twitter.com/')
+        ? jsonResponse({ __typename: 'Tweet', id_str: '2', text: 't', user: { screen_name: 's' }, mediaDetails: [{ type: 'photo', media_url_https: 'https://pbs.twimg.com/a.jpg' }] })
+        : hanging(), undefined, { idle: 150 });
+    await expect(stuck.socialMedia('https://x.com/s/status/2', 1024 * 1024)).rejects.toMatchObject({ code: 'stalled' });
 });
 
 test('an age-restricted X post (an embed API tombstone) steps down through fxtwitter\'s video qualities, in a carousel too', async () => {

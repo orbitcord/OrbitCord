@@ -238,6 +238,17 @@
             setTimeout(retry, 100);
         });
     }
+    // A video over the upload limit is compressed natively with FFmpeg;
+    // these are the ways that can fail, worded for the toast.
+    function compressionFailure(error, what) {
+        if (error === "ffmpeg-missing") return `${what} is too large to upload. Install FFmpeg to compress it; the link will be sent for now.`;
+        if (/^(encode-\w+|unsupported-duration)$/.test(error ?? "")) return `Couldn’t compress ${what} to fit, so the link will be sent.`;
+        return null;
+    }
+    // Compression takes a while; say so once the download runs long.
+    function noteCompression(entry, title) {
+        return setTimeout(() => { if (!entry.announce) entry.status.update(title, "Large videos are compressed to fit, which can take a minute."); }, 6000);
+    }
     function prepareVideo(editor, link) {
         const target = links.parse(link);
         const native = window.__LOWCORD_NATIVE__;
@@ -280,10 +291,14 @@
                 else entry.status.update(`Getting the ${service} ${entry.kind}…`, "It will be sent instead of the link.");
             }
             let result;
-            try { result = await native.socialVideo(link, uploadLimit()); }
+            const slow = noteCompression(entry, `Getting the ${service} ${entry.kind}…`);
+            try { result = await native.socialVideo(link, uploadLimit(), enabled("compressVideos")); }
             catch { result = { error: "failed" }; }
+            finally { clearTimeout(slow); }
             if (videos.get(id) !== entry || result?.error === "not-video") return;
             if (result?.gif) entry.kind = "GIF";
+            const compression = compressionFailure(result?.error, `This ${service} ${entry.kind}`);
+            if (compression) { toast(compression, true); return; }
             if (result?.error === "too-large") { toast(`This ${service} ${entry.kind} is too large to upload, so the link will be sent.`, true); return; }
             if (!(result?.data instanceof Uint8Array)) { toast(`Couldn’t download that ${service} ${entry.kind}, so the link will be sent.`, true); return; }
             // A Reddit GIF that fits arrives as the GIF itself.
@@ -313,9 +328,13 @@
         if (entry.announce) entry.announce();
         else entry.status.update(`Getting the ${service} post…`, "It will be sent instead of the link.");
         let result;
-        try { result = await native.socialMedia(link, uploadLimit()); }
+        const slow = noteCompression(entry, `Getting the ${service} post…`);
+        try { result = await native.socialMedia(link, uploadLimit(), enabled("compressVideos")); }
         catch { result = { error: "failed" }; }
+        finally { clearTimeout(slow); }
         if (videos.get(entry.id) !== entry) return;
+        const compression = compressionFailure(result?.error, `A video in this ${service} post`);
+        if (compression) { toast(compression, true); return; }
         const sent = result?.files;
         const files = Array.isArray(sent) ? sent.filter(file => file?.data instanceof Uint8Array) : [];
         if (result?.error === "too-large") { toast(`This ${service} post is too large to upload, so the link will be sent.`, true); return; }
@@ -340,9 +359,13 @@
         if (entry.announce) entry.announce();
         else entry.status.update(`Getting ${what}…`, `${many ? "They" : "It"} will be sent instead of the link.`);
         let result;
-        try { result = await window.__LOWCORD_NATIVE__.socialMedia(link, uploadLimit()); }
+        const slow = photos ? 0 : noteCompression(entry, `Getting ${what}…`);
+        try { result = await window.__LOWCORD_NATIVE__.socialMedia(link, uploadLimit(), enabled("compressVideos")); }
         catch { result = { error: "failed" }; }
+        finally { clearTimeout(slow); }
         if (videos.get(entry.id) !== entry || result?.error === "not-media") return;
+        const compression = compressionFailure(result?.error, `A video in this ${service} carousel`);
+        if (compression) { toast(compression, true); return; }
         if (result?.error === "too-large") { toast(`${these} too large to upload, so the link will be sent.`, true); return; }
         if (result?.error === "too-many") { toast(`This ${service} post has more than 10 items, so the link will be sent.`, true); return; }
         const files = Array.isArray(result?.files) ? result.files.filter(file => file?.data instanceof Uint8Array) : [];
