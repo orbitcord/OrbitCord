@@ -51,6 +51,13 @@ function setupLowcordSettings() {
             }
         };
         const busy = ["checking", "downloading", "installing"].includes(state.status);
+        const formatBytes = bytes => {
+            const value = Math.max(0, Number(bytes) || 0);
+            return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)} MB`
+                : value >= 1000 ? `${(value / 1000).toFixed(1)} KB` : `${Math.round(value)} B`;
+        };
+        const phases = { connecting: "Connecting…", retrying: "Connection interrupted. Retrying…",
+            verifying: "Verifying download…", complete: "Download complete" };
         const messages = {
             idle: "Check for OrbitCord updates.",
             checking: "Checking for updates…",
@@ -66,6 +73,11 @@ function setupLowcordSettings() {
             h("p", { role: "status", "aria-live": "polite" }, messages[state.status] || messages.idle),
             state.status === "downloading" && Number.isFinite(state.progress)
                 ? h("progress", { max: 100, value: state.progress, "aria-label": "Update download progress" }) : null,
+            Number.isFinite(state.total) && ['downloading', 'downloaded', 'error'].includes(state.status)
+                ? h("p", { className: "lowcord-chat-description lowcord-download-details" },
+                    `${formatBytes(state.transferred)} of ${formatBytes(state.total)} downloaded`,
+                    state.status === 'downloading' ? ` · ${formatBytes(state.bytesPerSecond)}/s` : '',
+                    state.status === 'downloading' && phases[state.downloadPhase] ? ` · ${phases[state.downloadPhase]}` : '') : null,
             state.error ? h("p", { role: "alert" }, state.error) : null,
             h("div", { className: "lowcord-updates-actions" },
                 h("button", { type: "button", className: "lowcord-button", disabled: busy || !native?.checkForUpdates,

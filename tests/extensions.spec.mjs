@@ -647,16 +647,16 @@ for (const mode of ["dmg", "automatic"]) test(`update settings checks, downloads
             onUpdateStatus: callback => { listener = callback; return () => { listener = null; }; },
             checkForUpdates: async () => {
                 window.updateActions.push('check');
-                return publish({ status: mode === 'dmg' ? 'available' : 'downloading', version: '0.1.6', progress: 50 });
+                return publish({ status: mode === 'dmg' ? 'available' : 'downloading', version: '0.1.6', progress: 50, transferred: 5_000_000, total: 10_000_000, bytesPerSecond: 250_000, downloadPhase: 'downloading' });
             },
             downloadUpdate: async () => {
                 window.updateActions.push('download');
-                publish({ status: 'downloading', progress: 50 });
+                publish({ status: 'downloading', progress: 50, transferred: 5_000_000, total: 10_000_000, bytesPerSecond: 250_000, downloadPhase: 'downloading' });
                 return state;
             },
             installUpdate: async () => { window.updateActions.push('install'); return state; },
         };
-        window.finishUpdateDownload = () => publish({ status: 'downloaded', progress: 100 });
+        window.finishUpdateDownload = () => publish({ status: 'downloaded', progress: 100, transferred: 10_000_000 });
     }, mode);
     await page.locator('.lowcord-sidebar-section').getByText('Check for updates', { exact: true }).click();
     const body = page.locator('.lowcord-settings-body');
@@ -666,8 +666,10 @@ for (const mode of ["dmg", "automatic"]) test(`update settings checks, downloads
         await body.getByRole('button', { name: 'Download update', exact: true }).click();
     }
     await expect(body.getByRole('progressbar')).toHaveAttribute('value', '50');
+    await expect(body.locator('.lowcord-download-details')).toHaveText('5.0 MB of 10.0 MB downloaded · 250.0 KB/s');
     await expect(body.getByRole('button', { name: 'Check for updates', exact: true })).toBeDisabled();
     await page.evaluate(() => window.finishUpdateDownload());
+    await expect(body.locator('.lowcord-download-details')).toHaveText('10.0 MB of 10.0 MB downloaded');
     await body.getByRole('button', { name: mode === 'dmg' ? 'Open installer' : 'Restart and install', exact: true }).click();
     expect(await page.evaluate(() => window.updateActions)).toEqual(mode === 'dmg' ? ['check', 'download', 'install'] : ['check', 'install']);
 });

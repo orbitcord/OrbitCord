@@ -15,7 +15,9 @@ const config = join(root, 'electron-builder.cjs');
 if (mac) {
     await prepare(true, { platform: 'darwin', arch: 'x64' });
     await prepare(true, { platform: 'darwin', arch: 'arm64' });
-    await build({ targets: Platform.MAC.createTarget(['dmg'], Arch.universal), config, publish: 'never' });
+    // Old clients prefer a universal DMG when present. Publish only the smaller
+    // per-architecture installers so 0.1.20+ selects its matching download.
+    await build({ targets: Platform.MAC.createTarget(['dmg'], Arch.arm64, Arch.x64), config, publish: 'never' });
 }
 if (win) {
     await prepare(true, { platform: 'win32', arch: 'x64' });

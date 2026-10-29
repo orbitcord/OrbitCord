@@ -229,3 +229,73 @@ test('unmodified legacy Windows clients find the compatibility release and insta
     assert.equal(requests.at(-1), '/orbitcord/OrbitCord/releases/download/v0.1.7-1/1.yml');
     assert.equal(provider.resolveFiles(info)[0].url.href, 'https://github.com/orbitcord/OrbitCord/releases/download/v0.1.7-1/OrbitCord-0.1.7-windows-x64-Setup.exe');
 });
+
+test('Mac reports byte progress and speed before completion without imposing a total download deadline', async t => {
+    const directory = await mkdtemp(join(tmpdir(), 'orbitcord-speed-'));
+    const originalTimeout = AbortSignal.timeout;
+    t.mock.method(AbortSignal, 'timeout', milliseconds => {
+        assert.notEqual(milliseconds, 30 * 60_000, 'active slow transfers must not expire after 30 minutes');
+        return originalTimeout(milliseconds);
+    });
+    let finish;
+    const reports = [];
+    try {
+        const task = downloadMacInstaller({ directory, asset: release.assets[0], idleTimeout: 5000,
+            onProgress: (percent, details) => reports.push({ percent, ...details }),
+            fetch: async () => new Response(new ReadableStream({ start(controller) {
+                controller.enqueue(Buffer.from('da'));
+                finish = () => { controller.enqueue(Buffer.from('ta')); controller.close(); finish = null; };
+            } })) });
+        await new Promise(resolve => setTimeout(resolve, 1200));
+        const partial = reports.find(info => info.transferred === 2);
+        assert.equal(partial.percent, 50);
+        assert.equal(partial.total, 4);
+        assert.ok(partial.bytesPerSecond > 0);
+        assert.equal(partial.downloadPhase, 'downloading');
+        // Without incoming bytes, the next update must show zero speed.
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        assert.equal(reports.at(-1).bytesPerSecond, 0);
+        finish();
+        const path = await task;
+        assert.equal(await readFile(path, 'utf8'), 'data');
+        assert.deepEqual(reports.at(-1), { percent: 100, transferred: 4, total: 4, bytesPerSecond: 0, downloadPhase: 'complete' });
+        const count = reports.length;
+        await new Promise(resolve => setTimeout(resolve, 1100));
+        assert.equal(reports.length, count, 'no progress timer after completion');
+    } finally { finish?.(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('0.1.20 Mac asset selection accepts the new architecture-specific release for both processors', () => {
+    const legacy = require('./fixtures/mac-updater-0.1.20.cjs');
+    const assets = ['arm64', 'x64'].map(arch => {
+        const name = `OrbitCord-0.1.25-mac-${arch}.dmg`;
+        return { name, size: 100, browser_download_url: `https://github.com/orbitcord/OrbitCord/releases/download/v0.1.25/${name}` };
+    });
+    for (const arch of ['arm64', 'x64']) {
+        const next = { tag_name: 'v0.1.25', assets };
+        assert.equal(legacy.macAsset(next, arch).name, `OrbitCord-0.1.25-mac-${arch}.dmg`);
+        assert.equal(macAsset(next, arch).name, `OrbitCord-0.1.25-mac-${arch}.dmg`);
+    }
+});
+
+test('Mac controller publishes sub-percent byte updates and Windows forwards native transfer statistics', async () => {
+    let progress;
+    const updates = createUpdateController({ currentVersion: '0.1.20', platform: 'darwin', packaged: true,
+        getRelease: async () => ({ ...release, tag_name: 'v0.1.25' }),
+        downloadInstaller: async (_release, callback) => { progress = callback; return new Promise(() => {}); } });
+    await updates.check();
+    void updates.download();
+    progress(0, { transferred: 10, total: 10000, bytesPerSecond: 10, downloadPhase: 'downloading' });
+    progress(0, { transferred: 20, total: 10000, bytesPerSecond: 10, downloadPhase: 'downloading' });
+    assert.equal(updates.snapshot().transferred, 20);
+    const updater = new EventEmitter();
+    const windows = createUpdateController({ currentVersion: '0.1.20', platform: 'win32', packaged: true, getUpdater: () => updater });
+    windows.initialize();
+    updater.emit('download-progress', { percent: 25, transferred: 250, total: 1000, bytesPerSecond: 125 });
+    assert.equal(windows.snapshot().transferred, 250);
+    assert.equal(windows.snapshot().total, 1000);
+    assert.equal(windows.snapshot().bytesPerSecond, 125);
+    updater.emit('update-downloaded', { version: '0.1.25' });
+    assert.equal(windows.snapshot().transferred, 1000);
+    assert.equal(windows.snapshot().bytesPerSecond, 0);
+});

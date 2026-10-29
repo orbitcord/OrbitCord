@@ -87,7 +87,7 @@ jobs:
           node-version: 22.13.0
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install universal Mac Rust targets
+      - name: Install Apple Silicon and Intel Mac Rust targets
         if: matrix.platform == 'macos'
         run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
       - run: pnpm install --frozen-lockfile

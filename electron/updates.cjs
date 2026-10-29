@@ -50,7 +50,6 @@ function interrupted(error) {
 async function downloadMacInstaller({ fetch, directory, asset, onProgress = () => {}, retryDelays = [500, 1500, 4000], idleTimeout = 30_000 }) {
     await mkdir(directory, { recursive: true });
     const path = join(directory, asset.name), temporary = `${path}.download`;
-    const deadline = AbortSignal.timeout(30 * 60_000);
     // Only resume across calls when GitHub supplied a digest for this asset.
     // A partial file is never offered for installation.
     if (!/^sha256:[a-f0-9]{64}$/.test(asset.digest || '')) await rm(temporary, { force: true });
@@ -60,14 +59,26 @@ async function downloadMacInstaller({ fetch, directory, asset, onProgress = () =
         let hash = createHash('sha256');
         // Rehash bytes actually flushed to disk, including after a failed pipeline.
         if (size) for await (const chunk of createReadStream(temporary)) hash.update(chunk);
-        const control = new AbortController(), signal = AbortSignal.any([deadline, control.signal]);
-        let timer;
+        const control = new AbortController(), signal = control.signal;
+        let timer, phase = 'connecting', sampledBytes = size, sampledAt = performance.now();
+        const report = () => {
+            const now = performance.now(), elapsed = (now - sampledAt) / 1000;
+            onProgress(Math.floor(size / asset.size * 100), {
+                transferred: size, total: asset.size,
+                bytesPerSecond: phase === 'downloading' && elapsed > 0 ? Math.max(0, (size - sampledBytes) / elapsed) : 0,
+                downloadPhase: phase,
+            });
+            sampledBytes = size; sampledAt = now;
+        };
+        // Keep the UI alive even when no bytes arrive. One IPC update per second
+        // avoids publishing for every network chunk or percentage change.
+        const ticker = setInterval(report, 1000);
         const watch = () => {
             clearTimeout(timer);
             timer = setTimeout(() => control.abort(Object.assign(new Error('Installer download stalled. Try again.'), { retryable: true })), idleTimeout);
         };
         try {
-            onProgress(Math.floor(size / asset.size * 100));
+            report();
             if (size !== asset.size) {
                 const url = (attempt || size) && Number.isSafeInteger(asset.id) && asset.id > 0
                     ? `https://api.github.com/repos/orbitcord/OrbitCord/releases/assets/${asset.id}?download=${Date.now()}`
@@ -91,28 +102,31 @@ async function downloadMacInstaller({ fetch, directory, asset, onProgress = () =
                     // Some servers ignore Range. Truncate and hash the full response.
                     size = 0; hash = createHash('sha256');
                 }
+                phase = 'downloading';
                 const progress = new Transform({ transform(chunk, _encoding, callback) {
                     watch();
                     size += chunk.length;
                     if (size > asset.size) return callback(new Error('Installer size does not match the release.'));
                     hash.update(chunk);
-                    onProgress(Math.floor(size / asset.size * 100));
                     callback(null, chunk);
                 } });
                 await pipeline(Readable.fromWeb(response.body), progress,
                     createWriteStream(temporary, { flags: response.status === 206 ? 'a' : 'w', mode: 0o600 }), { signal });
             }
             if (size !== asset.size) throw Object.assign(new Error('Installer download is incomplete. Try again.'), { retryable: true });
+            phase = 'verifying'; report();
             if (asset.digest && asset.digest !== `sha256:${hash.digest('hex')}`) throw new Error('Installer checksum does not match the release.');
             await rename(temporary, path);
+            phase = 'complete'; report();
             return path;
         } catch (error) {
             if (control.signal.aborted) error = control.signal.reason;
             if (!interrupted(error)) { await rm(temporary, { force: true }); throw error; }
-            if (deadline.aborted || attempt >= retryDelays.length) {
+            if (attempt >= retryDelays.length) {
                 throw new Error(`${error.message} Try again. The download will resume where it stopped.`, { cause: error });
             }
-        } finally { clearTimeout(timer); }
+            phase = 'retrying'; report();
+        } finally { clearTimeout(timer); clearInterval(ticker); }
         await delay(retryDelays[attempt]);
     }
 }
@@ -137,8 +151,10 @@ function createUpdateController({ currentVersion, platform, packaged, getUpdater
         updater.on('checking-for-update', () => set({ status: 'checking', progress: null }));
         updater.on('update-not-available', () => set({ status: 'up-to-date', version: null }));
         updater.on('update-available', info => set({ status: 'downloading', version: info.version, progress: 0 }));
-        updater.on('download-progress', info => set({ status: 'downloading', progress: Math.floor(info.percent) }));
-        updater.on('update-downloaded', info => set({ status: 'downloaded', version: info.version, progress: 100 }));
+        updater.on('download-progress', info => set({ status: 'downloading', progress: Math.floor(info.percent),
+            transferred: info.transferred, total: info.total, bytesPerSecond: info.bytesPerSecond, downloadPhase: 'downloading' }));
+        updater.on('update-downloaded', info => set({ status: 'downloaded', version: info.version, progress: 100,
+            transferred: state.total, bytesPerSecond: 0, downloadPhase: 'complete' }));
         updater.on('error', error => { if (!managedDownload) fail(error); });
         return updater;
     }
@@ -147,7 +163,7 @@ function createUpdateController({ currentVersion, platform, packaged, getUpdater
         if (['downloading', 'installing'].includes(state.status)) return snapshot();
         if (state.status === 'downloaded' && platform === 'win32') return snapshot();
         pending = (async () => {
-            set({ status: 'checking', version: null, progress: null });
+            set({ status: 'checking', version: null, progress: null, transferred: null, total: null, bytesPerSecond: 0, downloadPhase: null });
             try {
                 if (platform === 'win32' && packaged) {
                     const result = await initialize().checkForUpdates();
@@ -184,10 +200,10 @@ function createUpdateController({ currentVersion, platform, packaged, getUpdater
         if (platform !== 'darwin') return snapshot();
         if (!release || !['available', 'error'].includes(state.status)) return snapshot();
         pending = (async () => {
-            set({ status: 'downloading', progress: 0 });
+            set({ status: 'downloading', progress: 0, bytesPerSecond: 0, downloadPhase: 'connecting' });
             try {
-                installer = await downloadInstaller(release, percent => {
-                    if (percent !== state.progress) set({ progress: percent });
+                installer = await downloadInstaller(release, (percent, details = {}) => {
+                    set({ progress: percent, ...details });
                 });
                 set({ status: 'downloaded', progress: 100 });
             } catch (error) { fail(error); }

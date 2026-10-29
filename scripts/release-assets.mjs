@@ -18,8 +18,12 @@ export function stableVersion(version) {
 export async function verifyReleaseAssets(directory, version) {
     stableVersion(version);
     const installer = `OrbitCord-${version}-windows-x64-Setup.exe`;
-    const mac = `OrbitCord-${version}-mac-universal.dmg`;
-    for (const file of [mac, installer, `${installer}.blockmap`]) {
+    const mac = ['arm64', 'x64'].map(arch => `OrbitCord-${version}-mac-${arch}.dmg`);
+    if (await stat(join(directory, `OrbitCord-${version}-mac-universal.dmg`)).then(() => true, error => {
+        if (error.code !== 'ENOENT') throw error;
+        return false;
+    })) throw new Error('Publish architecture-specific Mac installers without a universal DMG so older clients select the smaller download.');
+    for (const file of [...mac, installer, `${installer}.blockmap`]) {
         if (!(await stat(join(directory, file))).size) throw new Error(`Empty release asset: ${file}`);
     }
     const hash = createHash('sha512');

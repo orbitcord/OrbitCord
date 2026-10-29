@@ -23,15 +23,22 @@ test('publication rejects missing installers and mismatched update versions, siz
     const directory = await mkdtemp(join(tmpdir(), 'orbitcord-release-'));
     const version = '0.1.7';
     const exe = `OrbitCord-${version}-windows-x64-Setup.exe`;
-    const mac = `OrbitCord-${version}-mac-universal.dmg`;
+    const mac = ['arm64', 'x64'].map(arch => `OrbitCord-${version}-mac-${arch}.dmg`);
     const sha512 = createHash('sha512').update('installer').digest('base64');
     const manifest = `version: ${version}\nfiles:\n  - url: ${exe}\n    sha512: ${sha512}\n    size: 9\npath: ${exe}\nsha512: ${sha512}\n`;
     try {
         await assert.rejects(verifyReleaseAssets(directory, version), /ENOENT/);
-        for (const [file, content] of [[exe, 'installer'], [mac, 'dmg'], [`${exe}.blockmap`, 'map'], ['latest.yml', manifest], ['1.yml', manifest]]) {
+        for (const [file, content] of [[exe, 'installer'], ...mac.map(name => [name, 'dmg']), [`${exe}.blockmap`, 'map'], ['latest.yml', manifest], ['1.yml', manifest]]) {
             await writeFile(join(directory, file), content);
         }
         assert.deepEqual(await verifyReleaseAssets(directory, version), { version, mac, installer: exe });
+        await rm(join(directory, mac[1]));
+        await assert.rejects(verifyReleaseAssets(directory, version), /ENOENT/);
+        await writeFile(join(directory, mac[1]), 'dmg');
+        const universal = join(directory, `OrbitCord-${version}-mac-universal.dmg`);
+        await writeFile(universal, 'dmg');
+        await assert.rejects(verifyReleaseAssets(directory, version), /without a universal DMG/);
+        await rm(universal);
         for (const broken of [manifest.replace('version: 0.1.7', 'version: 0.1.6'), manifest.replace('size: 9', 'size: 8'), manifest.replaceAll(sha512, 'incorrect')]) {
             await writeFile(join(directory, 'latest.yml'), broken);
             await assert.rejects(verifyReleaseAssets(directory, version), /does not match/);
