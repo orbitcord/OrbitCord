@@ -7,29 +7,29 @@
 (() => {
     const storageKey = "lowcord.extensions";
     const catalog = [
-        { id: "anonymiseFileNames", title: "Anonymise file names", description: "Randomise upload names. Keep file types and spoiler tags." },
+        { id: "anonymiseFileNames", title: "Anonymise file names", description: "Give uploads random names. Keep file types and spoiler tags." },
         { id: "compressVideos", title: "Compress media", description: "Shrink large videos, images and GIFs to fit Discord's upload limit. Needs FFmpeg." },
-        { id: "voiceMessages", title: "Voice messages", description: "Use the waveform button to record a voice message." },
-        { id: "redgifsPicker", title: "RedGIFs picker", description: "Browse and search RedGIFs, then send a video as an MP4 file." },
-        { id: "mediaSources", title: "Media sources", description: "Browse GifReels and XXXTik and send original images or videos with one click." },
-        { id: "redditPicker", title: "Reddit picker", description: "Browse Reddit, optionally signed in, and send a post's media as files. Large videos are compressed below 20 MB." },
+        { id: "voiceMessages", title: "Voice messages", description: "Record a voice message with the waveform button." },
+        { id: "redgifsPicker", title: "RedGIFs picker", description: "Find RedGIFs videos and send them as MP4 files." },
+        { id: "mediaSources", title: "Media sources", description: "Browse GifReels and XXXTik. Send photos and videos as files." },
+        { id: "redditPicker", title: "Reddit picker", description: "Browse Reddit and send photos and videos as files. Compress large videos below 20 MB." },
         { id: "chatCapture", title: "Chat screenshots", description: "Use the camera button to capture a range of messages in one image." },
-        { id: "mediaGallery", title: "Media gallery", description: "Browse chat photos and videos from the header. Click to jump to a message." },
+        { id: "mediaGallery", title: "Media gallery", description: "Browse photos and videos from the chat header. Select an item to jump to its message." },
         { id: "pictureInPicture", title: "Picture-in-picture", description: "Hover a chat video and use the pop-out button, or press Alt+P, to watch in a floating window." },
         { id: "downloadVideos", title: "Download linked videos", description: "Right-click a linked or embedded video to save its media file." },
         { id: "copyMediaLink", title: "Copy media link", description: "Right-click a photo or video to copy its link." },
-        { id: "massDelete", title: "Mass delete", description: "Use the trash button to delete all your messages in a DM, channel or server." },
-        { id: "dmQuickReply", title: "DM quick reply", description: "Hover over a DM in the list to read and reply without switching chats." },
-        { id: "quickReply", title: "Quick reply", description: "Shift + ↑/↓ in an empty box picks a message to reply to. Esc cancels. Replaces the edit shortcut." },
-        { id: "clickReply", title: "Click to reply", description: "Click a chat bubble to reply to it. Works when chat appearance uses bubbles." },
+        { id: "massDelete", title: "Mass delete", description: "Delete your messages from a DM, channel or server with the trash button." },
+        { id: "dmQuickReply", title: "DM quick reply", description: "Hover over a DM to read and reply without switching chats." },
+        { id: "quickReply", title: "Quick reply", description: "In an empty message box, press Shift with the up or down arrow to choose a message to reply to. Replaces the edit shortcut." },
+        { id: "clickReply", title: "Click to reply", description: "Click a message to reply. Requires chat bubbles." },
         { id: "fakeNitro", title: "Fake Nitro", description: "Use any server's emojis, stickers and Nitro themes without Nitro." },
         { id: "cleanUrls", title: "Clean links", description: "Remove tracking parameters from links you send." },
         { id: "silentTyping", title: "Silent typing", description: "Hide your typing indicator." },
-        { id: "noTracking", title: "No tracking", description: "Block Discord analytics, crash reports and desktop app prompts." },
+        { id: "noTracking", title: "No tracking", description: "Block Discord analytics, crash reports and prompts to download the app." },
         { id: "youtubeAdblock", title: "YouTube ad block", description: "Block ads in YouTube embeds and Watch Together." },
-        { id: "musicEmbeds", title: "Fix music embeds", description: "Add playable Spotify and Apple Music previews to links." },
-        { id: "socialEmbeds", title: "Auto social embeds", description: "Embed social post links using a working provider." },
-        { id: "socialCards", title: "Social post cards", description: "Show each social post in one card with all its media." },
+        { id: "musicEmbeds", title: "Fix music embeds", description: "Play Spotify and Apple Music previews in chat." },
+        { id: "socialEmbeds", title: "Auto social embeds", description: "Show previews for social post links." },
+        { id: "socialCards", title: "Social post cards", description: "Show each social post and its photos or videos in one card." },
         { id: "redditVideoUpload", title: "Reddit videos as files", description: "Upload linked Reddit videos as files, with sound." },
         { id: "instagramVideoUpload", title: "Instagram Reels as files", description: "Upload linked Instagram Reels and videos as files." },
         { id: "twitterVideoUpload", title: "X videos as files", description: "Upload linked X videos as files." },
@@ -65,7 +65,7 @@
         }
         const next = { ...options, [id]: value };
         try { storage.setItem(optionsKey, JSON.stringify(next)); }
-        catch { throw new Error("Couldn’t save this setting. Please try again."); }
+        catch { throw new Error("Couldn't save this setting. Try again."); }
         options = next;
         window.dispatchEvent(new Event(changeEvent));
     }
@@ -79,7 +79,7 @@
     function set(id, value) {
         const next = { ...state, [id]: Boolean(value) };
         try { storage.setItem(storageKey, JSON.stringify(next)); }
-        catch { throw new Error("Couldn’t save this setting. Please try again."); }
+        catch { throw new Error("Couldn't save this setting. Try again."); }
         state = next;
         window.dispatchEvent(new Event(changeEvent));
     }
@@ -242,7 +242,7 @@
     // these are the ways that can fail, worded for the toast.
     function compressionFailure(error, what) {
         if (error === "ffmpeg-missing") return `${what} is too large to upload. Install FFmpeg to compress it; the link will be sent for now.`;
-        if (/^(encode-\w+|unsupported-duration)$/.test(error ?? "")) return `Couldn’t compress ${what} to fit, so the link will be sent.`;
+        if (/^(encode-\w+|unsupported-duration)$/.test(error ?? "")) return `Could not compress ${what} to fit, so the link will be sent.`;
         return null;
     }
     // Compression takes a while; say so once the download runs long.
@@ -300,7 +300,7 @@
             const compression = compressionFailure(result?.error, `This ${service} ${entry.kind}`);
             if (compression) { toast(compression, true); return; }
             if (result?.error === "too-large") { toast(`This ${service} ${entry.kind} is too large to upload, so the link will be sent.`, true); return; }
-            if (!(result?.data instanceof Uint8Array)) { toast(`Couldn’t download that ${service} ${entry.kind}, so the link will be sent.`, true); return; }
+            if (!(result?.data instanceof Uint8Array)) { toast(`Could not download that ${service} ${entry.kind}, so the link will be sent.`, true); return; }
             // A Reddit GIF that fits arrives as the GIF itself.
             let file = new File([result.data], result.name, { type: result.type === "image/gif" ? "image/gif" : "video/mp4" });
             if (result.gif && file.type !== "image/gif") {
@@ -308,7 +308,7 @@
                 let gif = null;
                 try { gif = await window.Lowcord.gif?.fromVideo(result.data, uploadLimit()); } catch {}
                 if (videos.get(id) !== entry) return;
-                if (!gif) { toast(`Couldn’t make that ${service} GIF small enough to upload, so the link will be sent.`, true); return; }
+                if (!gif) { toast(`Could not make that ${service} GIF small enough to upload, so the link will be sent.`, true); return; }
                 file = new File([gif], result.name.replace(/\.mp4$/, ".gif"), { type: "image/gif" });
             }
             file = anonymousFile(file);
@@ -339,7 +339,7 @@
         const files = Array.isArray(sent) ? sent.filter(file => file?.data instanceof Uint8Array) : [];
         if (result?.error === "too-large") { toast(`This ${service} post is too large to upload, so the link will be sent.`, true); return; }
         if (result?.error === "too-many") { toast(`This ${service} post has more than 10 items, so the link will be sent.`, true); return; }
-        if (!files.length || files.length !== sent.length) { toast(`Couldn’t get this ${service} post right now, so the link will be sent.`, true); return; }
+        if (!files.length || files.length !== sent.length) { toast(`Could not get this ${service} post right now, so the link will be sent.`, true); return; }
         const attached = files.map(file => anonymousFile(new File([file.data], file.name, { type: file.type })));
         deliver(editor, entry, attached, `${service} post attached. It will be sent instead of the link.`);
     }
@@ -349,13 +349,13 @@
         const photos = post.media.every(item => item.type === "image");
         const many = count > 1;
         entry.kind = photos ? (many ? "photos" : "photo") : "carousel";
-        const these = many ? `One of the ${service} ${photos ? "photos" : "carousel’s items"} is` : `This ${service} photo is`;
+        const these = many ? `One of the ${service} ${photos ? "photos" : "carousel items"} is` : `This ${service} photo is`;
         // Discord takes at most 10 files per message.
         if (count > 10) { toast(`This ${service} post has more than 10 items, so the link will be sent.`, true); return; }
         entry.video = true;
         entry.plural = many && photos;
         entry.count = count;
-        const what = photos ? (many ? `${count} ${service} photos` : `the ${service} photo`) : `the ${service} carousel’s ${count} items`;
+        const what = photos ? (many ? `${count} ${service} photos` : `the ${service} photo`) : `the ${service} carousel with ${count} items`;
         if (entry.announce) entry.announce();
         else entry.status.update(`Getting ${what}…`, `${many ? "They" : "It"} will be sent instead of the link.`);
         let result;
@@ -370,7 +370,7 @@
         if (result?.error === "too-many") { toast(`This ${service} post has more than 10 items, so the link will be sent.`, true); return; }
         const files = Array.isArray(result?.files) ? result.files.filter(file => file?.data instanceof Uint8Array) : [];
         if (!files.length || files.length !== result.files.length) {
-            toast(`Couldn’t download ${entry.plural ? "those" : "that"} ${service} ${entry.kind}, so the link will be sent.`, true);
+            toast(`Could not download ${entry.plural ? "those" : "that"} ${service} ${entry.kind}, so the link will be sent.`, true);
             return;
         }
         const attached = files.map(file => anonymousFile(new File([file.data], file.name, { type: file.type })));
@@ -927,7 +927,7 @@
             nonce: String((BigInt(Date.now()) - 1420070400000n) << 22n),
             message_reference: { channel_id: channelId, message_id: messageId, fail_if_not_exists: false },
             allowed_mentions: { parse: ["users", "roles", "everyone"], replied_user: false } } })
-            .catch(failure => { console.warn("[lowcord] Fake Nitro reaction:", failure); toast("Couldn’t send that reaction. Please try again.", true); });
+            .catch(failure => { console.warn("[lowcord] Fake Nitro reaction:", failure); toast("Couldn't send that reaction. Try again.", true); });
     }
     // Discord's request path escapes the @ of @me.
     function reactAsReply(path) {
@@ -1393,7 +1393,7 @@
     function sendVoice(blob, meta) {
         const { CloudUpload, RestAPI, Dispatcher } = window.Lowcord;
         const channelId = window.Lowcord.store("SelectedChannelStore")?.getChannelId();
-        if (!CloudUpload || !RestAPI || !channelId) { toast("Couldn’t send the voice message. Please try again.", true); return; }
+        if (!CloudUpload || !RestAPI || !channelId) { toast("Couldn't send the voice message. Try again.", true); return; }
         const reply = window.Lowcord.store("PendingReplyStore")?.getPendingReply(channelId);
         if (reply) Dispatcher?.dispatch({ type: "DELETE_PENDING_REPLY", channelId });
         const upload = new CloudUpload({ file: new File([blob], "voice-message.ogg", { type: "audio/ogg; codecs=opus" }),
@@ -1409,9 +1409,9 @@
                     message_reference: reply ? { guild_id: reply.channel?.guild_id ?? undefined, channel_id: reply.message.channel_id,
                         message_id: reply.message.id } : undefined,
                 },
-            }).catch(() => toast("Couldn’t send the voice message. Please try again.", true));
+            }).catch(() => toast("Couldn't send the voice message. Try again.", true));
         });
-        upload.on("error", () => toast("Couldn’t upload the voice message. Please try again.", true));
+        upload.on("error", () => toast("Couldn't upload the voice message. Try again.", true));
         upload.upload();
     }
 
@@ -1509,7 +1509,7 @@
         const time = ui("span", { className: "lowcord-voice-time" }, "0:00");
         const record = ui("button", { type: "button", className: "lowcord-button lowcord-voice-record", onClick: toggle }, svg(micPath), "Record");
         const preview = ui("audio", { controls: "", hidden: true });
-        const status = ui("p", { className: "lowcord-voice-status", role: "status" }, "Press Record and speak. Press Stop when you’re done.");
+        const status = ui("p", { className: "lowcord-voice-status", role: "status" }, "Press Record to start. Press Stop when you are done.");
         const canvas = ui("canvas", { className: "lowcord-voice-waveform", width: "420", height: "64", "aria-hidden": "true" });
         const hint = ui("p", { className: "lowcord-voice-signal", role: "status" }, "Listening for sound…");
         const visualization = ui("div", { className: "lowcord-voice-visualization", hidden: true }, canvas, hint);
@@ -1538,7 +1538,7 @@
                     echoCancellation: true, noiseSuppression: true } });
                 if (closed) { stream.getTracks().forEach(track => track.stop()); return; }
             } catch {
-                status.textContent = "OrbitCord couldn’t use the microphone. Allow microphone access for OrbitCord, then try again.";
+                status.textContent = "OrbitCord couldn't use the microphone. Allow microphone access for OrbitCord, then try again.";
                 record.disabled = false;
                 return;
             }
@@ -1551,7 +1551,7 @@
                 recorder.start();
             } catch {
                 stream.getTracks().forEach(track => track.stop());
-                status.textContent = "That recording couldn’t start. Please try again.";
+                status.textContent = "That recording couldn't start. Try again.";
                 record.disabled = false;
                 return;
             }
@@ -1595,7 +1595,7 @@
                 sendButton.disabled = false;
             } catch {
                 if (closed) return;
-                status.textContent = "That recording couldn’t be read. Please record again.";
+                status.textContent = "That recording couldn't be read. Record again.";
             }
             record.disabled = false;
         }

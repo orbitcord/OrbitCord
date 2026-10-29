@@ -239,7 +239,7 @@
             // Already gone is what was wanted.
             if (error?.status !== 404) {
                 console.warn("[lowcord] Media gallery delete:", error);
-                extensions.toast(`Couldn’t delete that ${what.toLowerCase()}. Please try again.`, true);
+                extensions.toast(`Couldn't delete that ${what.toLowerCase()}. Try again.`, true);
                 return;
             }
         }
@@ -273,10 +273,10 @@
         const empty = !state.count;
         const kind = state.filter === "video" ? "videos" : state.filter === "image" ? "photos" : "photos or videos";
         let text = "";
-        if (state.error) text = "Couldn’t load more media.";
+        if (state.error) text = "Couldn't load more media.";
         else if (state.indexing) text = "Discord is preparing search for this chat…";
         else if (state.loading) text = empty ? "" : "Loading…";
-        else if (state.done) text = empty ? `No ${kind} in ${state.target.name} yet.` : "That’s everything.";
+        else if (state.done) text = empty ? `No ${kind} in ${state.target.name} yet.` : "No more media.";
         status.textContent = text;
         status.hidden = !text;
         retry.hidden = !state.error;
@@ -456,11 +456,11 @@
     let menu;
     async function copyLink(link) {
         try { await navigator.clipboard.writeText(link); extensions.toast("Link copied"); }
-        catch { extensions.toast("Couldn’t copy the link. Please try again.", true); }
+        catch { extensions.toast("Couldn't copy the link. Try again.", true); }
     }
     async function downloadVideo(link) {
         try { await window.__LOWCORD_NATIVE__.downloadMedia(link); }
-        catch { extensions.toast('Couldn’t download this video. Please try again.', true); }
+        catch { extensions.toast('Could not download this video. Try again.', true); }
     }
     function downloadable(link) {
         try {

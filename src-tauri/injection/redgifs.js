@@ -110,10 +110,10 @@
     const messages = {
         'ffmpeg-missing': 'HD and SD are too large. Install FFmpeg to compress this video, then try again.',
         'encode-busy': 'Another video is being compressed. Try again when it finishes.',
-        'busy': 'The previous video is still stopping. Try again in a moment.',
+        'busy': 'Cancelling the previous video. Try again in a moment.',
         'encode-timeout': 'Compression took too long. Try a shorter video.',
         'unsupported-duration': 'This video cannot be compressed. Choose a video under ten minutes.',
-        'too-large': 'This video could not be made small enough. Choose another video.',
+        'too-large': 'This video is still over the upload limit after compression. Choose another video.',
         'expired': 'This preview expired. Search again to refresh it.',
         'rate-limited': 'RedGIFs is limiting requests. Wait a moment and try again.',
     };
@@ -349,7 +349,7 @@
         state.grid.classList.toggle('lowcord-redgifs-favorites', savedClips(state));
         state.grid.classList.toggle('lowcord-redgifs-creators', creatorList(state));
         state.favoritesHelp.hidden = !savedClips(state) && !creatorList(state);
-        state.favoritesHelp.textContent = savedClips(state) ? 'Hover to preview · Click to send' : 'Choose a creator to browse their videos';
+        state.favoritesHelp.textContent = savedClips(state) ? 'Hover to preview. Click to send.' : 'Choose a creator to browse their videos';
         pinned(state); favoriteControls(state);
         state.results.setAttribute('aria-labelledby', `lowcord-redgifs-tab-${value}`);
         void search(state, true);
@@ -398,7 +398,7 @@
         favoriteControls(state);
         state.loading = true; state.more.disabled = true;
         state.results.setAttribute('aria-busy', 'true');
-        status(state, directory(state) ? state.mode === 'niches' ? 'Finding niches...' : 'Finding creators...' : 'Finding videos...');
+        status(state, directory(state) ? state.mode === 'niches' ? 'Finding niches…' : 'Finding creators…' : 'Finding videos…');
         try {
             const query = state.query.toLowerCase();
             const favorites = newest(savedClips(state) ? saved.favorites : saved.creators).filter(item => !query
@@ -792,7 +792,7 @@
         background.checked = saved.background;
         const preference = ui('label', { className: 'lowcord-redgifs-preference' }, background, 'Keep uploading when picker closes');
         const options = ui('div', { className: 'lowcord-redgifs-options', id: 'lowcord-redgifs-options', hidden: true }, preference,
-            ui('p', {}, 'Hover to preview · Move sideways to scrub · Click to send'),
+            ui('p', {}, 'Hover to preview. Move the pointer sideways to seek. Click to send.'),
             ui('button', { type: 'button', className: 'lowcord-redgifs-reset', onClick: () => resetLayout(state) }, 'Reset picker size and position'));
         const optionsButton = ui('button', { type: 'button', className: 'lowcord-redgifs-icon', 'aria-label': 'Picker options', title: 'Options',
             'aria-expanded': 'false', 'aria-controls': 'lowcord-redgifs-options', onClick: () => {
@@ -800,7 +800,7 @@
             } }, icon('options', 16));
         const pins = ui('div', { className: 'lowcord-redgifs-pins', 'aria-label': 'Pinned niches', hidden: true });
         const statusNode = ui('p', { className: 'lowcord-redgifs-status', hidden: true, role: 'status', 'aria-live': 'polite' });
-        const favoritesHelp = ui('p', { className: 'lowcord-redgifs-favorites-help', hidden: true }, 'Hover to preview · Click to send');
+        const favoritesHelp = ui('p', { className: 'lowcord-redgifs-favorites-help', hidden: true }, 'Hover to preview. Click to send.');
         const closeButton = ui('button', { type: 'button', className: 'lowcord-redgifs-icon', 'aria-label': 'Close RedGIFs', title: 'Close', onClick: close }, icon('close'));
         const collapse = ui('button', { type: 'button', className: 'lowcord-redgifs-icon', 'aria-label': 'Collapse RedGIFs picker', title: 'Collapse picker',
             'aria-expanded': 'true', 'aria-controls': 'lowcord-redgifs-body', onClick: () => collapsePicker(state, !state.collapsed) }, icon('minimize', 14));

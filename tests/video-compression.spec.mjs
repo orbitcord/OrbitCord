@@ -297,6 +297,6 @@ test('a GIF that cannot fit stays an original GIF and explains the limit', async
     await select(page, { name: 'animation.gif', type: 'image/gif' }); await ready(page);
     expect(await page.evaluate(() => ({name: prepared[0].file.name, type: prepared[0].file.type, size: prepared[0].file.size})))
         .toEqual({name: 'animation.gif', type: 'image/gif', size: 20_000_001});
-    await expect(page.locator('.lowcord-toast[role="status"]')).toContainText('The original GIF was kept');
+    await expect(page.locator('.lowcord-toast[role="status"]')).toContainText('Your original GIF is unchanged.');
     expect(await page.evaluate(() => receipts.length)).toBe(0);
 });

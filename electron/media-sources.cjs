@@ -215,7 +215,7 @@ function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavi
         record.window.contentView.addChildView(view); layout(record);
         const wc=view.webContents;wc.setAudioMuted(!record.window.isVisible());
         const allowed=url=>allowNavigation(source,url)||authURL(url);
-        wc.on('will-navigate',(event,url)=>{if(!allowed(url)){event.preventDefault();record.status='External navigation blocked. Use this source’s own media and login pages.';publish(record);}});
+        wc.on('will-navigate',(event,url)=>{if(!allowed(url)){event.preventDefault();record.status='External navigation blocked. Use this source media and login pages.';publish(record);}});
         wc.on('will-redirect',(event,url)=>{if(!allowed(url))event.preventDefault();});
         wc.on('will-attach-webview',event=>event.preventDefault());
         wc.setWindowOpenHandler(({url})=>{
@@ -349,7 +349,7 @@ function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavi
             if(operation!==record.operation)return;record.busy=false;record.resolveAbort=null;
             const code=error.code||error.message||'unknown';
             record.status=errors[code]||(/http-\d+/.test(code)?`The media host returned ${code.replace('http-','HTTP ')}. Open the site and retry.`
-                :`Couldn’t download media (${String(code).replace(/https?:\/\/\S+/g,'media host').slice(0,100)}). Open the site and retry.`);
+                :`Could not download media (${String(code).replace(/https?:\/\/\S+/g,'media host').slice(0,100)}). Open the site and retry.`);
             console.warn('[media-sources]',record.source.id,'preparation failed:',String(code).replace(/https?:\/\/\S+/g,'media host').slice(0,100));
             console.warn('[media-sources] player candidates:',record.networkMedia.length,'manifests:',record.networkMedia.filter(item=>item.manifest).length);
             emit(record,{state:'error',itemId:id,message:record.status});publish(record);
@@ -365,7 +365,7 @@ function createMediaSources({sources=SOURCES,files=createSourceFiles(),allowNavi
             existing.channelId=channelId;existing.limit=limit;existing.destination=String(destination||'the original chat').slice(0,100);
             publish(existing);for(const item of existing.items)if(item.thumb)emit(existing,{state:'thumbnail',id:item.id,thumb:item.thumb});return;
         }
-        const window=new BrowserWindow({show:false,width:1160,height:800,minWidth:800,minHeight:520,title:'Media sources — OrbitCord',
+        const window=new BrowserWindow({show:false,width:1160,height:800,minWidth:800,minHeight:520,title:'Media sources · OrbitCord',
             parent:BrowserWindow.fromWebContents(owner)||undefined,backgroundColor:'#1b1c20',autoHideMenuBar:true,
             webPreferences:{partition:`orbitcord-source-toolbar-${owner.id}`,preload:join(__dirname,'media-browser-preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true}});
         const record={owner,account,window,channelId,limit,destination:String(destination||'the original chat').slice(0,100),

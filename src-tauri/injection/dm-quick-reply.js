@@ -219,11 +219,11 @@
         unmountText();
         subtitle.textContent = messages?.length ? `Last message ${when(messages[messages.length - 1].timestamp)}` : "";
         list.dataset.state = card.error ? "error" : !messages ? "loading" : messages.length ? "ready" : "empty";
-        if (card.error) list.replaceChildren(ui("p", { className: "lowcord-dm-status" }, "Couldn’t load messages."));
+        if (card.error) list.replaceChildren(ui("p", { className: "lowcord-dm-status" }, "Couldn't load messages."));
         // Placeholder bubbles keep the card's shape while messages load.
         else if (!messages) list.replaceChildren(...["62%", "44%", "70%"].map((width, index) =>
             ui("span", { className: "lowcord-dm-skeleton", "data-self": String(index === 1), style: `width:${width}` })));
-        else if (!messages.length) list.replaceChildren(ui("p", { className: "lowcord-dm-status" }, "No messages yet. Say hi."));
+        else if (!messages.length) list.replaceChildren(ui("p", { className: "lowcord-dm-status" }, "No messages yet."));
         else list.replaceChildren(...messages.flatMap((message, index) => {
             // A run of messages from one person stacks like the chat: only
             // the corners they share are tightened.
@@ -360,7 +360,7 @@
         const { layer } = built, { emojiToggle, input } = built.parts;
         const picker = open && emojiPicker();
         const { React, createRoot } = window.Lowcord;
-        if (open && (!picker || !React || !createRoot)) { showError("Discord’s emoji picker isn’t available right now."); return; }
+        if (open && (!picker || !React || !createRoot)) { showError("The emoji picker is not available. Try again."); return; }
         emojiToggle.setAttribute("aria-expanded", String(Boolean(open)));
         emojiToggle.setHovered?.(Boolean(open));
         if (!open) {
@@ -470,7 +470,7 @@
         };
         if (!files.length) {
             const actions = messageActions();
-            if (!actions) { showError("Couldn’t send. Open the chat to reply."); return; }
+            if (!actions) { showError("Couldn't send. Open the chat to reply."); return; }
             input.value = ""; autosize(input); showError("");
             if (target) setTarget(null);
             try {
@@ -479,7 +479,7 @@
             } catch (failure) {
                 console.warn("[lowcord] DM quick reply:", failure);
                 restore();
-                if (card?.channelId === channelId) showError("Couldn’t send. Try again.");
+                if (card?.channelId === channelId) showError("Couldn't send. Try again.");
             }
             return;
         }
@@ -499,8 +499,8 @@
             forgetFiles(files);
         } catch (failure) {
             console.warn("[lowcord] DM quick reply:", failure);
-            if (card === current) { restore(); showError("Couldn’t send the files. Try again."); }
-            else { forgetFiles(files); extensions.toast("Couldn’t send your files. Please try again.", true); }
+            if (card === current) { restore(); showError("Couldn't send the files. Try again."); }
+            else { forgetFiles(files); extensions.toast("Couldn't send your files. Try again.", true); }
         } finally {
             current.sending = false;
             if (card === current) showProgress(null);

@@ -9,16 +9,21 @@
     const trashPath = "M14.25 1c.41 0 .75.34.75.75V3h5.25c.41 0 .75.34.75.75v.5c0 .41-.34.75-.75.75H3.75A.75.75 0 0 1 3 4.25v-.5c0-.41.34-.75.75-.75H9V1.75c0-.41.34-.75.75-.75h4.5ZM5.06 7a1 1 0 0 0-1 1.06l.76 12.13a3 3 0 0 0 3 2.81h8.36a3 3 0 0 0 3-2.81l.75-12.13a1 1 0 0 0-1-1.06H5.07ZM11 12a1 1 0 1 0-2 0v6a1 1 0 1 0 2 0v-6Zm3-1a1 1 0 0 1 1 1v6a1 1 0 1 1-2 0v-6a1 1 0 0 1 1-1Z";
     // Deletes go as fast as Discord allows: each channel has its own delete
     // limit, read from the rate-limit headers of every response, and up to
-    // `lanes` channels delete at once. Without headers, a channel slows down
-    // after a 429 and speeds back up. The next search page loads while the
-    // current one is deleted. Milliseconds.
-    const pacing = { lanes: 4, gapCeiling: 15_000, search: 250, indexing: 3000 };
+    // `lanes` server channels delete at once. DMs can overlap a few requests
+    // within a reported quota. Without headers, a channel stays sequential
+    // and backs off on a 429. Search reads ahead of deletion. Milliseconds.
+    const pacing = { lanes: 4, dmConcurrency: 3, lookahead: 100, gapCeiling: 15_000, search: 250, indexing: 3000 };
     // Errors that mean "leave this one": unknown message, missing access or
     // permissions, a system message, an archived thread.
     const skipCodes = new Set([10008, 50001, 50013, 50021, 50083]);
 
     const store = name => window.Lowcord.store(name);
-    const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const wait = (current, ms) => new Promise(resolve => {
+        if (current.stopped) { resolve(); return; }
+        const resume = () => { clearTimeout(timer); current.waiters.delete(resume); resolve(); };
+        const timer = setTimeout(resume, ms);
+        current.waiters.add(resume);
+    });
     let job;
 
     // ----- Scope --------------------------------------------------------------
@@ -43,7 +48,18 @@
     // ----- Requests -----------------------------------------------------------
     // Discord's client rejects with the response; a 429 carries retry_after.
     const bodyOf = error => error?.body ?? {};
-    const retryAfter = error => Math.max(1000, (Number(bodyOf(error).retry_after) || 2) * 1000);
+    const retryAfter = error => {
+        const supplied = bodyOf(error).retry_after ?? header(error, "retry-after");
+        const seconds = supplied == null ? NaN : Number(supplied);
+        // Discord returns fractional seconds. Only use a default if no valid
+        // delay was supplied; a small floor avoids spinning on a zero delay.
+        return Math.max(50, Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : 2000);
+    };
+    function pause(current, error) {
+        const delay = retryAfter(error);
+        if (bodyOf(error).global) current.pausedUntil = Math.max(current.pausedUntil, performance.now() + delay);
+        return delay;
+    }
     function idBefore(id) { return (BigInt(id) - 1n).toString(); }
 
     async function searchPage(current, maxId) {
@@ -53,18 +69,20 @@
         if (target.guildId && current.scope === "channel") query.channel_id = target.channelId;
         if (maxId) query.max_id = maxId;
         for (let attempt = 0; ; attempt++) {
+            await ready(current, { readyAt: 0 });
             if (current.stopped) return null;
             let response;
             try { response = await window.Lowcord.RestAPI.get({ url, query, retries: 0 }); }
             catch (error) {
-                if (error?.status === 429) { await wait(retryAfter(error)); continue; }
-                if (attempt < 3) { await wait(pacing.search * (attempt + 2)); continue; }
+                if (error?.status === 429) { await wait(current, pause(current, error)); continue; }
+                if (attempt < 3) { await wait(current, pacing.search * (attempt + 2)); continue; }
                 throw error;
             }
             // 202: Discord is still indexing this channel or server.
             if (response?.status === 202) {
                 current.indexing = true; render();
-                await wait(Math.max(pacing.indexing, (Number(response.body?.retry_after) || 0) * 1000));
+                const seconds = Number(response.body?.retry_after);
+                await wait(current, Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : pacing.indexing);
                 continue;
             }
             current.indexing = false;
@@ -83,15 +101,14 @@
                 return response.body;
             } catch (error) {
                 if (error?.status === 429) {
-                    if (bodyOf(error).global) current.pausedUntil = performance.now() + retryAfter(error);
-                    await wait(retryAfter(error));
+                    await wait(current, pause(current, error));
                     continue;
                 }
                 if (error?.status === 403 || error?.status === 404) {
                     current.unchecked++;
                     return null;
                 }
-                if (attempt < 3) { await wait(pacing.search * (attempt + 2)); continue; }
+                if (attempt < 3) { await wait(current, pacing.search * (attempt + 2)); continue; }
                 throw error;
             }
         }
@@ -137,7 +154,7 @@
                     if (page.length < 100 || (boundary && BigInt(oldest) <= BigInt(boundary))) break;
                     if (before && BigInt(oldest) >= BigInt(before)) throw new Error("Channel history did not advance");
                     before = oldest;
-                    await wait(pacing.search);
+                    await wait(current, pacing.search);
                 }
             }
         });
@@ -145,20 +162,23 @@
 
     function header(response, name) {
         const headers = response?.headers;
-        const value = typeof headers?.get === "function" ? headers.get(name) : headers?.[name];
-        return value == null ? null : Number(value);
+        const value = typeof headers?.get === "function" ? headers.get(name)
+            : headers?.[name] ?? Object.entries(headers ?? {}).find(([key]) => key.toLowerCase() === name)?.[1];
+        if (value == null || value === "") return null;
+        const number = Number(value);
+        return Number.isFinite(number) ? number : null;
     }
-    // A channel's lane: when it may next delete, and its fallback gap.
+    // A channel's cooldown, fallback gap, and last reported available quota.
     function laneOf(current, channelId) {
         let lane = current.lanes.get(channelId);
-        if (!lane) current.lanes.set(channelId, lane = { readyAt: 0, gap: 0 });
+        if (!lane) current.lanes.set(channelId, lane = { readyAt: 0, gap: 0, remaining: null, serialOnly: false });
         return lane;
     }
     async function ready(current, lane) {
         for (;;) {
             const until = Math.max(lane.readyAt, current.pausedUntil) - performance.now();
             if (until <= 0 || current.stopped) return;
-            await wait(until);
+            await wait(current, until);
         }
     }
     // true when gone, false when it can't be deleted, null when stopped.
@@ -172,80 +192,143 @@
                 const remaining = header(response, "x-ratelimit-remaining"), resetAfter = header(response, "x-ratelimit-reset-after");
                 if (remaining !== null && resetAfter !== null) {
                     lane.gap = 0;
-                    if (remaining <= 0) lane.readyAt = performance.now() + resetAfter * 1000;
+                    // A round waits for every response before spending more
+                    // quota. Use its smallest count, regardless of arrival order.
+                    lane.remaining = lane.remaining === null ? remaining : Math.min(lane.remaining, remaining);
+                    if (remaining <= 0) lane.readyAt = Math.max(lane.readyAt, performance.now() + resetAfter * 1000);
                 } else {
+                    lane.serialOnly = true;
                     lane.gap = lane.gap > 50 ? lane.gap * 0.9 : 0;
                     lane.readyAt = performance.now() + lane.gap;
                 }
                 return true;
             } catch (error) {
+                lane.serialOnly = true;
                 if (error?.status === 429) {
-                    const until = performance.now() + retryAfter(error);
-                    if (bodyOf(error).global) current.pausedUntil = until;
+                    const until = performance.now() + pause(current, error);
                     lane.gap = Math.min(pacing.gapCeiling, Math.max(250, lane.gap * 1.5));
-                    lane.readyAt = Math.max(until, performance.now() + lane.gap);
+                    lane.readyAt = Math.max(lane.readyAt, until);
                     continue;
                 }
                 if (error?.status === 404) return true;
                 if (skipCodes.has(bodyOf(error).code) || error?.status === 403) return false;
-                if (attempt < 2) { await wait(500 * (attempt + 1)); continue; }
+                if (attempt < 2) { await wait(current, 500 * (attempt + 1)); continue; }
                 throw error;
             }
         }
     }
 
-    // Deletes one channel's messages of a page, oldest last.
+    async function deleteOne(current, message) {
+        if (current.stopped) return;
+        let gone;
+        try { gone = await remove(current, message); current.failures = 0; }
+        catch (error) {
+            console.warn("[lowcord] Mass delete:", error);
+            if (++current.failures >= 5) throw error;
+            gone = false;
+        }
+        if (gone === null) return;
+        if (gone) current.deleted++; else current.skipped++;
+        if (current.remaining > 0) current.remaining--;
+        render();
+    }
+
+    // Large DMs can spend a known quota without waiting for each network
+    // round trip. Unknown quotas, errors, and server channels stay sequential.
     async function deleteAll(current, messages) {
-        for (const message of messages) {
+        if (!messages.length) return;
+        const lane = laneOf(current, messages[0].channel_id);
+        const dm = !current.target.guildId && current.scope === "channel";
+        for (let offset = 0; offset < messages.length;) {
+            await ready(current, lane);
             if (current.stopped) return;
-            let gone;
-            try { gone = await remove(current, message); current.failures = 0; }
-            catch (error) {
-                console.warn("[lowcord] Mass delete:", error);
-                if (++current.failures >= 5) throw error;
-                gone = false;
-            }
-            if (gone === null) return;
-            if (gone) current.deleted++; else current.skipped++;
-            if (current.remaining > 0) current.remaining--;
-            render();
+            const count = dm && !lane.serialOnly && lane.remaining >= 1
+                ? Math.min(pacing.dmConcurrency, Math.floor(lane.remaining)) : 1;
+            const batch = messages.slice(offset, offset + count);
+            offset += batch.length;
+            lane.remaining = null;
+            const results = await Promise.allSettled(batch.map(message => deleteOne(current, message)));
+            const failure = results.find(result => result.status === "rejected");
+            if (failure) throw failure.reason;
         }
     }
 
+    // Keep a bounded lookahead across search pages. Each channel still has
+    // one worker, but a slow channel no longer holds up every later page.
+    function deletionQueue(current) {
+        const queues = new Map(), running = new Map();
+        let buffered = 0, failure;
+        const pump = () => {
+            if (current.stopped || failure) return;
+            for (const [channel, messages] of queues) {
+                if (running.size >= pacing.lanes) break;
+                if (running.has(channel)) continue;
+                const batch = messages.splice(0, 25);
+                const work = (async () => {
+                    try { await deleteAll(current, batch); }
+                    catch (error) { failure ??= error; }
+                    finally {
+                        buffered -= batch.length;
+                        running.delete(channel);
+                        queues.delete(channel);
+                        if (messages.length) queues.set(channel, messages);
+                        pump();
+                    }
+                })();
+                running.set(channel, work);
+            }
+        };
+        return {
+            async add(messages) {
+                while (!current.stopped && !failure && buffered && buffered + messages.length > pacing.lookahead) {
+                    await Promise.race(running.values());
+                }
+                if (failure) throw failure;
+                if (current.stopped) return;
+                for (const message of messages) {
+                    if (!queues.has(message.channel_id)) queues.set(message.channel_id, []);
+                    queues.get(message.channel_id).push(message);
+                }
+                buffered += messages.length;
+                pump();
+            },
+            async finish(error) {
+                failure ??= error;
+                while (running.size) await Promise.all(running.values());
+                if (failure) throw failure;
+            },
+        };
+    }
+
     async function run(current) {
-        const seen = new Set(), newest = new Map();
-        let maxId = current.before, pending = searchPage(current, maxId);
-        while (!current.stopped) {
-            const body = await pending;
-            if (!body) break;
-            if (Number.isFinite(body.total_results)) current.remaining = body.total_results;
-            // Each result is a list: the hit and, on older API versions, context.
-            const page = (body.messages ?? []).flat()
-                .filter(message => message?.author?.id === current.me && message.id)
-                .sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1));
-            if (!page.length) break;
-            for (const message of page) {
-                if (!newest.has(message.channel_id)) newest.set(message.channel_id, message.id);
+        const seen = new Set(), newest = new Map(), deletions = deletionQueue(current);
+        let maxId = current.before, failure;
+        try {
+            while (!current.stopped) {
+                const body = await searchPage(current, maxId);
+                if (!body) break;
+                if (Number.isFinite(body.total_results)) current.remaining = body.total_results;
+                // Each result is a list: the hit and, on older API versions, context.
+                const page = (body.messages ?? []).flat()
+                    .filter(message => message?.author?.id === current.me && message.id)
+                    .sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1));
+                if (!page.length) break;
+                for (const message of page) {
+                    if (!newest.has(message.channel_id)) newest.set(message.channel_id, message.id);
+                }
+                const fresh = page.filter(message => !seen.has(message.id));
+                // Search may still return a deleted message. Move the cursor
+                // past it, and never queue the same message twice.
+                const next = idBefore(page[page.length - 1].id);
+                if (!fresh.length && next === maxId) break;
+                maxId = next;
+                await deletions.add(fresh);
+                for (const message of fresh) seen.add(message.id);
+                await wait(current, pacing.search);
             }
-            const fresh = page.filter(message => !seen.has(message.id));
-            // max_id moves past the oldest result, so a message search keeps
-            // returning after it was deleted, or one that can't be, is passed.
-            const next = idBefore(page[page.length - 1].id);
-            if (!fresh.length && next === maxId) break;
-            maxId = next;
-            pending = wait(pacing.search).then(() => searchPage(current, next));
-            pending.catch(() => {}); // Awaited below; this only marks it handled.
-            for (const message of fresh) seen.add(message.id);
-            const byChannel = new Map();
-            for (const message of fresh) {
-                if (!byChannel.has(message.channel_id)) byChannel.set(message.channel_id, []);
-                byChannel.get(message.channel_id).push(message);
-            }
-            const queue = [...byChannel.values()];
-            await inParallel(queue, async () => {
-                while (queue.length && !current.stopped) await deleteAll(current, queue.shift());
-            });
-        }
+        } catch (error) { failure = error; }
+        // All requests must settle before completion, Stop, or a failure notice.
+        await deletions.finish(failure);
         if (!current.stopped) await recentHistory(current, newest, seen);
     }
 
@@ -256,19 +339,19 @@
         bar.title.textContent = stopped ? "Stopping…" : indexing && !deleted ? "Discord is preparing search…"
             : `Deleting your messages… ${deleted.toLocaleString()}`;
         const left = remaining > 0 ? `About ${remaining.toLocaleString()} left` : "Looking for more";
-        bar.detail.textContent = [scopeLabel, left, skipped ? `${skipped.toLocaleString()} can’t be deleted` : ""].filter(Boolean).join(" · ");
+        bar.detail.textContent = [scopeLabel, left, skipped ? `${skipped.toLocaleString()} cannot be deleted` : ""].filter(Boolean).join(" · ");
     }
     async function start(target, scope) {
         if (job) return job.promise;
         const me = store("UserStore")?.getCurrentUser?.()?.id;
-        if (!me || !window.Lowcord.RestAPI) { toast("Couldn’t start deleting. Please try again in a moment.", true); return; }
+        if (!me || !window.Lowcord.RestAPI) { toast("Couldn't start deleting. Try again in a moment.", true); return; }
         const title = ui("span", { className: "lowcord-toast-title" });
         const detail = ui("span", { className: "lowcord-toast-detail", "aria-live": "polite" });
         const stopButton = ui("button", { type: "button", className: "lowcord-button", onClick: stop }, "Stop");
         const node = ui("div", { className: "lowcord-purge-bar", role: "status", "aria-label": "Deleting your messages" },
             ui("span", { className: "lowcord-toast-copy" }, title, detail), stopButton);
         const scopeLabel = scope === "server" ? target.guildName : target.channelName;
-        const current = job = { target, scope, me, scopeLabel, deleted: 0, skipped: 0, remaining: 0, lanes: new Map(), pausedUntil: 0, failures: 0, unchecked: 0,
+        const current = job = { target, scope, me, scopeLabel, deleted: 0, skipped: 0, remaining: 0, lanes: new Map(), pausedUntil: 0, failures: 0, unchecked: 0, waiters: new Set(),
             // A fixed upper bound keeps messages sent during the job out of it.
             before: ((BigInt(Date.now()) - 1420070400000n) << 22n).toString(),
             stopped: false, indexing: false, bar: { node, title, detail } };
@@ -280,11 +363,11 @@
             node.remove();
             if (job === current) job = undefined;
             const count = `${current.deleted.toLocaleString()} message${current.deleted === 1 ? "" : "s"}`;
-            if (failure) toast(`Deleting stopped after ${count} because Discord didn’t respond. Try again later to continue.`, true);
+            if (failure) toast(`Deleting stopped after ${count} because Discord did not respond. Try again later to continue.`, true);
             else if (current.stopped) toast(`Stopped after deleting ${count}.`);
-            else if (current.unchecked) toast(`Deleted ${count}. Some channel histories couldn’t be checked. Try again later to continue.`, true);
-            else if (current.skipped) toast(`Deleted ${count}. ${current.skipped.toLocaleString()} couldn’t be deleted, such as system messages or archived threads.`);
-            else toast(current.deleted ? `Deleted ${count}.` : `No messages of yours were found in ${scopeLabel}.`);
+            else if (current.unchecked) toast(`Deleted ${count}. Some channel histories could not be checked. Try again later to continue.`, true);
+            else if (current.skipped) toast(`Deleted ${count}. ${current.skipped.toLocaleString()} could not be deleted, such as system messages or archived threads.`);
+            else toast(current.deleted ? `Deleted ${count}.` : `No messages from you were found in ${scopeLabel}.`);
             return { deleted: current.deleted, skipped: current.skipped, stopped: current.stopped, failed: Boolean(failure), incomplete: current.unchecked > 0 };
         })();
         return current.promise;
@@ -292,12 +375,13 @@
     function stop() {
         if (!job || job.stopped) return;
         job.stopped = true;
+        for (const resume of job.waiters) resume();
         render();
     }
 
     // ----- Confirmation -------------------------------------------------------
     function confirm() {
-        if (job) { toast("Already deleting messages. Stop that first to start another.", true); return; }
+        if (job) { toast("A deletion is already running. Stop it before starting another.", true); return; }
         if (document.querySelector(".lowcord-purge-backdrop")) return;
         const target = currentTarget();
         if (!target) { toast("Open a DM or channel first", true); return; }
@@ -306,11 +390,11 @@
             ui("input", { type: "radio", name: "lowcord-purge-scope", value, onChange: () => { scope = value; } }),
             ui("span", {}, ui("strong", {}, label), ui("span", {}, hint)));
         const options = target.guildId && ui("div", { className: "lowcord-purge-options", role: "radiogroup", "aria-label": "Where to delete" },
-            option("channel", `Only in ${target.channelName}`, "Its threads aren’t included."),
+            option("channel", `Only in ${target.channelName}`, "This does not include threads."),
             option("server", `Everywhere in ${target.guildName}`, "Every channel and thread you can still open."));
         options?.querySelector("input").setAttribute("checked", "");
-        const lead = target.guildId ? "Every message you sent will be deleted, however old."
-            : `Every message you sent to ${target.channelName} will be deleted, however old. Their messages stay.`;
+        const lead = target.guildId ? "Delete all your messages in the selected channel or server, including older messages."
+            : `Delete all messages you sent to ${target.channelName}, including older messages. Messages from other people stay.`;
         const confirmButton = ui("button", { type: "button", className: "lowcord-button lowcord-button-danger", onClick: () => {
             close(); start(target, scope);
         } }, "Delete my messages");
@@ -319,7 +403,7 @@
             ui("h2", { id: "lowcord-purge-title" }, "Delete your messages?"),
             ui("p", { className: "lowcord-voice-status" }, lead),
             options,
-            ui("p", { className: "lowcord-voice-status" }, "This can’t be undone. It deletes as fast as Discord allows, so a long history can still take a while. You can keep using Discord meanwhile."),
+            ui("p", { className: "lowcord-voice-status" }, "You cannot undo this. Deleting a long history can take time because Discord limits requests. You can keep using Discord while it runs."),
             ui("div", { className: "lowcord-dialog-actions" }, cancel, confirmButton));
         const backdrop = ui("div", { className: "lowcord-voice-backdrop lowcord-purge-backdrop", onMousedown: event => { if (event.target === backdrop) close(); } }, dialog);
         const onKey = event => { if (event.key === "Escape") { event.stopPropagation(); close(); } };

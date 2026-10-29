@@ -74,7 +74,7 @@
         // The asynchronous result uses paste; allow native drop cleanup to
         // remove Discord's overlay without inserting the original URL.
         document.body.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }));
-        if (active) { toast('An image is still downloading. Please wait before dropping another.', true); return; }
+        if (active) { toast('An image is still downloading. Wait before dropping another.', true); return; }
         const job = { cancelled: false };
         active = job;
         const store = window.Lowcord.store('SelectedChannelStore');
@@ -88,17 +88,17 @@
                 if (result?.error) {
                     if (result.error === 'not-image' && !explicitImage) { replayLink(); return; }
                     toast(result.error === 'too-large' ? 'This image exceeds the 50 MB download limit.'
-                        : 'Couldn’t download that image. Try saving it in your browser, then attach the file.', true);
+                        : 'Could not download that image. Try saving it in your browser, then attach the file.', true);
                     return;
                 }
                 if (!editor.isConnected || document.querySelector(editorSelector) !== editor) {
-                    toast('The message composer closed. Please drop the image again.', true); return;
+                    toast('The message box closed. Drop the image again.', true); return;
                 }
                 const data = new DataTransfer();
                 data.items.add(new File([result.data], result.name, { type: result.type }));
                 editor.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, composed: true, clipboardData: data }));
             } catch {
-                toast('Couldn’t attach that image. Try saving it in your browser, then attach the file.', true);
+                toast('Could not attach that image. Try saving it in your browser, then attach the file.', true);
             } finally {
                 store?.removeChangeListener?.(changed);
                 if (active === job) active = null;

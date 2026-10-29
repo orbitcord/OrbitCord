@@ -48,7 +48,7 @@ function setupUpdateNotice(ipc) {
                 if (!event.isTrusted || state?.restarting) return;
                 void ipc.invoke(channel).catch(error => {
                     if (!state) return;
-                    state = { ...state, restarting:false, error:'Couldn’t update OrbitCord. Please try again.' };
+                    state = { ...state, restarting:false, error:'Could not update OrbitCord. Try again.' };
                     console.error('[lowcord] Update notice:', error.message);
                     render();
                 });

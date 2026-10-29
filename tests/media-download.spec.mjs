@@ -72,7 +72,7 @@ test('supports inline media tokens, skips MSE/manifests, and is independent of C
 test('download failures are visible and a later retry works', async ({ page }) => {
     await page.evaluate(() => { window.failDownload = true; });
     await page.locator('#first video').click({ button: 'right' }); await download(page).click();
-    await expect(page.locator('.lowcord-toast')).toContainText('Couldn’t download this video');
+    await expect(page.locator('.lowcord-toast')).toContainText('Could not download this video');
     await page.evaluate(() => { window.failDownload = false; });
     await page.locator('#first video').click({ button: 'right' }); await download(page).click();
     expect(await page.evaluate(() => mediaDownloads.length)).toBe(1);

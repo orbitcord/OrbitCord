@@ -823,7 +823,7 @@ test('account windows keep separate logins, badges and window state across resta
         expect(await app.evaluate(({ BrowserWindow, session }) => BrowserWindow.getAllWindows().map(window => ({
             title: window.getTitle(), main: window.webContents.session === session.defaultSession,
             partition: window.webContents.session === session.fromPartition('persist:account-1') })).sort((a, b) => a.title.localeCompare(b.title))))
-            .toEqual([{ title: 'OrbitCord — main-user', main: true, partition: false }, { title: 'OrbitCord — second-user', main: false, partition: true }]);
+            .toEqual([{ title: 'OrbitCord · main-user', main: true, partition: false }, { title: 'OrbitCord · second-user', main: false, partition: true }]);
         // The badge adds up every account; a closed account window drops out.
         await page.evaluate(() => window.__LOWCORD_NATIVE__.setBadge(2));
         await second.evaluate(() => window.__LOWCORD_NATIVE__.setBadge(3));
@@ -1014,7 +1014,7 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         expect((await notice.boundingBox()).width).toBeLessThanOrEqual(488);
         await page.screenshot({ path:testInfo.outputPath('update-notice-light-small.png') });
         await notice.getByRole('button', { name:'Restart', exact:true }).click();
-        await expect(notice.getByRole('alert')).toContainText('Couldn’t restart');
+        await expect(notice.getByRole('alert')).toContainText('Could not restart');
         await expect(notice.getByRole('button', { name:'Restart', exact:true })).toBeEnabled();
         await app.evaluate(() => { global.testUpdater.quitAndInstall = () => { global.updateRestarts++; }; });
         await notice.getByRole('button', { name:'Restart', exact:true }).click();
@@ -1057,7 +1057,7 @@ test('settings checks updates through native IPC and shows network errors and re
         await expect(panel.getByRole('button', { name: 'Checking…' })).toBeDisabled();
         await expect(panel.getByRole('alert')).toContainText('HTTP 503');
         await panel.locator('section').getByRole('button', { name: 'Check for updates', exact: true }).click();
-        await expect(panel.getByRole('status')).toHaveText('You’re up to date.');
+        await expect(panel.getByRole('status')).toHaveText("You're up to date.");
         await expect(panel.getByRole('alert')).toHaveCount(0);
         expect(await app.evaluate(() => global.updateChecks)).toBe(2);
         await page.screenshot({ path: testInfo.outputPath('update-settings.png') });

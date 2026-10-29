@@ -85,15 +85,59 @@
 }
 .lowcord-extension-search::placeholder { color: var(--text-muted, #949ba4); }
 .lowcord-extension-search:focus-visible { outline: 2px solid var(--text-link, #82b7ff); outline-offset: 2px; }
-.lowcord-extension-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.lowcord-extension-list .lowcord-chat-toggle {
-    align-items: center; gap: 16px; padding: 16px; border-radius: 8px;
-    background: var(--background-base-lower, var(--background-secondary, #2b2d31));
+.lowcord-extension-tabs {
+    display: flex; gap: 24px; margin: 0 0 24px; overflow-x: auto;
+    border-bottom: 1px solid var(--border-subtle, #ffffff1a);
 }
-.lowcord-extension-list .lowcord-chat-toggle strong { font-size: 15px; }
-.lowcord-extension-list .lowcord-chat-description { margin-top: 4px; font-size: 13px; line-height: 1.4; }
-.lowcord-extension-list .lowcord-chat-toggle input { flex: none; }
-@media (max-width: 720px) { .lowcord-extension-list { grid-template-columns: minmax(0, 1fr); } }
+.lowcord-extension-tabs button {
+    flex: none; padding: 12px 2px 14px; border: 0; border-bottom: 3px solid transparent;
+    background: transparent; color: var(--text-muted, #949ba4); font: inherit; font-size: 14px; cursor: pointer;
+}
+.lowcord-extension-tabs button:hover { color: var(--text-normal, #f2f3f5); }
+.lowcord-extension-tabs button[aria-selected="true"] {
+    border-bottom-color: var(--brand-500, #5865f2); color: var(--header-primary, #fff); font-weight: 600;
+}
+.lowcord-extension-tabs button:focus-visible, .lowcord-extension-info:focus-visible {
+    outline: 2px solid var(--text-link, #82b7ff); outline-offset: -3px; border-radius: 4px;
+}
+.lowcord-extension-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.lowcord-extension-card.lowcord-chat-toggle {
+    align-items: center; gap: 12px; padding: 0 16px 0 0; border-radius: 8px;
+    background: var(--background-base-lower, var(--background-secondary, #2b2d31));
+    border: 1px solid var(--border-subtle, #ffffff0d); cursor: default;
+}
+.lowcord-extension-card:has(.lowcord-extension-info:hover) { border-color: var(--interactive-muted, #4e5058); }
+.lowcord-extension-card:has(+ .lowcord-extension-details:popover-open) {
+    border-color: var(--brand-500, #5865f2);
+}
+.lowcord-extension-info {
+    display: block; align-self: stretch; flex: 1; min-width: 0; min-height: 110px; padding: 18px 0 18px 16px;
+    border: 0; border-radius: 8px; background: transparent; color: var(--text-normal, #f2f3f5);
+    font: inherit; text-align: left; cursor: pointer;
+}
+.lowcord-extension-info strong { color: var(--header-primary, #fff); font-size: 15px; }
+.lowcord-extension-info .lowcord-chat-description { margin-top: 4px; font-size: 13px; line-height: 1.4; }
+.lowcord-extension-card > input { flex: none; }
+.lowcord-extension-details {
+    box-sizing: border-box; width: min(440px, calc(100vw - 32px));
+    position: fixed; inset: auto; position-area: bottom span-right;
+    position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+    position-try-order: most-height; position-visibility: anchors-visible; max-height: calc(100% - 24px);
+    margin: 12px 0; padding: 24px; overflow-y: auto; border: 1px solid var(--border-subtle, #ffffff1a); border-radius: 12px;
+    background: var(--background-base-low, var(--background-primary, #313338)); color: var(--text-normal, #f2f3f5);
+    font-family: var(--font-primary, inherit); font-size: 14px; line-height: 1.5;
+    box-shadow: 0 12px 40px rgb(0 0 0 / .35);
+}
+.lowcord-extension-details-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.lowcord-extension-category { color: var(--text-muted, #949ba4); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.lowcord-extension-details h2 { margin: 8px 0; color: var(--header-primary, #fff); font-size: 22px; line-height: 1.3; }
+.lowcord-extension-details h3 { margin: 24px 0 6px; padding-top: 20px; border-top: 1px solid var(--border-subtle, #ffffff1a); color: var(--header-primary, #fff); font-size: 14px; }
+.lowcord-extension-details p { margin: 0; }
+.lowcord-extension-summary { color: var(--text-muted, #949ba4); }
+@media (max-width: 720px) {
+    .lowcord-extension-list { grid-template-columns: minmax(0, 1fr); }
+    .lowcord-extension-tabs { gap: 18px; }
+}
 .lowcord-volume-card {
     display: flex; align-items: center; justify-content: space-between; gap: 24px;
     margin-top: 12px; padding: 16px; border-radius: 8px;

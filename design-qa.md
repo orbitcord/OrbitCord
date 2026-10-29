@@ -122,3 +122,52 @@ final result: passed
 
 - P3: the generated concept illustrates the toast at an enlarged raster UI scale; implementation uses native compact product text sizes. The component matches at normalized ring scale rather than enlarging all existing app typography.
 - Real Discord media posting is intentionally not exercised by this visual change; the local compression fixtures cover the full attachment path.
+
+
+# Extensions categories and details — 2026-10-29
+
+final result: passed
+
+## Evidence and scope
+
+- Selected visual: second displayed concept, `/Users/yashsirmour/.codex/generated_images/01a18734-78ef-7570-b677-7dd60fcf8258/exec-6d1389d6-822d-47e9-850a-e1010e471c14.png` (1488 × 1058). User requested its category tabs and cards with extension details in a popover, using the fourth concept's explanatory content.
+- Inline implementation captured at a 1488 × 1058 viewport, 1× density: `/tmp/lowcord-extension-tabs.png`; details: `/tmp/lowcord-extension-details.png`; narrow 640 × 700 view: `/tmp/lowcord-extension-narrow.png`. Regression captures are also saved to Playwright's per-test output directory.
+- Reference and implementation combined in `/tmp/lowcord-extension-comparison.png` and inspected together. Compared the search, tab underline, two-column cards, descriptions, switches and page hierarchy. Inspected details and narrow captures at native resolution for readable text and clipping.
+- The fixture's plain Discord sidebar and close button are stand-ins. Production retains Discord's real sidebar and close control. The actual catalog has 27 extensions, including 11 in Media; the concept illustrated six media extensions. Existing Discord theme tokens and fonts take precedence over the image's generated colors and typography.
+
+## Findings and iteration
+
+- Initial inline content retained the shared 740px settings width, wrapping card descriptions too early compared with the concept. Widened only Extensions to 1040px and recaptured using a fresh fixture server. Two-column cards now have room for descriptions while retaining native settings padding.
+- No remaining P0/P1/P2 findings. Cards become one column in narrow windows. The detail popover remains within viewport bounds and scrolls when needed.
+
+## Verification
+
+- Seven focused Chromium regressions pass on the final source: category navigation, global search, independent toggles, keyboard activation and focus restoration, Escape/outside/close-button dismissal, inline navigation cleanup, responsive layout, persisted extension choices and provider/volume controls.
+- The broader initial run passed 47 of 48 checks. Its unrelated media-gallery month-loading test passed when rerun alone.
+- App build (`node scripts/build.mjs`), JavaScript syntax and whitespace checks pass. The native settings layout was exercised in the fixture; the running Discord app has not been restarted.
+
+# Anchored extension details — 2026-10-29
+
+final result: passed
+
+- Selected visual: first displayed detail treatment, `/Users/yashsirmour/.codex/generated_images/01a18734-78ef-7570-b677-7dd60fcf8258/exec-f33e2283-7b61-4489-a149-5539a5cc92a2.png`. Category tabs and cards remain the underlying layout.
+- Final desktop capture: `/tmp/lowcord-anchored-details.png`, 1488 × 1058 at 1× density, Uploads selected with Compress media open. Source and implementation inspected together in `/tmp/lowcord-anchored-comparison.png`. Narrow 640 × 700 capture is saved as `extension-narrow.png` in the Playwright output directory.
+- Details align with the selected card with a 12px gap and purple card outline. Native CSS anchors choose above/below and left/right placement within the viewport, constrain long content to a scrollable panel, and hide the panel if its card scrolls out of view. No background dimming or per-frame JavaScript positioning is used.
+- Existing Discord typography, theme colors, native sidebar and close control remain. The selected concept's small pointer is omitted; card highlighting and adjacency identify the source. This is cosmetic and does not affect interaction.
+- Compared the card association, popup alignment, explanatory hierarchy, dividers, close control and responsive placement. No remaining P0/P1/P2 findings.
+- All five focused Chromium checks pass, including anchor geometry, card selection, independent toggles, keyboard focus restoration, dismissal, narrow-window bounds, provider selection and saved volume. App build and whitespace checks pass. Running Discord has not been restarted.
+
+# Restore extension settings width and controls — 2026-10-29
+
+final result: passed
+
+- Root cause: the Extensions-only padding override increased content width from 740px to 1040px. Provider and volume controls had also moved from the page into extension detail popovers.
+- Removed the width override and restored the original volume/provider rendering block and Auto option text from HEAD. These controls appear below the cards when their extensions match the active category or search, with the original provider enable/disable behavior. Detail popovers now contain explanations only.
+- Six focused Chromium checks pass. They verify a 740px desktop content width, controls outside popovers, saved provider and volume preferences, search/category navigation, independent switches, and responsive popup placement. JavaScript syntax and whitespace checks pass.
+- Risks: no known residual issue. The original controls remain conditional on search/category results, as the original page was conditional on search results.
+
+# Release verification — 0.1.24, 2026-10-29
+
+- The Electron account-window test still expected an em dash after window titles changed to a middle dot in `electron/main.cjs`. Updated the two title expectations; the targeted account isolation/restart test passes.
+- Validation: 323 Chromium tests, 26 other Electron tests plus the corrected account test, 14 updater/release checks, and four Rust tests pass. Native/preload build and diff whitespace checks pass.
+- Risks: local Electron checks cover macOS; the release workflow checks Windows before publishing both installers and their update manifests.

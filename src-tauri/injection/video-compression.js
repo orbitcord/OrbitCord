@@ -113,12 +113,12 @@
         if (message) extensions()?.toast(message, true);
     }
     function errorMessage(error) {
-        if (error.code === 'gif-too-large') return 'Couldn’t shrink this GIF below the upload limit. The original GIF was kept.';
-        if (error.code === 'too-large') return 'Couldn’t shrink this media below the upload limit. Original files were kept.';
-        if (error.code === 'ffmpeg-missing') return 'Install FFmpeg and restart Lowcord to compress media. Original files were kept.';
-        if (error.code === 'unsupported-duration') return 'Couldn’t read this video or animation, or it exceeds six hours. Original files were kept.';
-        if (error.code === 'encode-timeout') return 'Media compression took too long. Original files were kept.';
-        return 'Couldn’t compress this media. Original files were kept; you can retry or choose another file.';
+        if (error.code === 'gif-too-large') return 'Could not shrink this GIF below the upload limit. Your original GIF is unchanged.';
+        if (error.code === 'too-large') return 'Could not shrink this media below the upload limit. Your original files are unchanged.';
+        if (error.code === 'ffmpeg-missing') return 'Install FFmpeg and restart OrbitCord to compress media. Your original files are unchanged.';
+        if (error.code === 'unsupported-duration') return 'Could not read this video or animation, or it exceeds six hours. Your original files are unchanged.';
+        if (error.code === 'encode-timeout') return 'Media compression took too long. Your original files are unchanged.';
+        return 'Could not compress this media. Your original files are unchanged. Try again or choose another file.';
     }
     function intercept(event, files, replay) {
         if (ignored.has(event) || event.defaultPrevented || !extensions()?.enabled('compressVideos') || !window.__LOWCORD_NATIVE__?.videoCompression) return;
@@ -127,7 +127,7 @@
         event.preventDefault(); event.stopImmediatePropagation();
         if (active) { active.status.update('Media is still being prepared…', 'Wait or cancel before attaching more files.'); return true; }
         if (files.some(file => mediaKind(file) && file.size > maximumSource)) {
-            extensions().toast('Media above 2 GB needs to be reduced first. Original files were kept.', true);
+            extensions().toast('Reduce files larger than 2 GB before attaching them. Your original files are unchanged.', true);
             replay(files); return true;
         }
         const batch = { channel: id, limit, cancelled: false };
@@ -146,14 +146,14 @@
                 for (const file of files) output.push(mediaKind(file) && file.size >= limit ? await compress(file, batch, ++index, count) : file);
                 check(batch);
                 if (replay(output) === false) {
-                    extensions().toast('The attachment composer closed. Please attach the files again.', true);
+                    extensions().toast('The message box closed. Attach the files again.', true);
                     return;
                 }
                 extensions().toast('Media compressed and attached. Review it, then press Send.');
             } catch (error) {
                 if (!batch.cancelled && channelId() === id && extensions()?.enabled('compressVideos')) {
                     const attached = replay(files);
-                    extensions().toast(attached === false ? 'The attachment composer closed. Please attach the files again.' : errorMessage(error), true);
+                    extensions().toast(attached === false ? 'The message box closed. Attach the files again.' : errorMessage(error), true);
                 }
             } finally {
                 batch.status.end(); batch.unsubscribe?.();
@@ -178,7 +178,7 @@
         const intercepted = intercept(event, files, output => {
             if (!input.isConnected) {
                 const editor = document.querySelector(`${composerSelector} [contenteditable="true"][role="textbox"], ${composerSelector} textarea`);
-                if (!editor) { extensions().toast('The attachment composer closed. Please attach the files again.', true); return; }
+                if (!editor) { extensions().toast('The message box closed. Attach the files again.', true); return; }
                 for (const file of output) dispatch(editor, new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer([file]) }));
                 return;
             }

@@ -668,7 +668,7 @@ function setupLowcordChatAppearance() {
     function setEnabled(value) {
         const next = Boolean(value);
         try { storage.setItem(storageKey, String(next)); }
-        catch { throw new Error("Couldn’t save this setting. Please try again."); }
+        catch { throw new Error("Couldn't save this setting. Try again."); }
         enabled = next;
         updateObservers();
         window.dispatchEvent(new Event(changeEvent));
@@ -677,7 +677,7 @@ function setupLowcordChatAppearance() {
     function setOptions(value) {
         const next = normalizeOptions({ ...options, ...value });
         try { storage.setItem(optionsKey, JSON.stringify(next)); }
-        catch { throw new Error("Couldn’t save this setting. Please try again."); }
+        catch { throw new Error("Couldn't save this setting. Try again."); }
         options = next;
         invalidate();
         window.dispatchEvent(new Event(changeEvent));
@@ -747,11 +747,11 @@ function setupLowcordChatAppearance() {
             state.enabled && state.timestamps ? h("time", { className: "lowcord-bubble-time" }, time) : null);
         return h("section", { className: "lowcord-chat-appearance" },
             h("p", { className: "lowcord-chat-intro" }, "Choose how messages look in OrbitCord."),
-            toggle("Chat bubbles", "Show text as bubbles and line media up on the same side.", state.enabled, setEnabled),
+            toggle("Chat bubbles", "Show messages in bubbles and align photos and videos with them.", state.enabled, setEnabled),
             h("fieldset", { className: "lowcord-appearance-controls", disabled: !state.enabled },
                 h("legend", null, "Bubble style"),
                 h("div", { className: "lowcord-style-options" },
-                    ...[["bubbles", "Bubbles", "Text only, no profile pictures"], ["avatars", "With avatars", "A profile picture beside each group"]]
+                    ...[["bubbles", "Bubbles", "Hide profile pictures"], ["avatars", "With avatars", "Show a profile picture beside each message group"]]
                         .map(([value, title, description]) =>
                         h("label", { key: value, className: "lowcord-style-option", "data-selected": String(state.style === value) },
                             h("input", { type: "radio", name: "lowcord-bubble-style", value, checked: state.style === value,
@@ -759,7 +759,7 @@ function setupLowcordChatAppearance() {
                             h("span", null, h("strong", null, title), h("span", { className: "lowcord-chat-description" }, description))))),
                 h("label", { className: "lowcord-position-control" },
                     h("span", null, h("strong", null, "Bubble side"),
-                        h("span", { className: "lowcord-chat-description" }, "Where your messages sit. Received messages stay on the left.")),
+                        h("span", { className: "lowcord-chat-description" }, "Choose a side for your messages. Received messages stay on the left.")),
                     h("select", { value: state.outgoingPosition, "aria-label": "Bubble side", onChange: event => save(() => setOptions({ outgoingPosition: event.target.value })) },
                         h("option", { value: "right" }, "Right"), h("option", { value: "left" }, "Left"))),
                 h("div", { className: "lowcord-chat-preview", "data-bubbles": String(state.enabled), "data-style": state.style,
@@ -767,15 +767,15 @@ function setupLowcordChatAppearance() {
                     style: { "--lowcord-outgoing-color": colors.outgoingColor, "--lowcord-outgoing-text": ink.outgoing,
                         "--lowcord-incoming-color": colors.incomingColor, "--lowcord-incoming-text": ink.incoming },
                     "aria-label": "Message layout preview" },
-                    example("incoming", "Alex", ["Hey! How’s your day going?"], "10:41 AM"),
-                    example("outgoing", "You", ["Pretty good!", "What about you?"], "10:42 AM", "Hey! How’s your day going?")),
+                    example("incoming", "Alex", ["Hey! How's your day going?"], "10:41 AM"),
+                    example("outgoing", "You", ["Pretty good!", "What about you?"], "10:42 AM", "Hey! How's your day going?")),
                 h("div", { className: "lowcord-actions-setting", role: "radiogroup", "aria-labelledby": "lowcord-actions-title",
                     style: { "--lowcord-outgoing-color": colors.outgoingColor, "--lowcord-incoming-color": colors.incomingColor } },
                     h("span", null, h("strong", { id: "lowcord-actions-title" }, "Message actions"),
-                        h("span", { className: "lowcord-chat-description" }, "Where reactions, reply and more appear when you point at a message.")),
+                        h("span", { className: "lowcord-chat-description" }, "Choose where message actions appear when you hover over a message.")),
                     h("div", { className: "lowcord-actions-options" },
-                        ...[["edge", "Chat edge", "Same spot every time"], ["beside", "Beside", "Next to each message"],
-                            ["corner", "Top corner", "Floats over the corner"], ["react", "Reactions only", "Rest in right-click menu"]]
+                        ...[["edge", "Chat edge", "At the edge of the chat"], ["beside", "Beside", "Next to each message"],
+                            ["corner", "Top corner", "Above the message corner"], ["react", "Reactions only", "Right-click for other actions"]]
                             .map(([value, title, description]) =>
                             h("label", { key: value, className: "lowcord-actions-option", "data-selected": String(state.actions === value) },
                                 h("span", { className: "lowcord-actions-thumb", "data-actions": value, "aria-hidden": true },
@@ -789,8 +789,8 @@ function setupLowcordChatAppearance() {
                 h("div", { className: "lowcord-color-settings" },
                     h("div", { className: "lowcord-color-heading" },
                         h("span", null, h("strong", null, "Colors"), h("span", { className: "lowcord-chat-description" }, theme
-                            ? `Showing ${theme.name}’s colors. Change one to make them your own.`
-                            : "Text is set automatically for contrast until you pick a color.")),
+                            ? `Using colors from ${theme.name}. Change a color to override the theme.`
+                            : "OrbitCord picks a readable text color unless you choose one.")),
                         h("button", { type: "button", onClick: () => setColors({ outgoingColor: defaults.outgoingColor, incomingColor: defaults.incomingColor,
                             outgoingTextColor: null, incomingTextColor: null }) }, "Reset colors")),
                     h("div", { className: "lowcord-color-cards" }, colorCard("outgoing", "Your messages"), colorCard("incoming", "Received messages"))),

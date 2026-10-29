@@ -82,11 +82,11 @@ test("theme typefaces and bubble colors can be turned off", async ({ page }) => 
     expect(await font()).toContain("Figtree");
     await page.evaluate(() => window.__lowcordOpenSettings("themes"));
     await page.getByRole("switch", { name: /Theme chat bubbles/ }).uncheck();
-    await page.getByLabel("Typeface").selectOption({ label: "Discord’s" });
+    await page.getByLabel("Typeface").selectOption({ label: "Discord default" });
     expect(await bubble()).toBe("#123456");
     expect(await font()).not.toContain("Figtree");
     expect(await page.evaluate(() => JSON.parse(localStorage.getItem("lowcord.theme")))).toMatchObject({ id: "velvet", fonts: false, bubbles: false, font: "" });
-    await page.getByLabel("Typeface").selectOption({ label: "Velvet Dusk’s own" });
+    await page.getByLabel("Typeface").selectOption({ label: "Velvet Dusk default" });
     await expect.poll(font).toContain("Figtree");
     // Discord's own look has nothing to turn off.
     await page.getByRole("radio", { name: /^Discord/ }).click();
@@ -116,12 +116,12 @@ test("going back to Discord's look removes the theme entirely", async ({ page })
 test("editing bubble colors during a theme takes the theme's colors over", async ({ page }) => {
     await page.evaluate(() => window.__lowcordThemes.set({ id: "velvet" }));
     await page.evaluate(() => window.__lowcordOpenSettings("appearance"));
-    await expect(page.getByText("Showing Velvet Dusk’s colors")).toBeVisible();
+    await expect(page.getByText("Using colors from Velvet Dusk.")).toBeVisible();
     await page.getByLabel("Your messages text color").fill("#ffffff");
     await expect.poll(() => page.evaluate(() => window.__lowcordThemes.state.bubbles)).toBe(false);
     expect(await page.evaluate(() => window.__lowcordChatAppearance.options)).toMatchObject({
         outgoingColor: "#755e95", outgoingTextColor: "#ffffff", incomingColor: "#393552", incomingTextColor: "#e0def4" });
-    await expect(page.getByText("Showing Velvet Dusk’s colors")).toHaveCount(0);
+    await expect(page.getByText("Using colors from Velvet Dusk.")).toHaveCount(0);
 });
 
 test("a Discord font applies with or without a theme and lists only installed fonts", async ({ page }) => {
@@ -248,7 +248,7 @@ test("Nitro themes paint Discord's gradient, keep their classes, save mixes and 
     await editor.getByRole("radio", { name: "Saved" }).click();
     await editor.getByRole("button", { name: "My theme 1" }).click();
     await editor.getByRole("button", { name: "Remove from saved" }).click();
-    await expect(editor).toContainText("Themes you save show up here.");
+    await expect(editor).toContainText("No saved themes yet. Generate a theme, then save it here.");
 
     // With Fake Nitro off, the choice is kept but nothing is drawn.
     await page.evaluate(() => Lowcord.extensions.set("fakeNitro", false));

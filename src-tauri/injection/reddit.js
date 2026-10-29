@@ -38,13 +38,13 @@
     const messages = {
         'ffmpeg-missing': 'This video is over the upload limit. Install FFmpeg to compress it, then try again.',
         'encode-busy': 'Another video is being compressed. Try again when it finishes.',
-        'busy': 'The previous post is still stopping. Try again in a moment.',
+        'busy': 'Cancelling the previous post. Try again in a moment.',
         'encode-timeout': 'Compression took too long. Try a shorter video.',
         'unsupported-duration': 'This video cannot be compressed. Choose a video under ten minutes.',
-        'too-large': 'This post could not be made small enough. Choose another post.',
+        'too-large': 'This post is still over the upload limit after compression. Choose another post.',
         'expired': 'This preview expired. Search again to refresh it.',
         'rate-limited': 'Reddit is limiting requests. Wait a moment and try again.',
-        'forbidden': 'Reddit refused this request. The community may be private, banned or need you to sign in.',
+        'forbidden': 'Reddit blocked this request. The community may be private, banned or require you to sign in.',
         'not-found': 'Reddit could not find this community.',
         'signed-out': 'Log in to Reddit to see your saved posts.',
     };
@@ -182,8 +182,8 @@
             state.pin.setAttribute('aria-pressed', String(on));
             state.pin.setAttribute('aria-label', `${on ? 'Unpin' : 'Pin'} r/${state.subreddit}`);
         }
-        state.heading.textContent = state.subreddit ? `r/${state.subreddit}${state.query ? ` · “${state.query}”` : ''}`
-            : state.query ? directory(state) ? `Subreddits for “${state.query}”` : `Posts for “${state.query}”`
+        state.heading.textContent = state.subreddit ? `r/${state.subreddit}${state.query ? ` · "${state.query}"` : ''}`
+            : state.query ? directory(state) ? `Subreddits for "${state.query}"` : `Posts for "${state.query}"`
             : { home: account ? 'Your home feed' : 'Popular posts', popular: 'Popular posts',
                 subreddits: account ? 'Your subscriptions' : 'Popular subreddits', saved: 'Your saved posts' }[state.mode];
         state.sort.hidden = directory(state) || (state.mode === 'saved' && !state.subreddit);
@@ -675,7 +675,7 @@
         state.logout = ui('button', { type: 'button', className: 'lowcord-reddit-link', onClick: () => void logout(state) }, 'Log out of Reddit');
         state.options = ui('div', { className: 'lowcord-reddit-options', id: 'lowcord-reddit-options', hidden: true }, state.accountNote, state.logout,
             ui('label', { className: 'lowcord-reddit-preference' }, spoilers, 'Send NSFW and spoiler posts as spoilers'),
-            ui('p', {}, 'Click a post to send it. A gallery opens so you can pick what to send. Videos over the upload limit are compressed below 20 MB.'));
+            ui('p', {}, 'Click a post to send it. For albums, select which photos or videos to send. Videos over the upload limit are compressed below 20 MB.'));
         state.accountButton = ui('button', { type: 'button', className: 'lowcord-reddit-account', 'aria-controls': 'lowcord-reddit-options', onClick: () => {
             if (!account) { void login(state); return; }
             state.options.hidden = !state.options.hidden;

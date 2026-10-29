@@ -832,7 +832,7 @@ test.describe('Videos as files', () => {
             window.__LOWCORD_NATIVE__.socialMedia = async () => ({ error: 'failed' }); });
         const other = post.replace('LOCKED', 'LOCKED2');
         await page.evaluate(other => pasteText(other), other);
-        await expect(page.locator('.lowcord-toast-failure')).toContainText('Couldn’t get this Instagram post');
+        await expect(page.locator('.lowcord-toast-failure')).toContainText('Could not get this Instagram post');
         expect(await page.evaluate(() => attached)).toEqual([]);
     });
 

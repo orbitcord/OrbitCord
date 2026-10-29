@@ -343,7 +343,7 @@ test("settings controls, persisted position, disable and failed saves", async ({
     await expect(page.locator("#timeline .lowcord-bubble-time")).toHaveCount(0);
     await page.evaluate(() => { const prototype = Object.getPrototypeOf(Lowcord.storage); window.restoreSave = prototype.setItem; prototype.setItem = () => { throw Error("full"); }; });
     await page.getByRole("switch", { name: /Show timestamps/ }).click();
-    await expect(page.getByRole("alert")).toContainText("Couldn’t save");
+    await expect(page.getByRole("alert")).toContainText("Couldn't save");
     await expect(bubble(page, 2)).toHaveAttribute("data-lowcord-align", "left");
     await expect(page.getByRole("switch", { name: /Show timestamps/ })).not.toBeChecked();
     await page.evaluate(() => { Object.getPrototypeOf(Lowcord.storage).setItem = window.restoreSave; delete window.localStorage; });

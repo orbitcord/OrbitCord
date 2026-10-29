@@ -52,14 +52,14 @@ function setupLowcordSettings() {
         };
         const busy = ["checking", "downloading", "installing"].includes(state.status);
         const messages = {
-            idle: "Check for the latest stable release of OrbitCord.",
+            idle: "Check for OrbitCord updates.",
             checking: "Checking for updates…",
-            "up-to-date": "You’re up to date.",
+            "up-to-date": "You're up to date.",
             available: `OrbitCord ${state.version} is available.`,
             downloading: `Downloading OrbitCord ${state.version || "update"}…`,
             downloaded: `OrbitCord ${state.version} is ready to install.`,
             installing: state.installMode === "automatic" ? "Restarting to install the update…" : "Opening the installer…",
-            error: "The update could not be completed. Please try again.",
+            error: "Couldn't update OrbitCord. Try again.",
         };
         return h("section", { className: "lowcord-chat-appearance lowcord-updates-page" },
             state.currentVersion ? h("p", { className: "lowcord-chat-intro" }, `Current version: ${state.currentVersion}`) : null,
@@ -98,7 +98,7 @@ function setupLowcordSettings() {
         const act = (action, id) => native.accounts(action, id).then(next => { setList(next); setError(""); },
             failure => setError(failure.message));
         return h("section", { className: "lowcord-chat-appearance" },
-            h("p", { className: "lowcord-chat-intro" }, "Each account opens in its own window and stays signed in. Extra windows use memory only while open."),
+            h("p", { className: "lowcord-chat-intro" }, "Each account has its own window and stays signed in when you close it."),
             list ? h("div", { className: "lowcord-sleep-card" }, ...list.map((account, index) =>
                 h("div", { key: account.id, className: "lowcord-sleep-row", style: index ? undefined : { borderTop: 0 } },
                     h("span", { className: "lowcord-sleep-label" }, h("strong", null, account.name),
@@ -112,7 +112,7 @@ function setupLowcordSettings() {
             h("div", { className: "lowcord-updates-actions" },
                 h("button", { type: "button", className: "lowcord-button lowcord-button-primary", disabled: !native?.accounts,
                     onClick: () => act("new") }, "Add account")),
-            h("p", { className: "lowcord-chat-description" }, "Add account opens a new window where you can log in. Removing an account signs it out of OrbitCord on this computer."),
+            h("p", { className: "lowcord-chat-description" }, "Add an account to open a new sign-in window. Removing an account signs it out on this computer."),
             error ? h("p", { role: "alert" }, error) : null);
     }
 
@@ -196,7 +196,7 @@ function setupLowcordSettings() {
         const dialog = element("div", { className: "lowcord-voice", role: "dialog", "aria-modal": "true", "aria-labelledby": "lowcord-switch-title" },
             element("h2", { id: "lowcord-switch-title" }, `Switch to ${name}?`),
             element("p", { className: "lowcord-voice-status" },
-                `Open ${name} in a new window so both accounts stay signed in, or switch this window to ${name}. A new window asks you to log in once.`),
+                `Open a new window to keep both accounts signed in. You will need to log in to ${name} there the first time. Switching this window replaces the account shown here.`),
             element("div", { className: "lowcord-dialog-actions" },
                 button("Switch this window", "lowcord-button", switchHere),
                 button("Open in new window", "lowcord-button lowcord-button-primary", openWindow)));
@@ -240,24 +240,24 @@ function setupLowcordSettings() {
             event.currentTarget.parentElement.querySelector(`[data-minutes="${next}"]`)?.focus();
         };
         return h("section", { className: "lowcord-chat-appearance" },
-            h("p", { className: "lowcord-chat-intro" }, "Hidden or minimized, OrbitCord clears cached memory after 30 seconds. Sleep goes further."),
+            h("p", { className: "lowcord-chat-intro" }, "OrbitCord clears cached memory after the window has been hidden or minimized for 30 seconds."),
             settings ? h("div", { className: "lowcord-sleep-card" },
                 h("label", { className: "lowcord-chat-toggle" },
                     h("span", null, h("strong", null, "Sleep in the background"),
                         h("span", { className: "lowcord-chat-description" },
-                            "Unloads Discord to free most of its memory, and reloads it when you reopen the window.")),
+                            "Unload Discord while the window is hidden to free memory. Reopen the window to load it again.")),
                     h("input", { type: "checkbox", role: "switch", checked: settings.sleep,
                         onChange: event => change({ ...settings, sleep: event.target.checked }) })),
                 h("div", { className: "lowcord-sleep-row", "data-off": !settings.sleep },
                     h("span", { className: "lowcord-sleep-label" }, h("strong", null, "Sleep after"),
-                        h("span", { className: "lowcord-chat-description" }, "How long the window stays hidden first.")),
+                        h("span", { className: "lowcord-chat-description" }, "How long to wait after you hide or minimize the window.")),
                     h("div", { className: "lowcord-segmented", role: "radiogroup", "aria-label": "Sleep after" },
                         ...delays.map(([minutes, label]) => h("button", { key: minutes, type: "button", role: "radio",
                             "data-minutes": minutes, "aria-checked": settings.minutes === minutes, disabled: !settings.sleep,
                             tabIndex: settings.minutes === minutes ? 0 : -1, onKeyDown: arrow,
                             onClick: () => change({ ...settings, minutes }) }, label)))),
                 h("p", { className: "lowcord-sleep-note" },
-                    "No notifications arrive while Discord sleeps. OrbitCord stays awake during calls, uploads and playing media.")) : null,
+                    "You will not receive notifications while Discord sleeps. Calls, uploads and media playback keep it awake.")) : null,
             error ? h("p", { role: "alert" }, error) : null);
     }
 
@@ -294,8 +294,8 @@ function setupLowcordSettings() {
             h("path", { d: "m4.8 8.3 2.1 2.1 4.3-4.5", fill: "none", stroke: "#fff", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" }));
         return h("section", { className: "lowcord-chat-appearance lowcord-icon-page" },
             h("p", { className: "lowcord-icon-lead" }, windows
-                ? "Pick an icon for OrbitCord. Updates the window, taskbar, tray and shortcuts."
-                : "Pick an icon for OrbitCord. Your Dock or taskbar updates right away."),
+                ? "Choose the OrbitCord icon for the window, taskbar, tray and shortcuts."
+                : "Choose the OrbitCord icon for your Dock or taskbar."),
             h("div", { className: "lowcord-icon-grid", role: "radiogroup", "aria-label": "App icon" }, ...appIcons.map(([id, label]) =>
                 h("button", { key: id, type: "button", role: "radio", "aria-checked": current === id, className: "lowcord-icon-option", onClick: () => choose(id) },
                     current === id ? check : null,
@@ -303,9 +303,41 @@ function setupLowcordSettings() {
                     h("span", { className: "lowcord-icon-name" }, label)))),
             h("p", { className: "lowcord-icon-note" }, windows
                 ? "Desktop, Start menu and pinned shortcuts use your selected icon. The .exe file keeps the default icon."
-                : "Finder and Explorer still show the default icon on the app file."),
+                : "The app file keeps its default icon in Finder or Explorer."),
             error ? h("p", { role: "alert" }, error) : null);
     }
+
+    // Settings-only copy: extension behavior and defaults stay in the catalog.
+    const extensionCategories = ["All", "Uploads", "Media", "Messaging", "Utilities"];
+    const extensionDetails = {
+        anonymiseFileNames: ["Uploads", "Attach a file to give it a random name. The file type and spoiler tag stay the same."],
+        compressVideos: ["Uploads", "Attach a video, image or GIF. OrbitCord compresses oversized files before uploading.", "Install FFmpeg to compress videos and GIFs."],
+        voiceMessages: ["Messaging", "Use the waveform button beside the message box to record and send a voice message.", "Allow microphone access when prompted."],
+        redgifsPicker: ["Media", "Open RedGIFs beside the message box. Search or browse, then select a video to send it as an MP4 file."],
+        mediaSources: ["Media", "Open Media sources beside the message box to browse GifReels or XXXTik. Select a photo or video to send it as a file."],
+        redditPicker: ["Media", "Open Reddit to browse posts and send their photos or videos as files. Sign in to access your Reddit account.", "Install FFmpeg to compress large videos below 20 MB."],
+        chatCapture: ["Messaging", "Click the camera button beside the message box. Select the first and last messages to capture them in one image."],
+        mediaGallery: ["Media", "Open the gallery in the chat header to browse photos and videos. Select an item to jump to its message."],
+        pictureInPicture: ["Media", "Hover over a chat video and use its pop-out button, or press Alt+P, to keep watching in a floating window."],
+        downloadVideos: ["Media", "Right-click a linked or embedded video and choose Download video to save it.", "Some video links do not support downloads."],
+        copyMediaLink: ["Media", "Right-click a photo or video and choose Copy Media Link to copy its URL."],
+        massDelete: ["Utilities", "Click the trash button beside the message box. Choose a DM, channel or server to delete your messages from.", "Check where you are deleting messages before you start. You cannot restore them."],
+        dmQuickReply: ["Messaging", "Hover over a DM in the sidebar to read and reply without leaving your current chat."],
+        quickReply: ["Messaging", "In an empty message box, press Shift with the up or down arrow to select a message to reply to. Press Escape to cancel.", "This replaces the up-arrow shortcut for editing your last message."],
+        clickReply: ["Messaging", "Click a chat bubble to start a reply to that message.", "Turn on chat bubbles in Chat Appearance."],
+        fakeNitro: ["Utilities", "Use emojis and stickers from other servers, or choose a Nitro theme, without a Nitro subscription.", "This does not change your subscription or raise your upload limit."],
+        cleanUrls: ["Utilities", "OrbitCord removes known tracking parameters from links you send."],
+        silentTyping: ["Utilities", "Write messages without showing a typing indicator to other people."],
+        noTracking: ["Utilities", "Blocks Discord analytics, crash reports and prompts to download the desktop app."],
+        youtubeAdblock: ["Media", "Blocks ads in YouTube embeds and Watch Together."],
+        musicEmbeds: ["Media", "Share a Spotify or Apple Music link to show a playable preview. Use Embed volume below the extension list to adjust previews and YouTube embeds."],
+        socialEmbeds: ["Media", "Send a social post link to show its preview. Use Social embed providers below the extension list to choose a service, or use Auto to try another if one fails.", "Private or deleted posts may not embed."],
+        socialCards: ["Media", "View a supported social post and its photos or videos together in one card."],
+        redditVideoUpload: ["Uploads", "Send a Reddit video link to upload it as a file with sound."],
+        instagramVideoUpload: ["Uploads", "Send an Instagram Reel or video link to upload its video as a file."],
+        twitterVideoUpload: ["Uploads", "Send an X video link to upload the video as a file."],
+        socialPhotoUpload: ["Uploads", "Send an Instagram, Reddit or X photo post or carousel link to upload its photos as files.", "Off by default. Turn it on with the card switch."],
+    };
 
     function ExtensionsPanel() {
         const { React } = window.Lowcord;
@@ -315,8 +347,10 @@ function setupLowcordSettings() {
         const [options, setOptions] = React.useState(() => extensions.options);
         const [error, setError] = React.useState("");
         const [query, setQuery] = React.useState("");
+        const [category, setCategory] = React.useState("All");
         const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-        const filtered = extensions.catalog.filter(({ title, description }) => {
+        const filtered = extensions.catalog.filter(({ id, title, description }) => {
+            if (category !== "All" && (extensionDetails[id]?.[0] ?? "Utilities") !== category) return false;
             const text = `${title} ${description}`.toLocaleLowerCase();
             return terms.every(term => text.includes(term));
         });
@@ -333,17 +367,50 @@ function setupLowcordSettings() {
             h("select", { value: options[`${site}Provider`], onChange: event => option(`${site}Provider`, event.target.value) },
                 h("option", { value: "auto" }, "Auto · checked fallback"),
                 ...window.Lowcord.socialLinks.providers[site].map(host => h("option", { key: host, value: host }, host))));
-        return h("section", { className: "lowcord-chat-appearance" },
-            h("p", { className: "lowcord-chat-intro" }, "Built-in OrbitCord extensions. Changes apply immediately."),
+        return h("section", { className: "lowcord-chat-appearance lowcord-extensions-page" },
+            h("p", { className: "lowcord-chat-intro" }, "Choose which extensions to use. Changes apply immediately."),
             h("input", { type: "search", className: "lowcord-extension-search", placeholder: "Search extensions…",
-                "aria-label": "Search extensions", value: query, onChange: event => setQuery(event.target.value) }),
-            filtered.length === 0 ? h("p", { className: "lowcord-chat-description", role: "status" }, "No extensions found. Try another search.") : null,
-            h("div", { className: "lowcord-extension-list" }, ...filtered.map(({ id, title, description }) =>
-                h("label", { key: id, className: "lowcord-chat-toggle" },
-                    h("span", null, h("strong", null, title), h("span", { className: "lowcord-chat-description" }, description)),
-                    h("input", { type: "checkbox", role: "switch", checked: state[id], onChange: event => {
-                        try { extensions.set(id, event.target.checked); setError(""); } catch (failure) { setError(failure.message); }
-                    } })))),
+                "aria-label": "Search extensions", value: query, onChange: event => { setQuery(event.target.value); setCategory("All"); } }),
+            h("div", { className: "lowcord-extension-tabs", role: "tablist", "aria-label": "Extension categories" },
+                ...extensionCategories.map((name, index) => h("button", {
+                    key: name, type: "button", role: "tab", id: `lowcord-extension-tab-${name}`,
+                    "aria-selected": category === name, "aria-controls": "lowcord-extension-results", tabIndex: category === name ? 0 : -1,
+                    onClick: () => setCategory(name),
+                    onKeyDown: event => {
+                        let next;
+                        if (event.key === "ArrowRight") next = (index + 1) % extensionCategories.length;
+                        if (event.key === "ArrowLeft") next = (index + extensionCategories.length - 1) % extensionCategories.length;
+                        if (event.key === "Home") next = 0;
+                        if (event.key === "End") next = extensionCategories.length - 1;
+                        if (next === undefined) return;
+                        event.preventDefault(); setCategory(extensionCategories[next]);
+                        event.currentTarget.parentElement.children[next].focus();
+                    },
+                }, name))),
+            h("div", { id: "lowcord-extension-results", role: "tabpanel", "aria-labelledby": `lowcord-extension-tab-${category}` },
+                filtered.length === 0 ? h("p", { className: "lowcord-chat-description", role: "status" }, "No extensions found. Try a different search or category.") : null,
+                h("div", { className: "lowcord-extension-list" }, ...filtered.map(({ id, title, description }) => {
+                    const [group, usage, requirement] = extensionDetails[id] ?? ["Utilities", description];
+                    const detailsId = `lowcord-extension-details-${id}`;
+                    return h(React.Fragment, { key: id },
+                        h("div", { className: "lowcord-extension-card lowcord-chat-toggle", style: { anchorName: `--lowcord-extension-${id}` } },
+                            h("button", { type: "button", className: "lowcord-extension-info", "aria-label": `About ${title}`,
+                                "aria-haspopup": "dialog", popoverTarget: detailsId },
+                                h("strong", null, title), h("span", { className: "lowcord-chat-description" }, description)),
+                            h("input", { type: "checkbox", role: "switch", "aria-label": title, checked: state[id], onChange: event => {
+                                try { extensions.set(id, event.target.checked); setError(""); } catch (failure) { setError(failure.message); }
+                            } })),
+                        h("div", { id: detailsId, popover: "auto", role: "dialog", "aria-labelledby": `${detailsId}-title`, className: "lowcord-extension-details",
+                            style: { positionAnchor: `--lowcord-extension-${id}` } },
+                            h("div", { className: "lowcord-extension-details-heading" },
+                                h("span", { className: "lowcord-extension-category" }, group),
+                                h("button", { type: "button", className: "lowcord-settings-close", "aria-label": "Close extension details",
+                                    popoverTarget: detailsId, popoverTargetAction: "hide" }, "×")),
+                            h("h2", { id: `${detailsId}-title` }, title),
+                            h("p", { className: "lowcord-extension-summary" }, description),
+                            h("h3", null, "How it works"), h("p", null, usage),
+                            requirement ? h(React.Fragment, null, h("h3", null, "Good to know"), h("p", null, requirement)) : null));
+                }))),
             filtered.some(({ id }) => id === "musicEmbeds") ? h("label", { className: "lowcord-volume-card" },
                 h("span", { className: "lowcord-volume-text" }, h("strong", null, "Embed volume"),
                     h("span", { className: "lowcord-chat-description" }, "YouTube, Spotify and Apple Music. Defaults to 50%.")),
@@ -398,6 +465,12 @@ function setupLowcordSettings() {
     }
     // Esc closes Lowcord's dialog only, not Discord's settings underneath.
     // In a live preview it ends the preview first.
+    window.addEventListener("keydown", event => {
+        if (event.key !== "Escape") return;
+        const details = document.querySelector(".lowcord-extension-details:popover-open");
+        if (!details) return;
+        event.preventDefault(); event.stopImmediatePropagation(); details.hidePopover();
+    }, true);
     const onKey = event => {
         if (event.key !== "Escape") return;
         event.stopPropagation(); event.preventDefault();

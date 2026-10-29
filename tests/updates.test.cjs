@@ -89,7 +89,7 @@ test('Mac keeps bytes after exhausted network retries, but removes invalid range
     try {
         await writeFile(partial, 'da');
         await assert.rejects(downloadMacInstaller({ directory, asset, retryDelays: [],
-            fetch: async () => { throw new Error('net::ERR_CONNECTION_RESET'); } }), /downloaded bytes have been kept/);
+            fetch: async () => { throw new Error('net::ERR_CONNECTION_RESET'); } }), /download will resume where it stopped/);
         assert.equal(await readFile(partial, 'utf8'), 'da');
         await assert.rejects(downloadMacInstaller({ directory, asset, retryDelays: [],
             fetch: async () => new Response('ta', { status: 206, headers: { 'content-range': 'bytes 1-2/4' } }) }), /invalid byte range/);

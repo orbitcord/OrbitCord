@@ -156,5 +156,5 @@ test('replacing the composer during download does not deliver a file to an obsol
     await page.evaluate(() => { window.hold = true; }); await drop(page);
     await page.evaluate(() => { const editor = document.querySelector('textarea'); editor.replaceWith(editor.cloneNode()); releaseImage(); });
     await done(page, 0);
-    await expect(page.locator('.lowcord-toast').last()).toContainText('composer closed');
+    await expect(page.locator('.lowcord-toast').last()).toContainText('message box closed');
 });

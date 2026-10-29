@@ -81,6 +81,104 @@ test('extension search filters names and descriptions, preserves toggles, and cl
     await expect(search).toBeFocused();
 });
 
+test('extension categories, independent toggles and accessible detail popovers', async ({ page }) => {
+    await page.evaluate(() => window.__lowcordOpenSettings('extensions'));
+    const settings = page.getByRole('dialog', { name: 'OrbitCord Settings' });
+    await settings.getByRole('tab', { name: 'Uploads', exact: true }).click();
+    await expect(settings.getByRole('switch', { name: 'Compress media', exact: true })).toBeVisible();
+    await expect(settings.getByRole('switch', { name: 'Silent typing', exact: true })).toHaveCount(0);
+    await settings.getByRole('switch', { name: 'Compress media', exact: true }).uncheck();
+    await expect(page.locator('.lowcord-extension-details:popover-open')).toHaveCount(0);
+    const about = settings.getByRole('button', { name: 'About Compress media', exact: true });
+    await about.focus();
+    await page.keyboard.press('Enter');
+    const details = page.getByRole('dialog', { name: 'Compress media', exact: true });
+    await expect(details.getByRole('heading', { name: 'How it works' })).toBeVisible();
+    await expect(details).toContainText('Install FFmpeg to compress');
+    const card = about.locator('..');
+    const cardBox = await card.boundingBox(), detailBox = await details.boundingBox();
+    // Native anchor positioning keeps details beside their trigger, not centered.
+    expect(Math.min(Math.abs(detailBox.y - cardBox.y - cardBox.height),
+        Math.abs(cardBox.y - detailBox.y - detailBox.height))).toBeCloseTo(12, 0);
+    const selectedBorder = await card.evaluate(node => getComputedStyle(node).borderColor);
+    expect(selectedBorder).toBe('rgb(88, 101, 242)');
+
+    await expect(settings.getByRole('switch', { name: 'Compress media', exact: true })).not.toBeChecked();
+    await page.keyboard.press('Escape');
+    await expect(details).not.toBeVisible();
+    await expect(settings).toBeVisible();
+    await expect(about).toBeFocused();
+    await about.click();
+    await details.getByRole('button', { name: 'Close extension details' }).click();
+    await expect(details).not.toBeVisible();
+    await about.click();
+    await settings.getByRole('searchbox').click();
+    await expect(details).not.toBeVisible();
+    await settings.getByRole('tab', { name: 'Uploads', exact: true }).focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(settings.getByRole('tab', { name: 'Media', exact: true })).toHaveAttribute('aria-selected', 'true');
+    // Search always starts across all categories, so hidden items remain discoverable.
+    await settings.getByRole('searchbox').fill('Silent typing');
+    await expect(settings.getByRole('tab', { name: 'All', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(settings.getByRole('switch')).toHaveCount(1);
+    await expect(settings.getByRole('switch', { name: 'Silent typing', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(settings).toHaveCount(0);
+});
+
+test('extension categories fit inline settings and narrow windows', async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1488, height: 1058 });
+    await page.evaluate(() => {
+        const main = document.querySelector('main');
+        main.style.cssText = 'display:flex;height:100vh';
+        main.querySelector('aside').style.cssText = 'width:220px;flex:none';
+        main.querySelector('.channelTextArea_test').style.display = 'none';
+        main.insertAdjacentHTML('beforeend', '<div class="content_test" style="position:relative;flex:1;min-width:0"><div class="contentHeader_test"><button aria-label="Close">×</button></div><div class="page_test">Discord settings</div></div>');
+    });
+    await page.locator('.lowcord-sidebar-section [role="link"]').filter({ hasText: /^Extensions$/ }).click();
+    const inline = page.locator('.lowcord-settings-inline');
+    await expect(inline).toBeVisible();
+    expect(await inline.getByRole('searchbox').evaluate(node => node.getBoundingClientRect().width)).toBe(740);
+    const volume = inline.getByRole('slider', { name: 'Embed volume' });
+    const provider = inline.getByLabel('X / Twitter provider');
+    await expect(volume).toBeVisible();
+    await expect(provider).toBeVisible();
+    expect(await volume.evaluate(node => Boolean(node.closest('.lowcord-extension-details')))).toBe(false);
+    expect(await provider.evaluate(node => Boolean(node.closest('.lowcord-extension-details')))).toBe(false);
+    await inline.getByRole('button', { name: 'About Fix music embeds', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Fix music embeds', exact: true }).getByRole('slider')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await inline.getByRole('tab', { name: 'Uploads', exact: true }).click();
+    await expect(inline.getByRole('button', { name: 'About Compress media', exact: true })).toBeVisible();
+    await inline.screenshot({ path: testInfo.outputPath('extension-tabs.png') });
+    await inline.getByRole('button', { name: 'About Compress media', exact: true }).click();
+    const details = page.getByRole('dialog', { name: 'Compress media', exact: true });
+    await expect(details).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('extension-details.png') });
+    await page.keyboard.press('Escape');
+    await expect(details).not.toBeVisible();
+    await expect(inline).toBeVisible();
+    await expect(page.locator('.content_test button[aria-label="Close"]')).toBeVisible();
+    await page.setViewportSize({ width: 640, height: 700 });
+    const bounds = await inline.locator('.lowcord-extension-card').first().evaluate(node => {
+        const card = node.getBoundingClientRect(), list = node.parentElement.getBoundingClientRect();
+        return { card: card.width, list: list.width, overflow: node.scrollWidth > node.clientWidth };
+    });
+    expect(Math.abs(bounds.card - bounds.list)).toBeLessThan(2);
+    expect(bounds.overflow).toBe(false);
+    await inline.getByRole('button', { name: 'About Compress media', exact: true }).click();
+    await expect(details).toBeVisible();
+    const box = await details.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(640);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(700);
+    await page.screenshot({ path: testInfo.outputPath('extension-narrow.png') });
+    await page.getByRole('link', { name: 'Account', exact: true }).click();
+    await expect(inline).toHaveCount(0);
+    await expect(details).toHaveCount(0);
+});
+
 test("silent typing answers Discord's typing request locally, over XHR and fetch", async ({ page }) => {
     expect(await xhr(page, "POST", `/api/v9/channels/${channel}/typing`, "")).toBe(204);
     expect(await page.evaluate(path => fetch(path, { method: "POST" }).then(r => r.status), `/api/v9/channels/${channel}/typing`)).toBe(204);
@@ -758,13 +856,13 @@ test("mass delete removes every own message in a DM, past rate limits and indexi
     await fakeMessages(page, { guild: false });
     await runAction(page, "Delete my messages");
     const dialog = page.getByRole("dialog", { name: "Delete your messages?" });
-    await expect(dialog).toContainText("Every message you sent to Sam");
+    await expect(dialog).toContainText("Delete all messages you sent to Sam");
     await expect(dialog.getByRole("radiogroup")).toHaveCount(0);
     await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
     await dialog.getByRole("button", { name: "Delete my messages" }).click();
     await expect(dialog).toBeHidden();
     await expect(page.locator(".lowcord-toast")).toContainText("Deleted 62 messages", { timeout: 15_000 });
-    await expect(page.locator(".lowcord-toast")).toContainText("1 couldn’t be deleted");
+    await expect(page.locator(".lowcord-toast")).toContainText("1 could not be deleted");
     await expect(page.locator(".lowcord-purge-bar")).toHaveCount(0);
     const { searches, deletes } = await page.evaluate(() => window.purge);
     expect(searches[0]).toEqual({ url: "/channels/500/messages/search",
@@ -957,7 +1055,7 @@ test("media gallery shows a DM's photos and videos by month and jumps to a messa
         .toHaveAttribute("src", "https://cdn.discordapp.com/avatars/3/abc.webp?size=64");
     await expect(pane.getByRole("button", { name: /^Video from Ada/ }).first().locator(".lowcord-media-avatar"))
         .toHaveAttribute("src", "https://cdn.discordapp.com/embed/avatars/0.png");
-    await expect(pane.getByRole("status")).toHaveText("That’s everything.");
+    await expect(pane.getByRole("status")).toHaveText("No more media.");
     const months = await pane.locator(".lowcord-media-month h3").allTextContents();
     expect(months).toHaveLength(2);
     expect(await pane.locator(".lowcord-media-badge", { hasText: "1:15" }).count()).toBe(6);

@@ -15,25 +15,25 @@ function setupLowcordThemes() {
     // Outgoing bubbles are a deep shade of the accent with light text, so
     // yellow emoji (#ffcc4d) still stand out at 3:1 inside them.
     const themes = [
-        { id: "fjord", name: "Fjord", scheme: "dark", blurb: "Slate blues and a frost accent. Cool and calm.",
+        { id: "fjord", name: "Fjord", scheme: "dark", blurb: "Slate blue with light blue accents.",
             fonts: { ui: `"Helvetica Neue", "Segoe UI Variable Text", "Segoe UI", Helvetica, Arial, sans-serif`, code: systemMono }, radius: 10,
             palette: { frame: "#1a1e26", sidebar: "#20252e", chat: "#252a34", surface: "#2d333f", raised: "#303744", border: "#3a4252",
                 selection: "#3b4f66", mention: "#26323f", text: "#e5e9f0", muted: "#a0a8b8", accent: "#88c0d0", accentHover: "#a3d0dd",
                 onAccent: "#132029", link: "#8fcbdb", success: "#a3be8c", warning: "#ebcb8b", danger: "#d27b84", code: "#1f242d",
                 bubbleOut: "#4f6c90", bubbleOutText: "#f4f7fb", bubbleIn: "#353c4a", bubbleInText: "#e5e9f0" } },
-        { id: "ember", name: "Ember", scheme: "dark", blurb: "Warm charcoal lit by a low amber glow.",
+        { id: "ember", name: "Ember", scheme: "dark", blurb: "Charcoal with amber accents.",
             fonts: { ui: `"Gill Sans", "Gill Sans MT", Calibri, ${system}`, code: systemMono }, radius: 10,
             palette: { frame: "#141211", sidebar: "#1a1816", chat: "#1f1c1a", surface: "#282421", raised: "#2c2825", border: "#38322d",
                 selection: "#5a4024", mention: "#2c2218", text: "#ece4da", muted: "#9c9189", accent: "#e8a25c", accentHover: "#f0b679",
                 onAccent: "#1c1208", link: "#f0b679", success: "#a9bf7e", warning: "#e8c46b", danger: "#e07b6a", code: "#191715",
                 bubbleOut: "#905a2b", bubbleOutText: "#fbf1e6", bubbleIn: "#2f2a26", bubbleInText: "#ece4da" } },
-        { id: "moss", name: "Moss", scheme: "dark", blurb: "Soft forest greens with sage and wheat.",
+        { id: "moss", name: "Moss", scheme: "dark", blurb: "Dark green with sage and yellow accents.",
             fonts: { ui: `"Trebuchet MS", ${system}`, code: systemMono }, radius: 10,
             palette: { frame: "#191d1a", sidebar: "#1f2420", chat: "#242a26", surface: "#2c332e", raised: "#303832", border: "#39433c",
                 selection: "#44523b", mention: "#2e3024", text: "#d9ddd0", muted: "#9ca59a", accent: "#a7c080", accentHover: "#bcd39a",
                 onAccent: "#172013", link: "#b5cd8f", success: "#a7c080", warning: "#dbbc7f", danger: "#e67e80", code: "#1e2320",
                 bubbleOut: "#5a6f3f", bubbleOutText: "#f1f5e9", bubbleIn: "#323a34", bubbleInText: "#d9ddd0" } },
-        { id: "velvet", name: "Velvet Dusk", scheme: "dark", blurb: "Soft dusk purples with rose and gold.",
+        { id: "velvet", name: "Velvet Dusk", scheme: "dark", blurb: "Dark purple with pink and gold accents.",
             fonts: { ui: `"Figtree", ${system}`, display: `"Fraunces", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif`,
                 code: `"Fira Code", ${systemMono}` },
             radius: 10,
@@ -41,7 +41,7 @@ function setupLowcordThemes() {
                 selection: "#44415a", mention: "#392d41", text: "#e0def4", muted: "#a4a1b9", accent: "#c4a7e7", accentHover: "#d6c2f1",
                 onAccent: "#191724", link: "#c4a7e7", success: "#9ccfd8", warning: "#f6c177", danger: "#eb6f92", code: "#1f1d2e",
                 bubbleOut: "#755e95", bubbleOutText: "#f6f2fc", bubbleIn: "#393552", bubbleInText: "#e0def4" } },
-        { id: "phosphor", name: "Phosphor", scheme: "dark", blurb: "Monospace everything, one cobalt accent.",
+        { id: "phosphor", name: "Phosphor", scheme: "dark", blurb: "Monospace text with cobalt accents.",
             fonts: { ui: systemMono, code: systemMono },
             radius: 0, xHeight: .44,
             palette: { frame: "#050506", sidebar: "#08090a", chat: "#0b0c0e", surface: "#131518", raised: "#101114", border: "#24272d",
@@ -51,7 +51,7 @@ function setupLowcordThemes() {
     ];
     // Discord's own look, shown first in the picker. Its preview stands for
     // whichever Appearance the user picked in Discord.
-    const discord = { id: "discord", name: "Discord", blurb: "Discord’s own look. Follows your Appearance settings.",
+    const discord = { id: "discord", name: "Discord", blurb: "Discord's default look. Uses your Appearance settings.",
         radius: 8, palette: { frame: "#121214", sidebar: "#121214", chat: "#1a1a1e", surface: "#242429", border: "#2e2e34",
             mention: "#2b2a22", text: "#dfe0e2", muted: "#94959c", accent: "#5865f2", warning: "#f0b232" } };
 
@@ -197,7 +197,7 @@ function setupLowcordThemes() {
         for (let step = 1; contrast(bubbleOut, "#ffcc4d") < 3 || contrast(bubbleOut, "#ffffff") < 4.5; step++) {
             bubbleOut = mix(accent, "#000000", step * .05);
         }
-        return { id: "custom", name: "Custom", scheme: dark ? "dark" : "light", blurb: "Your own colors. Make it below.",
+        return { id: "custom", name: "Custom", scheme: dark ? "dark" : "light", blurb: "Choose your own colors below.",
             radius: custom.radius, bubbleCorners: bubbleCorners[custom.radius],
             palette: { frame: shade(.32), sidebar: shade(.16), chat: background, surface: lift(.06), raised: lift(.08), border: lift(.15),
                 selection: mix(background, accent, .4), mention: mix(background, accent, .12), text, muted: mix(text, background, .42),
@@ -369,7 +369,7 @@ function setupLowcordThemes() {
         const before = state;
         const after = normalize({ ...state, ...next, custom: { ...state.custom, ...next.custom } });
         try { storage.setItem(storageKey, JSON.stringify(after)); }
-        catch { throw new Error("Couldn’t save this setting. Please try again."); }
+        catch { throw new Error("Couldn't save this setting. Try again."); }
         state = after;
         // A new theme cross-fades the whole window once. Only the switch
         // itself uses the GPU; nothing keeps running afterwards.
@@ -406,7 +406,7 @@ function setupLowcordThemes() {
         const custom = customTheme(current.custom);
         const nitroOn = fakeNitroOn();
         // The Nitro card's miniature: Discord's surfaces see-through over the gradient.
-        const nitroCard = { id: "nitro", name: "Nitro", scheme: "gradient", radius: 8, blurb: "Discord’s Nitro themes, or your own mix.",
+        const nitroCard = { id: "nitro", name: "Nitro", scheme: "gradient", radius: 8, blurb: "Discord's Nitro themes or your own colors.",
             palette: { frame: nitroGradient(current.nitro), rail: "rgb(0 0 0 / .34)", sidebar: "rgb(0 0 0 / .22)", chat: "rgb(0 0 0 / .1)",
                 surface: "rgb(255 255 255 / .1)", border: "rgb(255 255 255 / .14)", mention: "rgb(255 255 255 / .1)",
                 text: "#f2f3f5", muted: "#c4c9ce", accent: "#5865f2" } };
@@ -472,7 +472,7 @@ function setupLowcordThemes() {
         const editor = h("div", { className: "lowcord-theme-editor", "data-active": current.id === "custom" },
             h("div", { className: "lowcord-theme-editor-head" },
                 h("span", null, h("h3", null, "Make your own"),
-                    description("Pick a background and an accent, and OrbitCord shades everything else from them.")),
+                    description("Choose a background and accent color. OrbitCord uses them to set the other colors.")),
                 current.id === "custom" ? null
                     : h("button", { type: "button", className: "lowcord-theme-use", onClick: () => save({ id: "custom" }) }, "Use custom theme")),
             h("div", { className: "lowcord-theme-colors" },
@@ -516,7 +516,7 @@ function setupLowcordThemes() {
             return h("div", { className: "lowcord-theme-editor lowcord-nitro-editor", "data-active": true },
                 h("div", { className: "lowcord-nitro-bar", style: { "--nitro-gradient": nitroGradient(theme) } },
                     h("div", { className: "lowcord-nitro-bar-top" },
-                        h("span", null, h("h3", null, "Nitro theme"), h("span", { className: "lowcord-nitro-note" }, "Only you see it, on this device.")),
+                        h("span", null, h("h3", null, "Nitro theme"), h("span", { className: "lowcord-nitro-note" }, "Only you can see this theme on this device.")),
                         h("span", { className: "lowcord-nitro-actions" },
                             savedMatch ? glass("Remove from saved", bookmark, () => save({ nitroSaved: current.nitroSaved.filter(entry => entry !== savedMatch) }))
                                 : named ? null : glass("Save", bookmark, () => {
@@ -532,7 +532,7 @@ function setupLowcordThemes() {
                     list.length ? h("div", { className: "lowcord-nitro-swatches" }, ...list.map(entry => h("button", { key: entry.name, type: "button",
                             className: "lowcord-nitro-swatch", title: entry.name, "aria-label": entry.name, "aria-pressed": sameNitro(entry, theme),
                             style: { background: nitroGradient(entry) }, onClick: () => pick(entry) })))
-                        : h("p", { className: "lowcord-nitro-empty" }, "Themes you save show up here."),
+                        : h("p", { className: "lowcord-nitro-empty" }, "No saved themes yet. Generate a theme, then save it here."),
                     h("div", { className: "lowcord-nitro-controls" },
                         h("div", { className: "lowcord-nitro-tile" },
                             h("span", { className: "lowcord-nitro-eyebrow" }, "Colors"),
@@ -561,17 +561,17 @@ function setupLowcordThemes() {
             h("div", { className: "lowcord-theme-typeface" },
                 h("label", { className: "lowcord-position-control" },
                     h("span", null, h("strong", null, "Typeface"),
-                        description("Used across Discord, over any theme. Only fonts installed on this computer are listed.")),
+                        description("Use this font across Discord. The list shows fonts installed on this computer.")),
                     h("select", { value: typeface, "aria-label": "Typeface", onChange: event => setTypeface(event.target.value) },
-                        h("option", { value: "" }, themeFonts ? `${active.name}’s own` : "Discord’s"),
-                        themeFonts ? h("option", { value: "discord" }, "Discord’s") : null,
+                        h("option", { value: "" }, themeFonts ? `${active.name} default` : "Discord default"),
+                        themeFonts ? h("option", { value: "discord" }, "Discord default") : null,
                         ...fonts.map(group => h("optgroup", { key: group.label, label: group.label },
                             ...group.fonts.map(choice => h("option", { key: choice.name, value: choice.name }, choice.name)))))),
                 h("p", { className: "lowcord-font-sample", style: { fontFamily: sample } },
                     "The quick brown fox jumps over the lazy dog. 0123456789")),
             h("label", { className: "lowcord-chat-toggle", "data-off": !active },
                 h("span", null, h("strong", null, "Theme chat bubbles"),
-                    description("Color OrbitCord’s chat bubbles to match the theme instead of your own bubble colors.")),
+                    description("Use the theme colors for chat bubbles.")),
                 h("input", { type: "checkbox", role: "switch", checked: current.bubbles, disabled: !active,
                     onChange: event => save({ bubbles: event.target.checked }) })));
         const eye = h("svg", { viewBox: "0 0 24 24", width: 16, height: 16, "aria-hidden": "true" },
@@ -583,9 +583,9 @@ function setupLowcordThemes() {
                     h("button", { type: "button", className: "lowcord-theme-use", onClick: () => inspector.exit() }, "Done"))
                 : h("div", { className: "lowcord-themes-intro" },
                     h("p", { className: "lowcord-chat-intro" },
-                        "Restyle all of Discord. Themes are plain CSS, so they add no background work and switch instantly."),
+                        "Choose a theme for Discord. Changes apply immediately."),
                     inspector ? h("button", { type: "button", className: "lowcord-preview-button",
-                        onClick: () => { if (!inspector.enter(pageRef.current)) setError("Live preview isn’t available here."); } }, eye, "Preview live") : null),
+                        onClick: () => { if (!inspector.enter(pageRef.current)) setError("Live preview isn't available here."); } }, eye, "Preview live") : null),
             h("div", { className: "lowcord-theme-grid", role: "radiogroup", "aria-label": "Theme" }, ...choices.map(card)),
             nitroOn && current.id === "nitro" ? nitroEditor() : null,
             editor, options,

@@ -131,7 +131,7 @@ const saveAccounts = () => {
 };
 const accountName = account => account.label ?? (account.id === 'main' ? 'Main account' : `Account ${accounts.indexOf(account) + 1}`);
 const windowFor = account => [...discordWindows.values()].find(record => record.account === account && !record.window.isDestroyed());
-const windowTitle = record => accounts.length > 1 ? `OrbitCord — ${accountName(record.account)}` : 'OrbitCord';
+const windowTitle = record => accounts.length > 1 ? `OrbitCord · ${accountName(record.account)}` : 'OrbitCord';
 const accountList = record => accounts.map(account => ({ id: account.id, name: accountName(account), main: account.id === 'main',
     current: record?.account === account, open: Boolean(windowFor(account)) }));
 // Window titles, the tray, the app menu and open Accounts pages follow the list.
@@ -180,7 +180,7 @@ async function removeAccount(account, parent) {
 const trayMenu = () => Menu.buildFromTemplate([
     ...(accounts.length > 1 ? accounts.map(account => ({ label: accountName(account), click: () => void openAccount(account) }))
         : [{ label: 'Show OrbitCord', click: show }]),
-    { label: 'New Account Window', click: () => void newAccount() },
+    { label: 'New account window', click: () => void newAccount() },
     { type: 'separator' },
     { label: 'OrbitCord Settings', click: () => { show(); void mainWindow?.webContents.executeJavaScript('window.__lowcordOpenSettings?.()'); } },
     { type: 'separator' }, { label: 'Quit', click: () => app.quit() },
@@ -188,7 +188,7 @@ const trayMenu = () => Menu.buildFromTemplate([
 const appMenu = () => Menu.buildFromTemplate([
     ...(process.platform === 'darwin' ? [{ label: 'OrbitCord', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] }] : []),
     { label: 'File', submenu: [
-        { label: 'New Account Window', accelerator: 'CmdOrCtrl+Shift+A', click: () => void newAccount() },
+        { label: 'New account window', accelerator: 'CmdOrCtrl+Shift+A', click: () => void newAccount() },
         ...(accounts.length > 1 ? [{ type: 'separator' }, ...accounts.map(account => ({ label: accountName(account), click: () => void openAccount(account) }))] : []),
     ] },
     { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' },
@@ -250,7 +250,7 @@ const updateFailed = error => {
     console.error('[lowcord] Update failed:', error.message);
     if (!updateRestarting) return;
     updateRestarting = false;
-    updateError = 'Couldn’t restart. Try again, or quit OrbitCord to install.';
+    updateError = 'Could not restart. Try again, or quit OrbitCord to install.';
     publishUpdateNotice();
 };
 const updates = createUpdateController({
@@ -663,7 +663,7 @@ function registerIpc() {
             if(action==='release')return await mediaSources().release(event.sender.id,...args);
             if(action==='close')return await features.mediaSources?.cancel(event.sender.id);
             return {error:'Unknown media source action'};
-        }catch(error){return {error:error.code||error.message||'Couldn’t open media sources'};}
+        }catch(error){return {error:error.code||error.message||'Could not open media sources'};}
     });
     // Chat screenshots. The page captures only its own window, one visible
     // screenful at a time; files are written only where the user picks.

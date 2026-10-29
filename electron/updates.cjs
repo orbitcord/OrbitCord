@@ -64,7 +64,7 @@ async function downloadMacInstaller({ fetch, directory, asset, onProgress = () =
         let timer;
         const watch = () => {
             clearTimeout(timer);
-            timer = setTimeout(() => control.abort(Object.assign(new Error('Installer download stalled. Please retry.'), { retryable: true })), idleTimeout);
+            timer = setTimeout(() => control.abort(Object.assign(new Error('Installer download stalled. Try again.'), { retryable: true })), idleTimeout);
         };
         try {
             onProgress(Math.floor(size / asset.size * 100));
@@ -85,7 +85,7 @@ async function downloadMacInstaller({ fetch, directory, asset, onProgress = () =
                     if (!range || Number(range[1]) !== size || Number(range[3]) !== asset.size
                         || Number(range[2]) < size || Number(range[2]) >= asset.size) {
                         await response.body.cancel().catch(() => {});
-                        throw new Error('Installer download returned an invalid byte range. Please retry.');
+                        throw new Error('Installer download returned an invalid byte range. Try again.');
                     }
                 } else {
                     // Some servers ignore Range. Truncate and hash the full response.
@@ -102,7 +102,7 @@ async function downloadMacInstaller({ fetch, directory, asset, onProgress = () =
                 await pipeline(Readable.fromWeb(response.body), progress,
                     createWriteStream(temporary, { flags: response.status === 206 ? 'a' : 'w', mode: 0o600 }), { signal });
             }
-            if (size !== asset.size) throw Object.assign(new Error('Installer download is incomplete. Please retry.'), { retryable: true });
+            if (size !== asset.size) throw Object.assign(new Error('Installer download is incomplete. Try again.'), { retryable: true });
             if (asset.digest && asset.digest !== `sha256:${hash.digest('hex')}`) throw new Error('Installer checksum does not match the release.');
             await rename(temporary, path);
             return path;
@@ -110,7 +110,7 @@ async function downloadMacInstaller({ fetch, directory, asset, onProgress = () =
             if (control.signal.aborted) error = control.signal.reason;
             if (!interrupted(error)) { await rm(temporary, { force: true }); throw error; }
             if (deadline.aborted || attempt >= retryDelays.length) {
-                throw new Error(`${error.message} Please retry; downloaded bytes have been kept.`, { cause: error });
+                throw new Error(`${error.message} Try again. The download will resume where it stopped.`, { cause: error });
             }
         } finally { clearTimeout(timer); }
         await delay(retryDelays[attempt]);
@@ -124,7 +124,7 @@ function createUpdateController({ currentVersion, platform, packaged, getUpdater
     const snapshot = () => ({ ...state });
     const set = patch => { state = { ...state, error: null, ...patch }; publish(snapshot()); return snapshot(); };
     const fail = error => set({ status: state.status === 'installing' ? 'downloaded' : 'error',
-        error: error.message || 'Update failed. Please try again.' });
+        error: error.message || 'Update failed. Try again.' });
     function initialize() {
         if (updater) return updater;
         updater = getUpdater();

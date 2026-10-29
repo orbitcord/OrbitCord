@@ -197,9 +197,9 @@
                 entry.failed=true;entry.abort=new AbortController();
                 const message=posting?'Could not confirm sending. Click Retry to check again without a duplicate.'
                     :error.message==='upload-failed'?'Discord upload failed. Click the card to retry.'
-                    :error.message==='uploader-unavailable'?'Discord’s uploader is still loading. Retry in a moment.'
+                    :error.message==='uploader-unavailable'?'The file uploader is still loading. Try again in a moment.'
                     :error.message==='expired'?'Prepared media expired. Click the card to download it again.'
-                    :`Couldn’t send media (${error.message==='incomplete-media'?'incomplete download':error.message==='invalid-file'?'invalid file':String(error.message).slice(0,100)}). Click the card to retry.`;
+                    :`Could not send media (${error.message==='incomplete-media'?'incomplete download':error.message==='invalid-file'?'invalid file':String(error.message).slice(0,100)}). Click the card to retry.`;
                 if(error.message==='expired')await release(entry);
                 await command('result',{itemId:entry.itemId,phase:'failed',message}).catch(()=>{});notice(message,true);
             }
@@ -207,7 +207,7 @@
     }
     async function sendItem(item){
         if(!item||item.sent||running||preparing)return;
-        if(!window.Lowcord.CloudUpload||!window.Lowcord.RestAPI?.post){notice('Discord’s uploader is still loading. Try again in a moment.',true);return;}
+        if(!window.Lowcord.CloudUpload||!window.Lowcord.RestAPI?.post){notice('The file uploader is still loading. Try again in a moment.',true);return;}
         if(job?.itemId===item.id&&job.failed&&job.asset){void transmit(job);return;}
         const previous=job;if(previous?.asset)await release(previous);
         job=previous?.itemId===item.id?{...previous,abort:new AbortController(),failed:false}:capture(item.id,current.channelId);
@@ -232,7 +232,7 @@
             if(!enabled()||!job||job.itemId!==event.itemId){void call('release',event.id).catch(()=>{});return;}
             job.asset=event;void transmit(job);
         }else if(event.state==='error'){
-            preparing=false;if(job)job.failed=true;notice(event.message||'Couldn’t prepare media.',true);updateJob();
+            preparing=false;if(job)job.failed=true;notice(event.message||'Could not prepare media.',true);updateJob();
         }else if(event.state==='cancelled'){preparing=false;updateJob();}
     });
     function layout(picker){
@@ -273,7 +273,7 @@
         options.append(ui('strong','','Saved pages'),picker.saved,
             button('Save or unsave this page','Save current page',()=>{run('save');options.hidden=true;},'lowcord-sources-option'),
             button('Sign out of this source',null,()=>{run('logout');options.hidden=true;},'lowcord-sources-option'),
-            ui('p','','Hover a video to preview it and move sideways to scrub. Click any card to send it. Albums open with their Open button.'));
+            ui('p','','Hover over a video to preview it. Move the pointer sideways to seek. Click a card to send it, or use Open to browse an album.'));
         header.append(grip,ui('h2','','Media'),
             iconButton('refresh','Refresh media',()=>run('scan')),iconButton('external','Open site for browsing or login',()=>run('site')),optionsButton,iconButton('close','Close media picker',close));
         header.onpointerdown=event=>gesture(picker,event);
@@ -311,7 +311,7 @@
         const recipient=channel.getRecipientId?.()||channel.recipients?.[0],person=recipient&&window.Lowcord.store('UserStore')?.getUser?.(recipient);
         try{
             await call('open',{channelId,limit:channel.guild_id||channel.guildId?100_000_000:20_000_000,destination:channel.name||person?.globalName||person?.username||`Chat ${channelId.slice(-6)}`});
-        }catch(error){notice(error.message||'Couldn’t open media sources.',true);}
+        }catch(error){notice(error.message||'Could not open media sources.',true);}
     }
     window.addEventListener(extensions.changeEvent,()=>{if(!enabled()){job?.abort.abort();void cancel();close();}});
     window.addEventListener('pagehide',()=>{alive=false;job?.abort.abort();unsubscribe?.();void call('close').catch(()=>{});},{once:true});

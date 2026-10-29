@@ -224,8 +224,8 @@
             if (session === current) stop();
         }
         if (failure.message === "cancelled") return;
-        if (failure.message === "unloaded") toast("Couldn’t capture that many messages. Pick a shorter range.", true);
-        else { console.warn("[lowcord] Chat screenshot:", failure); toast("Couldn’t capture the chat. Please try again.", true); }
+        if (failure.message === "unloaded") toast("Couldn't capture that many messages. Pick a shorter range.", true);
+        else { console.warn("[lowcord] Chat screenshot:", failure); toast("Couldn't capture the chat. Try again.", true); }
     }
     async function finish(segments, width, height, background) {
         const first = await createImageBitmap(segments[0].blob);
@@ -251,7 +251,7 @@
         const name = `${(channel?.name || "Chat").replace(/[\\/:*?"<>|]+/g, " ").trim().slice(0, 60) || "Chat"} ${stamp}.png`;
         await native().copyImage(png);
         toast("Chat image copied. Paste it anywhere, or save it as a file.", false,
-            { label: "Save…", onClick: () => native().saveImage(png, name).catch(() => toast("Couldn’t save the image", true)) });
+            { label: "Save…", onClick: () => native().saveImage(png, name).catch(() => toast("Couldn't save the image", true)) });
         return { width: canvas.width, height: canvas.height, segments: segments.length };
     }
 
