@@ -12,10 +12,12 @@ test.beforeEach(async ({ page }) => {
         for (const id of ['files', 'drop']) wrap.append(document.querySelector(`#${id}`));
         const editor = document.createElement('textarea'); editor.setAttribute('aria-label', 'Message'); editor.value = 'Keep this draft'; wrap.append(editor);
         window.fixtureChannel = { id: 'dm', type: 1 };
+        window.fixtureUser = { id: 'self', premiumType: 0 };
         const listeners = new Set();
         window.switchChat = channel => { window.fixtureChannel = channel; for (const fn of listeners) fn(); };
         window.Lowcord.store = name => ({
             SelectedChannelStore: { getChannelId: () => window.fixtureChannel.id, addChangeListener: fn => listeners.add(fn), removeChangeListener: fn => listeners.delete(fn) },
+            UserStore: { getCurrentUser: () => window.fixtureUser },
             ChannelStore: { getChannel: id => window.fixtureChannel.id === id ? window.fixtureChannel : null },
         })[name];
         window.calls = []; window.jobs = new Map(); window.failure = null; window.hold = false;
@@ -299,4 +301,21 @@ test('a GIF that cannot fit stays an original GIF and explains the limit', async
         .toEqual({name: 'animation.gif', type: 'image/gif', size: 20_000_001});
     await expect(page.locator('.lowcord-toast[role="status"]')).toContainText('Your original GIF is unchanged.');
     expect(await page.evaluate(() => receipts.length)).toBe(0);
+});
+
+for (const premiumType of [1, 2, 3, null, undefined]) {
+    test(`Nitro or unknown subscription (${premiumType}) keeps oversized uploads native`, async ({ page }) => {
+        await page.evaluate(value => { window.fixtureUser = { id: 'self', premiumType: value }; Lowcord.extensions.set('compressVideos', true); }, premiumType);
+        await select(page);
+        await ready(page);
+        expect(await page.evaluate(() => calls)).toEqual([]);
+        expect(await page.evaluate(() => Lowcord.extensions.state.compressVideos)).toBe(false);
+        await expect(page.locator('#drafts article span')).toHaveText('SPOILER_walk.mov');
+    });
+}
+
+test('signing out keeps oversized uploads native', async ({ page }) => {
+    await page.evaluate(() => { window.fixtureUser = null; });
+    await select(page); await ready(page);
+    expect(await page.evaluate(() => calls)).toEqual([]);
 });

@@ -90,7 +90,32 @@
             } finally { this.running = false; }
         }
     }
-    const api = { ExpiryQueue };
+    // Totals only: never names, links or message text. Saved in batches, because
+    // some of these count every analytics request.
+    const reportKeys = ['analytics', 'typing', 'links', 'images', 'videos', 'files', 'expired', 'covered', 'downloads', 'walkAway'];
+    class PrivacyReport {
+        constructor({ load = () => null, save, now = Date.now, delay = 30_000 }) {
+            Object.assign(this, { save, now, delay });
+            const saved = load();
+            this.since = Number.isSafeInteger(saved?.since) ? saved.since : now();
+            this.totals = Object.fromEntries(reportKeys.map(key => [key, Number.isSafeInteger(saved?.totals?.[key]) ? Math.max(0, saved.totals[key]) : 0]));
+            this.timer = null;
+        }
+        add(key, amount = 1) {
+            if (!reportKeys.includes(key) || !Number.isSafeInteger(amount) || amount < 1) return;
+            this.totals[key] += amount;
+            this.timer ??= setTimeout(() => this.flush(), this.delay);
+        }
+        flush() {
+            clearTimeout(this.timer); this.timer = null;
+            this.save({ since: this.since, totals: this.totals });
+        }
+        reset() {
+            for (const key of reportKeys) this.totals[key] = 0;
+            this.since = this.now(); this.flush();
+        }
+    }
+    const api = { ExpiryQueue, PrivacyReport };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else window.LowcordPrivacyCore = api;
 })();

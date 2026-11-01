@@ -8,17 +8,18 @@
     const storageKey = "lowcord.extensions";
     const catalog = [
         { id: "anonymiseFileNames", title: "Anonymise file names", description: "Give uploads random names. Keep file types and spoiler tags." },
-        { id: "compressVideos", title: "Compress media", description: "Shrink large videos, images and GIFs to fit Discord's upload limit. Needs FFmpeg." },
+        { id: "compressVideos", title: "Compress media", description: "Shrink large videos, images and GIFs to fit Discord's upload limit. Only active for accounts without Nitro. Needs FFmpeg." },
         { id: "voiceMessages", title: "Voice messages", description: "Record a voice message with the waveform button." },
         { id: "redgifsPicker", title: "RedGIFs picker", description: "Find RedGIFs videos and send them as MP4 files." },
         { id: "mediaSources", title: "Media sources", description: "Browse GifReels and XXXTik. Send photos and videos as files." },
         { id: "redditPicker", title: "Reddit picker", description: "Browse Reddit and send photos and videos as files. Compress large videos below 20 MB." },
         { id: "chatCapture", title: "Chat screenshots", description: "Use the camera button to capture a range of messages in one image." },
+        { id: "coverImages", title: "Cover image details", description: "Hide names, addresses and faces in an image before you attach it." },
         { id: "mediaGallery", title: "Media gallery", description: "Browse photos and videos from the chat header. Select an item to jump to its message." },
         { id: "pictureInPicture", title: "Picture-in-picture", description: "Hover a chat video and use the pop-out button, or press Alt+P, to watch in a floating window." },
         { id: "downloadVideos", title: "Download linked videos", description: "Right-click a linked or embedded video to save its media file." },
         { id: "copyMediaLink", title: "Copy media link", description: "Right-click a photo or video to copy its link." },
-        { id: "massDelete", title: "Mass delete", description: "Delete your messages from a DM, channel or server with the trash button." },
+        { id: "massDelete", title: "Bulk delete", description: "Delete your messages from a DM, channel or server with the trash button." },
         { id: "dmQuickReply", title: "DM quick reply", description: "Hover over a DM to read and reply without switching chats." },
         { id: "quickReply", title: "Quick reply", description: "In an empty message box, press Shift with the up or down arrow to choose a message to reply to. Replaces the edit shortcut." },
         { id: "clickReply", title: "Click to reply", description: "Click a message to reply. Requires chat bubbles." },
@@ -83,7 +84,10 @@
     }
     window.addEventListener(changeEvent, syncEmbedPreferences);
     syncEmbedPreferences();
-    const enabled = id => state[id] === true;
+    // Unknown account/subscription state must not trigger compression. Read the
+    // real account field, independently of Fake Nitro's emoji/sticker helpers.
+    const compressionEligible = () => window.Lowcord.store("UserStore")?.getCurrentUser?.()?.premiumType === 0;
+    const enabled = id => state[id] === true && (id !== "compressVideos" || compressionEligible());
     function set(id, value) {
         const next = { ...state, [id]: Boolean(value) };
         try { storage.setItem(storageKey, JSON.stringify(next)); }
@@ -760,12 +764,13 @@
         const target = route(url);
         if (!target) return null;
         const { path } = target;
-        if (enabled("silentTyping") && method === "POST" && /^\/channels\/\d+\/typing$/.test(path ?? "")) return "ok";
+        const report = window.Lowcord.privacy?.count;
+        if (enabled("silentTyping") && method === "POST" && /^\/channels\/\d+\/typing$/.test(path ?? "")) { report?.("typing"); return "ok"; }
         if (method === "PUT" && reactAsReply(path)) return "ok";
         if (enabled("noTracking")) {
-            if (/^\/(science|track|metrics(\/v2)?)$/.test(path ?? "")) return "ok";
+            if (/^\/(science|track|metrics(\/v2)?)$/.test(path ?? "")) { report?.("analytics"); return "ok"; }
             // Discord tunnels Sentry crash reports through its own origin.
-            if (target.url.pathname.startsWith("/error-reporting-proxy/") || /(^|\.)sentry\.io$/.test(target.url.hostname)) return "ok";
+            if (target.url.pathname.startsWith("/error-reporting-proxy/") || /(^|\.)sentry\.io$/.test(target.url.hostname)) { report?.("analytics"); return "ok"; }
             // The desktop app's local RPC server, which Discord probes before deep linking.
             if (target.url.hostname === "127.0.0.1" && rpcPorts(target.url.port)) return "fail";
         }
@@ -792,6 +797,7 @@
         const name = anonymous(file.name);
         if (generated.size >= 512) generated.delete(generated.values().next().value);
         generated.add(name);
+        window.Lowcord.privacy?.count("files");
         return new File([file], name, { type: file.type, lastModified: file.lastModified });
     }
     function anonymousFiles(files) {
@@ -861,6 +867,7 @@
         const remove = [...url.searchParams.keys()].filter(key => trackingParams.test(key) || site.some(params => params.test(key)));
         if (!remove.length) return text;
         for (const key of remove) url.searchParams.delete(key);
+        window.Lowcord.privacy?.count("links", remove.length);
         return url.toString().replace(/\?$/, "");
     }
     // Discord's link syntax ends at whitespace or an angle bracket; trailing
@@ -1741,6 +1748,17 @@
     window.Lowcord.onDomChange(fixMusicFrames);
     window.addEventListener(changeEvent, fixMusicFrames);
     window.Lowcord.extensions = { catalog, enabled, set, setOption, changeEvent,
-        get state() { return { ...state }; }, get options() { return { ...options }; },
+        get state() { return { ...state, compressVideos: enabled("compressVideos") }; }, get options() { return { ...options }; },
         cleanContent, socialContent, anonymous, openRecorder, toast, progress, ui, addComposerAction };
+    window.Lowcord.waitForStore("UserStore", store => {
+        let eligible;
+        const update = () => {
+            const next = compressionEligible();
+            if (next === eligible) return;
+            eligible = next;
+            window.dispatchEvent(new Event(changeEvent));
+        };
+        store.addChangeListener?.(update);
+        update();
+    });
 })();

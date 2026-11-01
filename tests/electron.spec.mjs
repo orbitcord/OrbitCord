@@ -327,7 +327,8 @@ for (const method of ['chooser', 'overlay drop']) test(`automatic video attachme
             Lowcord.extensions.set('anonymiseFileNames', false);
             const original = Lowcord.store;
             Lowcord.store = name => name === 'SelectedChannelStore' ? { getChannelId: () => 'fixture-dm' }
-                : name === 'ChannelStore' ? { getChannel: () => ({ id: 'fixture-dm', type: 1 }) } : original(name);
+                : name === 'ChannelStore' ? { getChannel: () => ({ id: 'fixture-dm', type: 1 }) }
+                : name === 'UserStore' ? { getCurrentUser: () => ({ id: '1', premiumType: 0 }) } : original(name);
             const composer = document.createElement('div'); composer.className = 'channelTextArea_compression';
             const input = document.createElement('input'); input.type = 'file'; input.setAttribute('aria-label', 'Compression input');
             input.addEventListener('change', () => { window.compressedFile = input.files[0]; });
@@ -394,7 +395,8 @@ for (const kind of ['image', 'gif']) test(`automatic ${kind} compression attache
             Lowcord.extensions.set('anonymiseFileNames', false);
             const original = Lowcord.store;
             Lowcord.store = name => name === 'SelectedChannelStore' ? { getChannelId: () => 'fixture-dm' }
-                : name === 'ChannelStore' ? { getChannel: () => ({ id: 'fixture-dm', type: 1 }) } : original(name);
+                : name === 'ChannelStore' ? { getChannel: () => ({ id: 'fixture-dm', type: 1 }) }
+                : name === 'UserStore' ? { getCurrentUser: () => ({ id: '1', premiumType: 0 }) } : original(name);
             const composer = document.createElement('div'); composer.className = 'channelTextArea_compression';
             const input = document.createElement('input'); input.type = 'file'; input.setAttribute('aria-label', 'Media compression input');
             input.addEventListener('change', () => { window.compressedFile = input.files[0]; });
@@ -680,7 +682,7 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true,
             extensions: await page.evaluate(() => window.Lowcord.extensions.catalog.length), fetchHooked: true });
         expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
-            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'sanitizeImage', 'privacyPreferences', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged'] });
+            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'sanitizeImage', 'privacyPreferences', 'traces', 'onWalkAway', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged'] });
         expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsSearch('fixture', -1))).toEqual({ error: 'invalid-search' });
         expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsPrepare('not-a-token', 20_000_000))).toEqual({ error: 'expired' });
         await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsCancel());
@@ -1112,7 +1114,7 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
         await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
         expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
-            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'sanitizeImage', 'privacyPreferences', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged']);
+            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'sanitizeImage', 'privacyPreferences', 'traces', 'onWalkAway', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged']);
         expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
     } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
 });
@@ -1336,4 +1338,26 @@ test('chat screenshots capture real window pixels across scrolling, at page zoom
         await app.close();
         await rm(dir, { recursive: true, force: true });
     }
+});
+
+test('a screen lock reaches the page, and signing out on quit keeps OrbitCord settings', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-traces-'));
+    let app = await launch(dir);
+    try {
+        let page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
+        await page.evaluate(() => { window.walkAway = []; __LOWCORD_NATIVE__.onWalkAway(value => walkAway.push(value)); });
+        await app.evaluate(({ powerMonitor }) => { powerMonitor.emit('lock-screen'); powerMonitor.emit('unlock-screen'); });
+        await expect.poll(() => page.evaluate(() => walkAway)).toEqual(['away', 'back']);
+        await page.evaluate(async () => {
+            __lowcordStorage.setItem('token', 'test-sign-in'); __lowcordStorage.setItem('lowcord.theme', 'kept');
+            document.cookie = 'sign_in=1; path=/';
+            await __LOWCORD_NATIVE__.traces('set', { clearOnQuit: true, signOut: false });
+        });
+        await app.evaluate(async ({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0 }); });
+        expect(await page.evaluate(() => __LOWCORD_NATIVE__.traces('set', { clearOnQuit: true, signOut: true }))).toMatchObject({ clearOnQuit: true, signOut: true });
+        await app.close();
+        app = await launch(dir);
+        page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
+        expect(await page.evaluate(() => [__lowcordStorage.getItem('token'), __lowcordStorage.getItem('lowcord.theme'), document.cookie])).toEqual([null, 'kept', '']);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });

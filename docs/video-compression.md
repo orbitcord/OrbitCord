@@ -1,5 +1,24 @@
 # Automatic media attachments
 
+## Metadata notices and Nitro eligibility — 2026-11-01
+
+- Root cause: metadata preprocessing warned about unsupported image/video formats
+  both on pass-through uploads and in mixed batches. Compression's enabled check
+  only read the saved toggle, without checking the real account subscription.
+- Unsupported files now pass through silently; mixed batches report only the
+  supported images actually cleaned. Failures cleaning supported images still
+  report their error.
+- Compression runs only when UserStore reports `premiumType === 0` and the saved
+  toggle is on. Nitro tiers and unknown/signed-out accounts stay off. The settings
+  switch reports the effective state; UserStore changes refresh it and cancel
+  active compression through the existing extension change event. Saved choices
+  survive subscription changes. Fake Nitro does not affect this check.
+- Verification: targeted Chromium privacy, extension and compression suites cover
+  native pass-through, mixed upload bytes, Nitro tiers, unknown accounts, account
+  changes and preference persistence.
+- Risks: until Discord exposes an explicit non-Nitro subscription value, account
+  detection keeps compression off. No new polling, native work or dependencies.
+
 ## Preserve GIF uploads — 2026-10-23
 
 - Root cause: oversized GIFs shared the MP4 encoder and output validation with

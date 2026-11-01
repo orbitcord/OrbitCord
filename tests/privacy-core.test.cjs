@@ -57,3 +57,19 @@ test('the remover receives the matching rule so attachment rules can keep text',
     f.queue.observe({ ...message, attachments: [{ id: '1' }] }); f.now(4_000_000); await f.queue.tick();
     assert.equal(received.attachmentsOnly, true); assert.equal(f.queue.state.messages.length, 0);
 });
+test('the privacy report stores whitelisted totals in batches and can be reset', async () => {
+    const { PrivacyReport } = require('../src-tauri/injection/privacy-core.js');
+    const saves = [];
+    const report = new PrivacyReport({ load: () => ({ since: 5, totals: { links: 2, secret: 9 } }), save: value => saves.push(JSON.parse(JSON.stringify(value))), now: () => 50, delay: 5 });
+    report.add('links', 3); report.add('analytics'); report.add('unknown'); report.add('links', 0);
+    assert.deepEqual(saves, []);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(saves.length, 1);
+    assert.equal(saves[0].since, 5);
+    assert.equal(saves[0].totals.links, 5);
+    assert.equal(saves[0].totals.analytics, 1);
+    assert.equal('secret' in saves[0].totals, false);
+    report.reset();
+    assert.equal(saves[1].since, 50);
+    assert.equal(saves[1].totals.links, 0);
+});

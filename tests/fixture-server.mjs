@@ -36,7 +36,7 @@ const routes = {
     "/media/dash-audio.mp4": ["video/mp4", await readFile("tests/fixtures/media/dash-audio.mp4")],
     "/favicon.ico": ["image/x-icon", ""]
 };
-for (const file of ["discord.js", "extensions.js", "privacy-core.js", "privacy.js", "privacy.css", "chat-capture.js", "mass-delete.js", "media-gallery.js", "redgifs.js", "redgifs.css", "background.js", "gif.js", "music-embeds.js", "social-embeds.js", "settings.js", "themes.js", "themes.css", "lowcord-ui.css"]) {
+for (const file of ["discord.js", "extensions.js", "privacy-core.js", "privacy-media.js", "privacy.js", "privacy.css", "chat-capture.js", "image-cover.js", "mass-delete.js", "media-gallery.js", "redgifs.js", "redgifs.css", "background.js", "gif.js", "music-embeds.js", "social-embeds.js", "settings.js", "themes.js", "themes.css", "lowcord-ui.css"]) {
     routes[`/injection/${file}`] = [file.endsWith(".css") ? "text/css" : "text/javascript", await readFile(`src-tauri/injection/${file}`)];
 }
 for (const file of ['image-drop.js', 'picture-in-picture.js', 'picture-in-picture.css', 'video-compression.js', 'video-compression.css','media-sources.js','media-sources.css', 'reddit.js', 'reddit.css']) {

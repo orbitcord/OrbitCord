@@ -7,6 +7,15 @@ test.beforeEach(async ({ page }, info) => {
     channel = 1000 + info.workerIndex * 1000 + info.repeatEachIndex + Math.floor(Math.random() * 900);
     await page.goto("/extensions");
     await expect.poll(() => page.evaluate(() => window.fixtureReady)).toBe(true);
+    await page.evaluate(() => {
+        window.fixtureUser = { id: 'self', premiumType: 0 };
+        window.accountListeners = new Set();
+        class UserStore { static displayName = 'UserStore'; }
+        const store = new UserStore();
+        store.getCurrentUser = () => window.fixtureUser;
+        store.addChangeListener = fn => accountListeners.add(fn);
+        webpackChunkdiscord_app[0][2]({ c: { account: { exports: store } } });
+    });
 });
 const received = async page => (await (await page.request.get("/__received")).json())
     .filter(entry => entry.path.includes(`/${channel}`) || entry.path.includes(`c=${channel}`));
@@ -476,7 +485,7 @@ test("message bar actions share one button that opens a menu, or is the only act
     await button.click();
     await expect(button).toHaveAttribute("aria-expanded", "true");
     const menu = page.getByRole("menu", { name: "Extensions" });
-    await expect(menu.getByRole("menuitem")).toHaveText(["Voice message", "Screenshot messages", "Delete my messages"]);
+    await expect(menu.getByRole("menuitem")).toHaveText(["Voice message", "Screenshot messages", "Cover image details", "Delete my messages"]);
     await expect(menu.getByRole("menuitem").first()).toBeFocused();
     await page.keyboard.press("ArrowUp");
     await expect(menu.getByRole("menuitem", { name: "Delete my messages" })).toBeFocused();
@@ -499,6 +508,7 @@ test("message bar actions share one button that opens a menu, or is the only act
 
     // With one action on, the button is that action.
     await setExtension(page, "chatCapture", false);
+    await setExtension(page, "coverImages", false);
     await setExtension(page, "massDelete", false);
     await expect(button).toHaveAccessibleName("Voice message");
     await button.click();
@@ -1359,4 +1369,27 @@ test("long chat screenshots stitch without a seam at fractional zoom", async ({ 
     });
     // Any row showing the red background would be a seam between screenfuls.
     expect(rows).toEqual([]);
+});
+
+test('compression follows subscription detection and preserves the saved preference', async ({ page }) => {
+    await expect.poll(() => page.evaluate(() => accountListeners.size)).toBeGreaterThan(0);
+    await page.evaluate(() => window.__lowcordOpenSettings('extensions'));
+    const toggle = page.getByRole('switch', { name: 'Compress media', exact: true });
+    await expect(toggle).toBeChecked();
+    for (const user of [null, { id: 'self' }, { id: 'self', premiumType: 1 }, { id: 'self', premiumType: 2 }, { id: 'self', premiumType: 3 }]) {
+        await page.evaluate(user => { fixtureUser = user; for (const fn of accountListeners) fn(); }, user);
+        await expect(toggle).not.toBeChecked();
+        await page.evaluate(() => Lowcord.extensions.set('compressVideos', true));
+        expect(await page.evaluate(() => Lowcord.extensions.enabled('compressVideos'))).toBe(false);
+        await expect(toggle).not.toBeChecked();
+    }
+    await page.evaluate(() => { fixtureUser = { id: 'other', premiumType: 0 }; for (const fn of accountListeners) fn(); });
+    await expect(toggle).toBeChecked();
+    await toggle.uncheck();
+    await page.evaluate(() => {
+        fixtureUser.premiumType = 2; for (const fn of accountListeners) fn();
+        fixtureUser.premiumType = 0; for (const fn of accountListeners) fn();
+    });
+    await expect(toggle).not.toBeChecked();
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lowcord.extensions')).compressVideos)).toBe(false);
 });

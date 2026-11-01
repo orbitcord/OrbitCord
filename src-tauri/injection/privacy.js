@@ -6,13 +6,16 @@
     const key = 'lowcord.privacy.v1', eventName = 'lowcord-privacy-change';
     const composerSelector = '[class*="channelTextArea_"]';
     const editorSelector = `${composerSelector} [contenteditable="true"][role="textbox"], ${composerSelector} textarea`;
-    const defaults = { metadata: true, inspector: true };
+    const defaults = { metadata: true, inspector: true, walkAway: true, coverAsk: false };
     const read = (name, fallback) => { try { return JSON.parse(storage.getItem(name)) ?? fallback; } catch { return fallback; } };
     // Only known boolean preferences; retired keys in old saves are dropped.
     const saved = read(key, {});
     const valid = (name, value) => typeof defaults[name] === 'boolean' && typeof value === 'boolean';
     let state = Object.fromEntries(Object.entries(defaults).map(([name, value]) => [name, valid(name, saved?.[name]) ? saved[name] : value]));
     let queue, queueTimer, account, lastInspection;
+    const reportKey = 'lowcord.privacy.report.v1';
+    const report = new core.PrivacyReport({ load: () => read(reportKey, null), save: value => storage.setItem(reportKey, JSON.stringify(value)) });
+    window.addEventListener('pagehide', () => report.flush());
     const changed = () => window.dispatchEvent(new Event(eventName));
     const toast = (text, error = false, duration) => window.Lowcord.extensions?.toast(text, error, null, duration);
     const currentUser = () => window.Lowcord.store('UserStore')?.getCurrentUser?.()?.id;
@@ -37,46 +40,79 @@
     }
 
     // ----- Local metadata preparation before native upload staging ------------
-    const replayed = new WeakSet(), prepared = new WeakSet(); let preparing = false, delivering = false;
+    const replayed = new WeakSet(), prepared = new WeakSet(); let preparing = false, delivering = false, bypassCover = false;
     const supportedImage = file => /\.(?:jpe?g|png|apng|webp|gif)$/i.test(file.name) || /^image\/(?:jpeg|png|apng|webp|gif)$/.test(file.type);
+    // MP4, MOV and HEIF. Anything else, including WebM, uploads unchanged.
+    const boxImage = file => /\.(?:heic|heif|avif)$/i.test(file.name) || /^image\/(?:heic|heif|avif)$/.test(file.type);
+    const boxMedia = file => boxImage(file) || /\.(?:mp4|m4v|mov|3gp)$/i.test(file.name) || /^video\/(?:mp4|quicktime|3gpp)$/.test(file.type);
+    async function cleanBoxMedia(file) {
+        const media = window.LowcordPrivacyMedia;
+        const patches = await media.plan(async (offset, length) => new Uint8Array(await file.slice(offset, offset + length).arrayBuffer()), file.size);
+        if (!patches) return null;
+        return new File([media.apply(file, patches)], file.name, { type: file.type, lastModified: 0 });
+    }
+    const counted = (amount, name) => `${amount} ${name}${amount === 1 ? '' : 's'}`;
     const transfer = files => { const data = new DataTransfer(); for (const file of files) data.items.add(file); return data; };
     function dispatch(target, event) { replayed.add(event); target.dispatchEvent(event); }
     function preprocess(event, files, replay) {
         // Other hooks (anonymous file names) replay our cleaned files as new File
         // objects while we deliver them; those events must pass straight through.
-        if (delivering || replayed.has(event) || event.defaultPrevented || !state.metadata || !window.__LOWCORD_NATIVE__?.sanitizeImage) return;
-        if (!files.some(file => supportedImage(file) && !prepared.has(file))) {
-            if (files.some(file => !prepared.has(file) && /^(?:image|video)\//.test(file.type)))
-                toast('Metadata was not removed: only JPEG, PNG, WebP and GIF are supported. Other media is attached unchanged.', true);
-            return;
-        }
+        const cover = state.coverAsk && !bypassCover ? window.Lowcord.imageCover : null;
+        if (delivering || replayed.has(event) || event.defaultPrevented || !state.metadata && !cover || !window.__LOWCORD_NATIVE__?.sanitizeImage) return;
+        const cleanable = file => state.metadata && (supportedImage(file) || boxMedia(file));
+        if (!files.some(file => !prepared.has(file) && (cleanable(file) || cover?.supports(file)))) return;
         event.preventDefault(); event.stopImmediatePropagation();
         if (preparing) { toast('Wait for the current images to finish preparing.', true); return true; }
         preparing = true;
         const channel = channelId();
         void (async () => {
             const output = [], off = ' To attach it unchanged, turn off Remove media metadata in Privacy & Security.';
-            let cleaned = 0, unchanged = 0;
+            let images = 0, videos = 0;
             try {
-                for (const file of files) {
+                for (let file of files) {
                     if (prepared.has(file)) { output.push(file); continue; }
-                    // Never imply other formats (HEIC, video, documents) were cleaned.
-                    if (!supportedImage(file)) { output.push(file); if (/^(?:image|video)\//.test(file.type)) unchanged++; continue; }
+                    if (cover?.supports(file)) {
+                        file = await cover.review(file);
+                        if (!file) continue;
+                    }
+                    if (!cleanable(file)) { output.push(file); continue; }
+                    if (boxMedia(file)) {
+                        // Never imply other formats (WebM, documents) were cleaned.
+                        let clean;
+                        try { clean = await cleanBoxMedia(file); }
+                        catch { throw new Error(`Could not safely remove metadata from ${file.name}. No files were attached.${off}`); }
+                        if (!clean) { output.push(file); continue; }
+                        prepared.add(clean); output.push(clean);
+                        if (boxImage(file)) images++; else videos++;
+                        continue;
+                    }
                     if (file.size > 64 * 1024 * 1024) throw new Error(`${file.name} is larger than 64 MiB, the limit for metadata removal. No files were attached.${off}`);
                     const result = await window.__LOWCORD_NATIVE__.sanitizeImage(new Uint8Array(await file.arrayBuffer()));
                     if (result?.status !== 'processed' || !(result.bytes instanceof Uint8Array)) throw new Error(`${file.name}: ${result?.reason || 'Could not remove image metadata.'} No files were attached.${off}`);
                     const clean = new File([result.bytes], file.name, { type: result.type, lastModified: 0 });
-                    prepared.add(clean); output.push(clean); cleaned++;
+                    prepared.add(clean); output.push(clean); images++;
                 }
+                if (!output.length) return;
                 if (channelId() !== channel) throw new Error('Chat changed. Attach the images again in the intended chat.');
                 delivering = true;
                 try { if (replay(output) === false) throw new Error('The message box closed. Attach the images again.'); }
                 finally { delivering = false; }
-                toast([`Metadata removed from ${cleaned} image${cleaned === 1 ? '' : 's'}.`,
-                    unchanged ? `${unchanged} other media file${unchanged === 1 ? ' was' : 's were'} attached unchanged: metadata removal supports JPEG, PNG, WebP and GIF only.` : ''].filter(Boolean).join(' '), Boolean(unchanged), unchanged ? undefined : 1800);
+                if (images) report.add('images', images);
+                if (videos) report.add('videos', videos);
+                if (images || videos) toast(`Metadata removed from ${[images && counted(images, 'image'), videos && counted(videos, 'video')].filter(Boolean).join(' and ')}.`, false, 1800);
             } catch (error) { toast(error.message, true); }
             finally { preparing = false; }
         })(); return true;
+    }
+    // Cover image details hands its result back through the normal paste path,
+    // so metadata removal and anonymous names still run. It was already reviewed.
+    function attach(files) {
+        const editor = document.querySelector(editorSelector);
+        if (!editor) return false;
+        bypassCover = true;
+        try { for (const file of files) editor.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, composed: true, clipboardData: transfer([file]) })); }
+        finally { bypassCover = false; }
+        return true;
     }
     window.addEventListener('change', event => {
         const input = event.target;
@@ -144,6 +180,7 @@
                 if (rule.attachmentsOnly && found.content?.trim()) {
                     if (found.attachments?.length) await api.patch({ url, body: { attachments: [] }, retries: 0 });
                 } else await api.del({ url, retries: 0 });
+                report.add('expired');
             } });
         scheduleExpiry(); changed();
     }
@@ -155,6 +192,43 @@
         });
     });
     window.addEventListener('online', scheduleExpiry);
+
+    // ----- Walk-away protection: mute and stop sharing when the computer locks --
+    let walkedAway = null;
+    function protectVoice() {
+        const store = window.Lowcord.store, media = store('MediaEngineStore'), streaming = store('ApplicationStreamingStore');
+        const stream = () => streaming?.getCurrentUserActiveStream?.();
+        const inCall = () => Boolean(store('SelectedChannelStore')?.getVoiceChannelId?.());
+        if (!inCall() && !stream()) return;
+        const actions = window.Lowcord.find(window.Lowcord.filters.byProps('toggleSelfMute', 'setVideoEnabled'));
+        const done = new Set(walkedAway?.done), attempts = [];
+        const attempt = (label, needed, stop) => { if (!needed()) return; try { stop(); } catch {} attempts.push([label, needed]); };
+        attempt('microphone muted', () => inCall() && media?.isSelfMute?.() === false, () => actions.toggleSelfMute({ playSoundEffect: false, location: 'Walk-away protection' }));
+        attempt('camera turned off', () => media?.isVideoEnabled?.() === true, () => actions.setVideoEnabled(false));
+        attempt('screen share stopped', () => Boolean(stream()), () => {
+            // The same two steps as Discord's stop-streaming button.
+            const { streamType, guildId, channelId: channel, ownerId } = stream();
+            const streamKey = (streamType === 'call' ? [streamType, channel, ownerId] : [streamType, guildId, channel, ownerId]).join(':');
+            window.Lowcord.Dispatcher.dispatch({ type: 'STREAM_CLOSE', streamKey, canShowFeedback: false });
+            window.Lowcord.Dispatcher.dispatch({ type: 'STREAM_STOP', streamKey, appContext: 'APP' });
+        });
+        // Say what actually happened: Discord's stores report the result.
+        setTimeout(() => {
+            const failed = attempts.filter(([, needed]) => needed()).map(([label]) => label);
+            for (const [label, needed] of attempts) if (!needed()) done.add(label);
+            walkedAway = { done: [...done], failed };
+            if (attempts.length) report.add('walkAway');
+        }, 250);
+    }
+    function walkAwayChanged(value) {
+        if (value === 'away') { if (state.walkAway) protectVoice(); return; }
+        const summary = walkedAway;
+        if (!summary) return;
+        walkedAway = null;
+        const sentence = list => { const text = list.join(', '); return text[0].toUpperCase() + text.slice(1); };
+        if (summary.failed.length) toast(`While your computer was locked, OrbitCord could not confirm: ${summary.failed.join(', ')}. Check your call.`, true, null, 15000);
+        else if (summary.done.length) toast(`${sentence(summary.done)} when your computer locked.`, false, null, 15000);
+    }
 
     // ----- Settings page: a protection list and one detail pane ----------------
     const durations = [[1, '1 hour'], [24, '24 hours'], [168, '7 days'], [720, '30 days'], [2160, '90 days']];
@@ -185,14 +259,24 @@
     const serverChannels = guildId => (window.Lowcord.store('GuildChannelStore')?.getChannels?.(guildId)?.SELECTABLE ?? [])
         .map(item => item.channel).filter(channel => channel?.id && channel.name);
     const icons = {
+        walkAway: ['M12 2a3 3 0 0 0-3 3v4M15 9.3V5a3 3 0 0 0-5.7-1.3', 'M19 11a7 7 0 0 1-1 3.6M5 11a7 7 0 0 0 11 5.7', 'M12 18v3', 'M3 3l18 18'],
+        cover: ['M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z', 'M7 13h7v4H7z'],
+        report: ['M4 20V10M10 20V4M16 20v-7M22 20H2'],
+        traces: ['M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13', 'M10 11v5M14 11v5'],
         metadata: ['M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z', 'M11 10a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z', 'm21 16-5-5-9 9'],
         expiry: ['M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z', 'M12 7v5l3 2'],
         inspector: ['M14 3H6v18h12V7l-4-4Z', 'M14 3v4h4M9 13h6M9 17h4'],
         removed: ['M6 12h12'], kept: ['m5 12 5 5 9-10'], file: ['M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z', 'M14 3v5h5'],
         search: ['M20 20l-4.5-4.5M17 11a6 6 0 1 1-12 0 6 6 0 0 1 12 0Z'], open: ['M14 4h6v6', 'M20 4l-9 9', 'M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5'],
     };
-    const protections = ['metadata', 'expiry', 'inspector'];
-    const titles = { metadata: 'Media metadata', expiry: 'Message expiry', inspector: 'Attachment inspector' };
+    const protections = ['metadata', 'cover', 'expiry', 'inspector', 'walkAway', 'traces', 'report'];
+    const titles = { metadata: 'Media metadata', cover: 'Cover image details', expiry: 'Message expiry', inspector: 'Attachment inspector', walkAway: 'Walk-away protection', traces: 'Leave no trace', report: 'Privacy report' };
+    const reportGroups = [['Blocked', [['analytics', 'Analytics requests'], ['typing', 'Typing indicators']]],
+        ['Cleaned', [['links', 'Link trackers'], ['images', 'Images'], ['videos', 'Videos'], ['files', 'File names']]],
+        ['Protected', [['covered', 'Images covered'], ['expired', 'Messages expired'], ['downloads', 'Risky downloads'], ['walkAway', 'Calls protected']]]];
+    const reportTotal = () => Object.values(report.totals).reduce((sum, value) => sum + value, 0);
+    const protectionCount = () => { const count = reportTotal(); return `${count.toLocaleString()} protection${count === 1 ? '' : 's'}`; };
+    const bytes = value => value < 1024 ** 2 ? `${Math.round(value / 1024)} KB` : value < 1024 ** 3 ? `${Math.round(value / 1024 ** 2)} MB` : `${(value / 1024 ** 3).toFixed(1)} GB`;
     function SettingsPanel() {
         const R = window.Lowcord.React, h = R.createElement;
         const current = window.Lowcord.store('ChannelStore')?.getChannel?.(channelId());
@@ -200,8 +284,12 @@
         const [kind, setKind] = R.useState(current && !current.guild_id ? 'dm' : 'server');
         const [target, setTarget] = R.useState(current ? current.guild_id ?? current.id : '');
         const [ruleChannel, setRuleChannel] = R.useState(current?.guild_id ? current.id : '');
+        const [traces, setTraces] = R.useState(null), [clearing, setClearing] = R.useState(false);
         const [query, setQuery] = R.useState(''), [hours, setHours] = R.useState(24), [attachments, setAttachments] = R.useState(false);
         R.useEffect(() => { const update = () => rerender(n => n + 1); window.addEventListener(eventName, update); attachAccount(); return () => window.removeEventListener(eventName, update); }, []);
+        R.useEffect(() => {
+            window.__LOWCORD_NATIVE__?.traces?.('status').then(setTraces).catch(() => setError('Could not read stored data.'));
+        }, [selected === 'traces']);
         const act = action => { try { action(); setError(''); } catch (e) { setError(e.message); } };
         const icon = (name, size = 18) => h('svg', { viewBox: '0 0 24 24', width: size, height: size, fill: 'none', stroke: 'currentColor', strokeWidth: 1.8,
             strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true' }, ...icons[name].map(d => h('path', { key: d, d })));
@@ -221,11 +309,22 @@
         const status = {
             metadata: [state.metadata ? 'On' : 'Off'],
             expiry: [queue?.state.rules.length ? `${queue.state.rules.length} rule${queue.state.rules.length === 1 ? '' : 's'} · ${queued} queued` : 'No rules'],
+            cover: [state.coverAsk ? 'Asks for each image' : 'From the message bar'],
+            walkAway: [state.walkAway ? 'On' : 'Off'],
+            traces: [traces?.clearOnQuit ? 'Clears on quit' : 'Off'],
+            report: [protectionCount()],
             inspector: [!state.inspector ? 'Off' : lastInspection?.status === 'warning' ? 'Last download needs care' : 'On', state.inspector && lastInspection?.status === 'warning' ? 'warn' : ''],
         };
         // Keyed per pane: a reused switch would animate when changing panes.
         const header = (name, description, control) => h('div', { key: name, className: 'lowcord-privacy-head' },
             h('h2', { id: 'lowcord-privacy-detail-title' }, titles[name]), control ?? null, h('p', null, description));
+
+        // One headline figure, its caption and an action: the report and storage share it.
+        const total = (figure, caption, action) => h('div', { className: 'lowcord-privacy-card lowcord-privacy-total' },
+            h('p', null, h('strong', null, figure), h('span', null, caption)), action);
+        const stats = (label, rows) => h('div', { className: 'lowcord-privacy-section' }, h('h3', null, label),
+            h('dl', { className: 'lowcord-privacy-stats' }, ...rows.map(([key, text]) => h('div', { key, className: report.totals[key] ? '' : 'is-zero' },
+                h('dt', null, text), h('dd', null, report.totals[key].toLocaleString())))));
 
         function expiryPreview(label) {
             const after = `After ${duration(hours)}`;
@@ -290,12 +389,37 @@
                 note('Rules apply to messages you send while OrbitCord is running, and cleanup resumes when it reopens. Other people’s messages are never touched. Deletion is permanent; others may keep copies.')];
         }
         const details = {
-            metadata: () => [header('metadata', 'Removes hidden details from images before they upload. The picture itself is not changed.', toggle('metadata', 'Remove media metadata')),
+            cover: () => [header('cover', 'Hides names, addresses, faces and anything else in an image before it reaches the message box.', toggle('coverAsk', 'Ask before attaching images')),
+                section('How to use it', facts([['Message bar', 'Open the actions button and choose Cover image details'], ['Ask before attaching', 'When on, each image you paste, drop or choose opens the editor first']])),
+                note('Covered areas are replaced with solid pixels, so they cannot be recovered from the attached file. Animated images are not supported.')],
+            walkAway: () => [header('walkAway', 'Protects your call if you step away. When your computer locks or sleeps, OrbitCord turns off what others can hear and see.', toggle('walkAway', 'Walk-away protection')),
+                section('What happens', list('kept', ['Your microphone is muted', 'Your camera turns off', 'Your screen share stops'])),
+                note('You stay in the call, and nothing turns back on by itself. Linux has no lock signal, so there it responds to sleep only.')],
+            traces: () => {
+                const native = window.__LOWCORD_NATIVE__?.traces;
+                const save = next => native('set', { clearOnQuit: traces.clearOnQuit, signOut: traces.signOut, ...next }).then(setTraces).catch(() => setError('Could not save this choice.'));
+                const row = (label, name, disabled) => h('label', { className: 'lowcord-privacy-line' }, h('span', null, h('strong', null, label)),
+                    h('input', { type: 'checkbox', role: 'switch', className: 'lowcord-privacy-switch', 'aria-label': label, disabled: !traces || disabled, checked: Boolean(traces?.[name]), onChange: e => void save({ [name]: e.target.checked }) }));
+                return [header('traces', 'Removes what OrbitCord keeps on this computer, for shared or borrowed machines.'),
+                    native ? section('When OrbitCord quits', row('Clear cached media', 'clearOnQuit'), row('Also sign out', 'signOut', !traces?.clearOnQuit)) : note('Available in the OrbitCord app.'),
+                    native ? h('div', { className: 'lowcord-privacy-section' }, h('h3', null, 'Stored now'),
+                        total(traces ? bytes(traces.cacheBytes) : '…', 'Cached media on this computer',
+                            button(clearing ? 'Clearing…' : 'Clear now', () => { setClearing(true); native('clear').then(setTraces).catch(() => setError('Could not clear cached media.')).finally(() => setClearing(false)); }, false, { disabled: clearing || !traces?.cacheBytes }))) : null,
+                    note('The next launch is slower while the cache rebuilds. Your own downloads are not touched, and this cannot run if OrbitCord crashes or is force quit.')];
+            },
+            report: () => {
+                const count = reportTotal();
+                return [header('report', `What OrbitCord has done on this account since ${new Date(report.since).toLocaleDateString(undefined, { dateStyle: 'long' })}.`),
+                    total(count.toLocaleString(), count === 1 ? 'protection' : 'protections', button('Reset', () => act(() => { report.reset(); changed(); }), false, { disabled: !count, 'aria-label': 'Reset report' })),
+                    ...reportGroups.map(([label, rows]) => h(R.Fragment, { key: label }, stats(label, rows))),
+                    note('Only totals are stored, on this device. This shows what OrbitCord did, not that nothing else could see your activity.')];
+            },
+            metadata: () => [header('metadata', 'Removes hidden details from images and videos before they upload. What people see and hear is not changed.', toggle('metadata', 'Remove media metadata')),
                 section('What changes', h('div', { className: 'lowcord-privacy-columns' },
-                    h('div', null, h('h4', null, 'Removed'), list('removed', ['Location', 'Camera and lens', 'Date taken', 'Author and comments', 'Editing history'])),
+                    h('div', null, h('h4', null, 'Removed'), list('removed', ['Location', 'Camera and lens', 'Date taken', 'Author and comments', 'Editing history', 'GPS and sensor tracks in videos'])),
                     h('div', null, h('h4', null, 'Kept'), list('kept', ['Orientation', 'Animation', 'Color profile'])))),
-                section('Supported files', facts([['Formats', 'JPEG, PNG, APNG, WebP, GIF'], ['Size limit', '64 MiB per image'],
-                    ['Other files', 'HEIC, video and documents upload unchanged. You are told when that happens.']])),
+                section('Supported files', facts([['Images', 'JPEG, PNG, APNG, WebP, GIF, HEIC, HEIF, AVIF'], ['Videos', 'MP4, MOV, 3GP'], ['Size limit', '64 MiB for JPEG, PNG, WebP and GIF'],
+                    ['Other files', 'WebM, MKV and documents upload unchanged.']])),
                 note('Only file metadata is removed. Anything visible in the image itself stays as it is.')],
             expiry: expiryPane,
             inspector: () => [header('inspector', 'After a download, explains disguised programs, misleading file names and risky ZIP contents. Nothing is opened, extracted or uploaded.', toggle('inspector', 'Attachment inspector')),
@@ -319,15 +443,17 @@
                     error ? h('p', { role: 'alert', className: 'lowcord-privacy-note is-error' }, error) : null)));
     }
     window.Lowcord.privacy = { get state() { return { ...state }; }, set, eventName, SettingsPanel,
-        get queue() { return queue; }, attachAccount };
+        get queue() { return queue; }, attachAccount, attach, report, count: (name, amount) => report.add(name, amount), walkAwayChanged };
     const ready = () => {
         syncNative();
         window.Lowcord.waitForStore('UserStore', store => { attachAccount(); store.addChangeListener?.(attachAccount); });
-        window.__LOWCORD_NATIVE__?.onAttachmentInspection?.(report => {
-            lastInspection = report; changed();
+        window.__LOWCORD_NATIVE__?.onWalkAway?.(walkAwayChanged);
+        window.__LOWCORD_NATIVE__?.onAttachmentInspection?.(result => {
+            lastInspection = result; changed();
+            if (result?.status === 'warning') report.add('downloads');
             // Warnings get a native dialog from the main process; files that
             // could not be fully inspected get a quieter notice, never "safe".
-            if (report?.status === 'uninspectable') toast(`Unable to fully inspect ${report.name}. ${report.reasons?.[0] ?? ''}`.trim(), true);
+            if (result?.status === 'uninspectable') toast(`Unable to fully inspect ${result.name}. ${result.reasons?.[0] ?? ''}`.trim(), true);
         });
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready, { once: true }); else ready();

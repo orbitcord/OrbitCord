@@ -49,7 +49,7 @@ async function inlineSettings(page) {
 }
 test('selected privacy design fills native settings and choices persist after reload', async ({ page }, info) => {
     await setup(page); const panel = await inlineSettings(page);
-    await expect(panel.getByRole('navigation', { name: 'Protections' }).getByRole('button')).toHaveText([/^Media metadata/, /^Message expiry/, /^Attachment inspector/]);
+    await expect(panel.getByRole('navigation', { name: 'Protections' }).getByRole('button')).toHaveText([/^Media metadata/, /^Cover image details/, /^Message expiry/, /^Attachment inspector/, /^Walk-away protection/, /^Leave no trace/, /^Privacy report/]);
     await expect(panel.getByRole('switch', { name: 'Remove media metadata' })).toBeChecked();
     await expect(page.locator('.contentHeader_test button')).toBeVisible();
     await expect(page.locator('.lowcord-settings-backdrop')).toHaveCount(0);
@@ -57,7 +57,7 @@ test('selected privacy design fills native settings and choices persist after re
     await panel.getByRole('navigation', { name: 'Protections' }).getByRole('button', { name: /^Attachment inspector/ }).click();
     await panel.getByRole('switch', { name: 'Attachment inspector' }).click();
     await page.reload(); await page.waitForFunction(() => window.fixtureReady);
-    expect(await page.evaluate(() => Lowcord.privacy.state)).toEqual({ metadata: true, inspector: false });
+    expect(await page.evaluate(() => Lowcord.privacy.state)).toEqual({ metadata: true, inspector: false, walkAway: true, coverAsk: false });
 });
 test('privacy controls remain within the native column in a narrow light window', async ({ page }, info) => {
     await setup(page); const panel = await inlineSettings(page);
@@ -146,7 +146,8 @@ test('expiry reads through history, deletes own messages and strips only attachm
         ['get', '/channels/11/messages', { around: '101', limit: 1 }], ['patch', '/channels/11/messages/101', { attachments: [] }],
         ['get', '/channels/11/messages', { around: '102', limit: 1 }], ['del', '/channels/11/messages/102']]);
 });
-test('unsupported media is attached unchanged with an explicit notice, never a clean claim', async ({ page }) => {
+for (const [name, mimeType] of [['IMG_0001.heic', 'image/heic'], ['clip.mp4', 'video/mp4'], ['notes.pdf', 'application/pdf']])
+test(`unsupported metadata format ${name} attaches without a popup`, async ({ page }) => {
     await setup(page);
     await page.evaluate(() => {
         window.__LOWCORD_NATIVE__ = { sanitizeImage: async () => { throw new Error('should not run'); } };
@@ -154,10 +155,10 @@ test('unsupported media is attached unchanged with an explicit notice, never a c
         composer.insertAdjacentHTML('beforeend', '<input type="file" aria-label="Attach photo">');
         composer.querySelector('input[type=file]').addEventListener('change', event => { privacyFixture.uploadedName = event.target.files[0]?.name; });
     });
-    await page.getByLabel('Attach photo').setInputFiles({ name: 'IMG_0001.heic', mimeType: 'image/heic', buffer: Buffer.from('heic') });
+    await page.getByLabel('Attach photo').setInputFiles({ name, mimeType, buffer: Buffer.from('original bytes') });
     // Anonymous filenames may rename it; the file still passes through.
-    await expect.poll(() => page.evaluate(() => privacyFixture.uploadedName)).toMatch(/\.heic$/);
-    await expect(page.locator('.lowcord-toast')).toContainText('Metadata was not removed');
+    await expect.poll(() => page.evaluate(() => privacyFixture.uploadedName)).toMatch(new RegExp(`\\.${name.split('.').pop()}$`));
+    await expect(page.locator('.lowcord-toast')).toHaveCount(0);
 });
 
 test('Enter sends straight away: there is no send delay or pending bar', async ({ page }) => {
@@ -220,4 +221,155 @@ test('the expiry preview shows exactly what each choice removes', async ({ page 
     await expect(preview).toContainText('Attachment removed');
     await expect(preview).toContainText('Looks amazing');
     await expect(panel.locator('.lowcord-privacy-summary')).toContainText('lose their attachments 7 days after you send them');
+});
+
+test('mixed uploads clean supported images and attach unsupported files without a warning', async ({ page }) => {
+    await setup(page);
+    await page.evaluate(() => {
+        Lowcord.extensions.set('anonymiseFileNames', false);
+        privacyFixture.sanitized = 0;
+        window.__LOWCORD_NATIVE__ = { sanitizeImage: async () => {
+            privacyFixture.sanitized++;
+            return { status: 'processed', type: 'image/png', bytes: new Uint8Array([1, 2, 3]) };
+        } };
+        const composer = document.querySelector('.channelTextArea_test');
+        composer.insertAdjacentHTML('beforeend', '<input type="file" multiple aria-label="Mixed attachments">');
+        composer.querySelector('input[type=file]').addEventListener('change', async event => {
+            privacyFixture.uploaded = await Promise.all([...event.target.files].map(async file => ({
+                name: file.name, bytes: Array.from(new Uint8Array(await file.arrayBuffer()))
+            })));
+        });
+    });
+    await page.getByLabel('Mixed attachments').setInputFiles([
+        { name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from([9, 9]) },
+        { name: 'clip.mp4', mimeType: 'video/mp4', buffer: Buffer.from([4, 5]) },
+        { name: 'photo.heic', mimeType: 'image/heic', buffer: Buffer.from([6, 7]) }
+    ]);
+    await expect.poll(() => page.evaluate(() => privacyFixture.uploaded)).toEqual([
+        { name: 'photo.png', bytes: [1, 2, 3] }, { name: 'clip.mp4', bytes: [4, 5] }, { name: 'photo.heic', bytes: [6, 7] }
+    ]);
+    expect(await page.evaluate(() => privacyFixture.sanitized)).toBe(1);
+    await expect(page.locator('.lowcord-toast')).toContainText('Metadata removed from 1 image.');
+    await expect(page.locator('.lowcord-toast-error')).toHaveCount(0);
+});
+function voiceFixture(page, state) {
+    return page.evaluate(state => {
+        const f = window.voiceFixture = { ...state, dispatched: [] };
+        const stores = {
+            MediaEngineStore: { isSelfMute: () => f.muted, isVideoEnabled: () => f.video },
+            ApplicationStreamingStore: { getCurrentUserActiveStream: () => f.stream },
+        };
+        for (const [name, store] of Object.entries(stores)) { const Store = class {}; Store.displayName = name; Object.setPrototypeOf(store, Store.prototype); }
+        const selected = Lowcord.store('SelectedChannelStore');
+        selected.getVoiceChannelId = () => f.voice;
+        const actions = { toggleSelfMute: () => { if (!f.stuck) f.muted = true; }, setVideoEnabled: value => { f.video = value; } };
+        const dispatcher = { dispatch: action => { f.dispatched.push(action); if (action.type === 'STREAM_STOP') f.stream = null; }, subscribe() {}, unsubscribe() {} };
+        webpackChunkdiscord_app[0][2]({ c: { voice: { exports: { ...stores, actions } } } });
+        Object.defineProperty(Lowcord, 'Dispatcher', { value: dispatcher, configurable: true });
+    }, state);
+}
+const voice = { muted: false, video: true, voice: '50', stream: { streamType: 'guild', guildId: '20', channelId: '50', ownerId: '1' } };
+test('walk-away protection stops everything live and reports it on return', async ({ page }) => {
+    await setup(page); await voiceFixture(page, voice);
+    await page.evaluate(() => Lowcord.privacy.walkAwayChanged('away'));
+    await page.waitForTimeout(350);
+    expect(await page.evaluate(() => voiceFixture)).toMatchObject({ muted: true, video: false, stream: null, dispatched: [
+        { type: 'STREAM_CLOSE', streamKey: 'guild:20:50:1' }, { type: 'STREAM_STOP', streamKey: 'guild:20:50:1', appContext: 'APP' }] });
+    await expect(page.locator('.lowcord-toast')).toHaveCount(0);
+    await page.evaluate(() => Lowcord.privacy.walkAwayChanged('back'));
+    await expect(page.locator('.lowcord-toast')).toContainText('Microphone muted, camera turned off, screen share stopped');
+    expect(await page.evaluate(() => Lowcord.privacy.report.totals.walkAway)).toBe(1);
+});
+test('walk-away protection says so when the microphone stays live, and respects the switch', async ({ page }) => {
+    await setup(page); await voiceFixture(page, { ...voice, stuck: true, stream: null, video: false });
+    await page.evaluate(() => Lowcord.privacy.walkAwayChanged('away'));
+    await page.waitForTimeout(350);
+    await page.evaluate(() => Lowcord.privacy.walkAwayChanged('back'));
+    await expect(page.locator('.lowcord-toast')).toContainText('could not confirm: microphone muted');
+    await page.evaluate(() => { voiceFixture.stuck = false; Lowcord.privacy.set({ walkAway: false }); Lowcord.privacy.walkAwayChanged('away'); });
+    await page.waitForTimeout(350);
+    expect(await page.evaluate(() => voiceFixture.muted)).toBe(false);
+});
+async function attachedFile(page) {
+    await page.evaluate(() => {
+        Lowcord.extensions.set('anonymiseFileNames', false);
+        window.__LOWCORD_NATIVE__ = { sanitizeImage: async bytes => ({ status: 'processed', type: 'image/png', bytes }) };
+        const composer = document.querySelector('.channelTextArea_test');
+        composer.insertAdjacentHTML('beforeend', '<input type="file" aria-label="Cover test">');
+        composer.querySelector('[aria-label="Cover test"]').addEventListener('change', event => { if (event.target.files[0]) privacyFixture.attached = event.target.files[0]; });
+    });
+}
+const whitePng = page => page.evaluate(async () => {
+    const canvas = new OffscreenCanvas(200, 100), context = canvas.getContext('2d');
+    context.fillStyle = '#fff'; context.fillRect(0, 0, 200, 100);
+    return [...new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer())];
+});
+test('asking before attaching covers pixels permanently and cancelling attaches nothing', async ({ page }, info) => {
+    await setup(page); await attachedFile(page);
+    await page.evaluate(() => Lowcord.privacy.set({ coverAsk: true }));
+    const buffer = Buffer.from(await whitePng(page));
+    await page.getByLabel('Cover test').setInputFiles({ name: 'address.png', mimeType: 'image/png', buffer });
+    const canvas = page.locator('.lowcord-cover-stage canvas');
+    await expect(canvas).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(canvas).toHaveCount(0);
+    expect(await page.evaluate(() => Boolean(privacyFixture.attached))).toBe(false);
+    await page.getByLabel('Cover test').setInputFiles({ name: 'address2.png', mimeType: 'image/png', buffer });
+    await expect(canvas).toBeVisible();
+    const box = await canvas.boundingBox();
+    await page.mouse.move(box.x + box.width * .1, box.y + box.height * .2);
+    await page.mouse.down(); await page.mouse.move(box.x + box.width * .6, box.y + box.height * .8); await page.mouse.up();
+    await expect(page.locator('.lowcord-capture-count')).toHaveText('1 area covered');
+    await page.screenshot({ path: info.outputPath('cover-image.png') });
+    await page.getByRole('button', { name: 'Attach image' }).click();
+    await expect.poll(() => page.evaluate(() => privacyFixture.attached?.name)).toBe('address2.png');
+    expect(await page.evaluate(async () => {
+        const bitmap = await createImageBitmap(privacyFixture.attached), canvas = new OffscreenCanvas(bitmap.width, bitmap.height), context = canvas.getContext('2d');
+        context.drawImage(bitmap, 0, 0);
+        return [[...context.getImageData(60, 50, 1, 1).data], [...context.getImageData(190, 50, 1, 1).data]];
+    })).toEqual([[0, 0, 0, 255], [255, 255, 255, 255]]);
+    expect(await page.evaluate(() => Lowcord.privacy.report.totals.covered)).toBe(1);
+});
+test('videos lose their metadata on the way to the composer and report it', async ({ page }) => {
+    await setup(page); await attachedFile(page);
+    const body = text => Buffer.from(text);
+    const box = (type, payload) => { const head = Buffer.alloc(8); head.writeUInt32BE(payload.length + 8); head.write(type, 4); return Buffer.concat([head, payload]); };
+    const buffer = Buffer.concat([box('ftyp', body('isom0000')), box('moov', box('udta', body('GPS SECRET'))), box('mdat', body('VIDEO'))]);
+    await page.getByLabel('Cover test').setInputFiles({ name: 'clip.mp4', mimeType: 'video/mp4', buffer });
+    await expect.poll(() => page.evaluate(() => privacyFixture.attached?.name)).toBe('clip.mp4');
+    const text = await page.evaluate(async () => new TextDecoder('latin1').decode(await privacyFixture.attached.arrayBuffer()));
+    expect(text).not.toContain('GPS SECRET');
+    expect(text).toContain('VIDEO');
+    await expect(page.locator('.lowcord-toast')).toContainText('Metadata removed from 1 video.');
+    expect(await page.evaluate(() => Lowcord.privacy.report.totals.videos)).toBe(1);
+});
+test('the privacy report counts protections, stays on reload and resets', async ({ page }) => {
+    await setup(page);
+    await page.evaluate(async () => {
+        await fetch('/api/v9/science', { method: 'POST', body: '{}' }).catch(() => {});
+        Lowcord.privacy.count('links', 3); Lowcord.privacy.report.flush();
+    });
+    const panel = await inlineSettings(page);
+    await panel.getByRole('button', { name: /^Privacy report/ }).click();
+    await expect(panel.locator('.lowcord-privacy-stats > div', { hasText: 'Link trackers' }).locator('dd')).toHaveText('3');
+    await expect(panel.locator('.lowcord-privacy-total')).toContainText('protections');
+    await page.reload(); await page.waitForFunction(() => window.fixtureReady);
+    expect(await page.evaluate(() => Lowcord.privacy.report.totals.links)).toBe(3);
+    await page.evaluate(() => { Lowcord.privacy.report.reset(); });
+    expect(await page.evaluate(() => Lowcord.privacy.report.totals.links)).toBe(0);
+});
+test('each new protection pane stays inside the settings column', async ({ page }, info) => {
+    await setup(page); const panel = await inlineSettings(page);
+    await page.evaluate(() => {
+        window.__LOWCORD_NATIVE__ = { ...window.__LOWCORD_NATIVE__, traces: async () => ({ clearOnQuit: true, signOut: false, cacheBytes: 1.2 * 1024 ** 3 }) };
+        Lowcord.privacy.count('analytics', 13); Lowcord.privacy.count('links', 2); Lowcord.privacy.count('images', 1);
+    });
+    for (const name of ['Cover image details', 'Walk-away protection', 'Leave no trace', 'Privacy report']) {
+        await panel.getByRole('button', { name: new RegExp(`^${name}`) }).click();
+        await expect(panel.locator('#lowcord-privacy-detail-title')).toHaveText(name);
+        if (name === 'Leave no trace') await expect(panel.getByText('1.2 GB')).toBeVisible();
+        await page.screenshot({ path: info.outputPath(`${name}.png`) });
+        const bounds = await panel.locator('.lowcord-settings-body').evaluate(node => ({ width: node.clientWidth, content: node.scrollWidth }));
+        expect(bounds.content).toBeLessThanOrEqual(bounds.width + 1);
+    }
 });

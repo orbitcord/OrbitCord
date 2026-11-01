@@ -8,6 +8,7 @@ const { setupEmbedPlugins } = require('./embed-plugins.cjs');
 const { createUpdateController, latestRelease, macAsset, downloadMacInstaller } = require('./updates.cjs');
 const { createBackgroundSaver } = require('./background.cjs');
 const { watchNetwork } = require('./network-watch.cjs');
+const { createTraces } = require('./traces.cjs');
 
 app.setName('OrbitCord');
 app.setAppUserModelId('dev.lowcord.app'); // Stable identity preserves existing installs and notifications.
@@ -112,6 +113,10 @@ const mediaSources = feature('mediaSources', () => {
         onEvent:(owner,value)=>{if(!owner.isDestroyed()&&trusted(owner.getURL()))owner.send('lowcord:media-source',value);},
     });
 });
+const traces = feature('traces', () => createTraces({ file: join(userData, 'leave-no-trace.json'),
+    sessions: () => [session.defaultSession, ...accounts.filter(account => account.id !== 'main').map(account => session.fromPartition(`persist:${account.id}`)), redditSession(),
+        ...accounts.flatMap(account => require('./media-sources.cjs').SOURCES.map(source => session.fromPartition(`persist:orbitcord-source-${account.id}-${source.id}`)))],
+    windows: () => [...discordWindows.values()].map(({ window }) => ({ window, session: window.webContents.session })) }));
 // Work a window started ends with it. Unloaded backends have none.
 const cancelFeatures = id => {
     features.redgifs?.cancel(id); features.reddit?.cancel(id);
@@ -281,6 +286,11 @@ const scheduleState = record => {
     record.stateTimer = setTimeout(() => saveState(record).catch(error => console.error('[lowcord]', error.message)), 300);
 };
 const saveAllStates = () => Promise.all([...discordWindows.values()].map(saveState));
+const sendToDiscord = (channel, value) => {
+    for (const { window } of discordWindows.values()) {
+        if (!window.isDestroyed() && trusted(window.webContents.getURL())) window.webContents.send(channel, value);
+    }
+};
 // The Dock/taskbar badge counts unread messages across every account.
 const updateBadge = () => app.setBadgeCount([...discordWindows.values()].reduce((total, record) => total + record.badge, 0));
 
@@ -581,6 +591,25 @@ function registerIpc() {
         if (!value || typeof value.inspector !== 'boolean') throw new Error('Invalid privacy preferences');
         record.privacy = { inspector: value.inspector }; return record.privacy;
     });
+    ipcMain.handle('lowcord:traces', async (event, action, value) => {
+        const { window } = assertSender(event);
+        if (action === 'status') return traces().status();
+        if (action === 'clear') { await traces().clearCache(); return traces().status(); }
+        if (action !== 'set' || !value) throw new Error('Unknown action');
+        // The settings bridge is visible to Discord's main world, so signing
+        // out on every quit is only turned on from a native confirmation.
+        if (value.signOut === true && !traces().settings.signOut) {
+            const { response } = await dialog.showMessageBox(window, {
+                type: 'warning', title: 'Sign out when quitting',
+                message: 'Sign out of Discord every time OrbitCord quits?',
+                detail: 'You will need your password, and possibly a security code, each time you open OrbitCord. Accounts without an open window also lose their OrbitCord settings.',
+                buttons: ['Sign out when quitting', 'Cancel'], defaultId: 1, cancelId: 1,
+            });
+            if (response !== 0) return traces().status();
+        }
+        await traces().set(value);
+        return traces().status();
+    });
     ipcMain.handle('lowcord:download-dropped-image', async (event, url) => {
         assertSender(event);
         try { return await require('./image-drop.cjs').downloadImage(url, { fetchPage: (url, init) => net.fetch(url, init) }); }
@@ -843,11 +872,11 @@ async function start() {
         : join(__dirname, '..', '.lowcord', 'native', `lowcord-native${process.platform === 'win32' ? '.exe' : ''}`), userData);
     if (testing && process.env.LOWCORD_TEST_UPDATER === '1') updates.initialize();
     registerIpc();
-    watchNetwork({ powerMonitor: require('electron').powerMonitor, onChange: () => {
-        for (const { window } of discordWindows.values()) {
-            if (!window.isDestroyed() && trusted(window.webContents.getURL())) window.webContents.send('lowcord:network-changed');
-        }
-    } });
+    const { powerMonitor } = require('electron');
+    watchNetwork({ powerMonitor, onChange: () => sendToDiscord('lowcord:network-changed') });
+    // Linux has no lock event, so it responds to sleep only.
+    for (const [name, state] of [['lock-screen', 'away'], ['suspend', 'away'], ['unlock-screen', 'back'], ['resume', 'back']])
+        powerMonitor.on(name, () => sendToDiscord('lowcord:walk-away', state));
     Menu.setApplicationMenu(appMenu());
     if (!testing) {
         const image = process.platform === 'win32'
@@ -879,6 +908,8 @@ else {
         quitting = true;
         void saveAllStates().catch(console.error).finally(async () => {
             for (const value of Object.values(features)) await value.close?.().catch(console.error);
+            // An update restart is not the person leaving.
+            await traces().onQuit({ keepSignIn: updateRestarting }).catch(console.error);
             finished = true; backend?.close(); app.quit();
         });
     });

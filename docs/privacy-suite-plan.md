@@ -1,7 +1,8 @@
 # Privacy suite
 
-Current scope (Privacy & Security page): media metadata removal, message expiry
-and attachment inspection. Redacted screenshots live in the Chat screenshots
+Current scope (Privacy & Security page): media metadata removal, Cover image
+details, message expiry, attachment inspection, Walk-away protection, Leave no trace
+and the Privacy report. Redacted screenshots live in the Chat screenshots
 extension: its review dialog and its options on the Extensions page. Undo Send, live privacy masking and
 the settings guardian were built, then removed at the user's request (2026-10-29);
 none of their code remains. A later privacy checkup was also dropped.
@@ -93,3 +94,23 @@ expiry timer and store subscriptions. Load heavier inspectors only on use.
   clipping in small windows. Fixed a 1px seam between stitched screenfuls at
   fractional zoom (edges were rounded per segment). Privacy page trimmed to
   metadata, expiry and inspector; the metadata success toast lasts 1.8s.
+- Added 2026-11-02. Video and HEIF metadata (`privacy-media.js`): boxes are overwritten
+  in place and the result is built from slices of the original, so files never load
+  whole. Sensor tracks are removed and their samples zeroed. Handler names and encoder
+  strings in sample descriptions stay. A file that is not ISO media uploads silently
+  like any other unsupported format; a recognised one that cannot be cleaned stops the
+  upload. Walk-away: `lock-screen` and `suspend` only, never idle time. Its toast comes
+  from re-reading Discord's stores, so a failure is reported as one. Cover image details
+  never touches Discord's attachment list: it runs before attaching (message bar action,
+  or the optional ask-first switch) and re-enters through the paste path. Report: totals
+  only, per account, flushed every 30s. Leave no trace (`traces.cjs`): choices live in
+  the main process; sign-out keeps `lowcord*` keys in open windows, fully clears
+  closed accounts, and requires a native confirmation. Update restarts keep the sign-in.
+
+## Release verification — 0.1.27, 2026-11-02
+
+The native/preload build, 354 Chromium fixture tests, 32 real Electron tests,
+and 48 privacy/cache-cleanup/updater unit checks all pass. GitHub release jobs
+now verify the media metadata parser, leave-no-trace logic, and native screen-lock
+integration on each platform before publication. Generated design screenshots
+remain local. Rust sources are unchanged.
