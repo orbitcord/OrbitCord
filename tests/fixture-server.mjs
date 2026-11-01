@@ -31,11 +31,12 @@ const routes = {
     "/media/sample.webm": ["video/webm", await readFile("tests/fixtures/media/sample.webm")],
     "/media/source-poster.png": ["image/png", await readFile("tests/fixtures/media/source-poster.png")],
     "/media/sample.png": ["image/png", await readFile("tests/fixtures/media/sample.png")],
+    "/media/not-a-photo.png.exe": ["application/octet-stream", Buffer.from('MZ harmless privacy regression fixture')],
     "/media/dash-video.mp4": ["video/mp4", await readFile("tests/fixtures/media/dash-video.mp4")],
     "/media/dash-audio.mp4": ["video/mp4", await readFile("tests/fixtures/media/dash-audio.mp4")],
     "/favicon.ico": ["image/x-icon", ""]
 };
-for (const file of ["discord.js", "extensions.js", "chat-capture.js", "mass-delete.js", "media-gallery.js", "redgifs.js", "redgifs.css", "background.js", "gif.js", "music-embeds.js", "social-embeds.js", "settings.js", "themes.js", "themes.css", "lowcord-ui.css"]) {
+for (const file of ["discord.js", "extensions.js", "privacy-core.js", "privacy.js", "privacy.css", "chat-capture.js", "mass-delete.js", "media-gallery.js", "redgifs.js", "redgifs.css", "background.js", "gif.js", "music-embeds.js", "social-embeds.js", "settings.js", "themes.js", "themes.css", "lowcord-ui.css"]) {
     routes[`/injection/${file}`] = [file.endsWith(".css") ? "text/css" : "text/javascript", await readFile(`src-tauri/injection/${file}`)];
 }
 for (const file of ['image-drop.js', 'picture-in-picture.js', 'picture-in-picture.css', 'video-compression.js', 'video-compression.css','media-sources.js','media-sources.css', 'reddit.js', 'reddit.css']) {

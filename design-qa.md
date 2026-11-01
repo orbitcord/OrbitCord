@@ -171,3 +171,20 @@ final result: passed
 - The Electron account-window test still expected an em dash after window titles changed to a middle dot in `electron/main.cjs`. Updated the two title expectations; the targeted account isolation/restart test passes.
 - Validation: 323 Chromium tests, 26 other Electron tests plus the corrected account test, 14 updater/release checks, and four Rust tests pass. Native/preload build and diff whitespace checks pass.
 - Risks: local Electron checks cover macOS; the release workflow checks Windows before publishing both installers and their update manifests.
+
+# Deletion progress capsule — 2026-10-29
+
+final result: passed
+
+Selected target: first displayed deletion concept, `exec-4d4bca7e-6496-4f39-b2d8-ce2dee418298.png` in this chat's generated image directory. Implementation: `/tmp/lowcord-delete-capsule.png`, captured in Chromium at 1440×960, density 1. Both images were opened together for comparison. Scope is the progress component; the fixture intentionally does not recreate Discord's surrounding conversation or member list.
+
+The implementation preserves the compact charcoal capsule, 16px corners, periwinkle activity indicator, two-line copy, neutral Stop control and centered placement above the composer. Its 360px width and 54px rendered height fit the selected direction. The reference's 128 deleted / about 42 left is sample data; the fixture shows the initial search state. The actual component remains readable at native size. No actionable P0/P1/P2 visual differences in the component.
+
+Verification: 12 of 14 deletion tests passed in the fresh fixture suite run, including the new positioning and Stop test. The two rate-limit clock tests passed in a targeted rerun. Earlier verification encountered a stale fixture server; final verification used a fresh server on port 4320. No live messages were deleted.
+
+# Release verification — 0.1.26, 2026-11-01
+
+- Ships the pending privacy suite (image metadata removal, message expiry and attachment inspection), chat screenshot review/redaction, deletion progress capsule, and Electron memory tuning.
+- Native/preload build passes. All 37 privacy/updater/release unit checks and all 31 real Electron tests pass. Chromium passed 337/338 on the full parallel run; the unchanged subsecond mass-delete rate-limit clock test passed in isolation, consistent with its earlier QA timing note above.
+- GitHub release verification now includes privacy processor tests and real Electron privacy IPC, download inspection, audio/cache checks on each release platform.
+- Risks: the rate-limit fixture remains timing-sensitive under parallel load. No live messages were deleted for verification. Generated design screenshots in output/privacy remain local.

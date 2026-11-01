@@ -46,11 +46,17 @@
     const optionsKey = "lowcord.embed-options";
     const links = window.Lowcord.socialLinks;
     const musicLinks = window.Lowcord.musicLinks;
+    // Chat screenshot review: on/off, and what it covers by default.
+    const captureOptions = ["captureReview", "captureNames", "captureAvatars", "captureChannels"];
     function readOptions() {
-        let saved = {};
+        let saved = {}, privacy = {};
         try { saved = JSON.parse(storage.getItem(optionsKey)) ?? {}; } catch {}
+        // These choices began on the Privacy page; carry them over once.
+        try { privacy = JSON.parse(storage.getItem("lowcord.privacy.v1")) ?? {}; } catch {}
+        const legacy = { captureReview: privacy.screenshots, captureNames: privacy.captureNames, captureAvatars: privacy.captureAvatars, captureChannels: privacy.captureChannels };
         return {
             musicVolume: Number.isFinite(saved.musicVolume) ? Math.max(0, Math.min(100, saved.musicVolume)) : 50,
+            ...Object.fromEntries(captureOptions.map(id => [id, typeof saved[id] === "boolean" ? saved[id] : typeof legacy[id] === "boolean" ? legacy[id] : true])),
             ...Object.fromEntries(Object.entries(links.providers).map(([site, hosts]) =>
                 [`${site}Provider`, hosts.includes(saved[`${site}Provider`]) ? saved[`${site}Provider`] : "auto"])),
         };
@@ -59,6 +65,8 @@
     function setOption(id, value) {
         if (id === "musicVolume") {
             if (!Number.isFinite(value) || value < 0 || value > 100) throw new Error("Invalid volume");
+        } else if (captureOptions.includes(id)) {
+            if (typeof value !== "boolean") throw new Error("Invalid screenshot setting");
         } else {
             const site = /^(\w+)Provider$/.exec(id)?.[1];
             if (!site || !Object.hasOwn(links.providers, site) || (value !== "auto" && !links.providers[site].includes(value))) throw new Error("Invalid provider");
@@ -1338,14 +1346,14 @@
         toast.addEventListener("animationend", event => { if (event.target === toast && event.animationName === "lowcord-toast-out") toast.remove(); });
         setTimeout(() => toast.remove(), 400);
     }
-    function toast(message, failure = false, action = null) {
+    function toast(message, failure = false, action = null, duration = null) {
         // A message ending in an ellipsis is work still going on.
         const tone = failure ? "failure" : /…$/.test(message) ? "progress" : "success";
         const [title, detail] = splitMessage(message);
         const toast = buildToast(tone, title, detail, action);
         showToast(toast);
         // Leave time to reach an action button.
-        setTimeout(() => dismissToast(toast), action ? 8000 : 4000);
+        setTimeout(() => dismissToast(toast), duration ?? (action ? 8000 : 4000));
         return toast;
     }
     // A status that stays, with a spinner, while work runs; a toast with the

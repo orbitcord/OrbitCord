@@ -333,13 +333,39 @@
     }
 
     // ----- Status bar ---------------------------------------------------------
+    function positionBar(node) {
+        let composer;
+        const place = () => {
+            const rect = composer?.getBoundingClientRect();
+            node.style.left = `${rect?.width ? rect.left + rect.width / 2 : innerWidth / 2}px`;
+            node.style.bottom = `${rect?.width ? Math.max(16, innerHeight - rect.top + 16) : 96}px`;
+            node.style.maxWidth = `${Math.max(0, Math.min(innerWidth - 32, rect?.width || innerWidth - 32))}px`;
+        };
+        const resize = new ResizeObserver(place);
+        const locate = () => {
+            if (composer?.isConnected) return;
+            resize.disconnect();
+            composer = document.querySelector('[class*="channelTextArea_"]');
+            if (composer) resize.observe(composer);
+            place();
+        };
+        // Follow channel changes only while a deletion runs. Message mutations
+        // require no layout reads while the same composer remains mounted.
+        const navigation = new MutationObserver(locate);
+        navigation.observe(document.body, { childList: true, subtree: true });
+        window.addEventListener("resize", place);
+        locate();
+        return () => { resize.disconnect(); navigation.disconnect(); window.removeEventListener("resize", place); };
+    }
     function render() {
         if (!job) return;
         const { bar, deleted, skipped, remaining, indexing, stopped, scopeLabel } = job;
         bar.title.textContent = stopped ? "Stopping…" : indexing && !deleted ? "Discord is preparing search…"
-            : `Deleting your messages… ${deleted.toLocaleString()}`;
+            : "Deleting messages";
         const left = remaining > 0 ? `About ${remaining.toLocaleString()} left` : "Looking for more";
-        bar.detail.textContent = [scopeLabel, left, skipped ? `${skipped.toLocaleString()} cannot be deleted` : ""].filter(Boolean).join(" · ");
+        bar.detail.textContent = [scopeLabel, `${deleted.toLocaleString()} deleted`, left, skipped ? `${skipped.toLocaleString()} cannot be deleted` : ""].filter(Boolean).join(" · ");
+        bar.detail.title = bar.detail.textContent;
+        bar.stopButton.disabled = stopped;
     }
     async function start(target, scope) {
         if (job) return job.promise;
@@ -349,17 +375,20 @@
         const detail = ui("span", { className: "lowcord-toast-detail", "aria-live": "polite" });
         const stopButton = ui("button", { type: "button", className: "lowcord-button", onClick: stop }, "Stop");
         const node = ui("div", { className: "lowcord-purge-bar", role: "status", "aria-label": "Deleting your messages" },
+            ui("span", { className: "lowcord-purge-spinner", "aria-hidden": "true" }),
             ui("span", { className: "lowcord-toast-copy" }, title, detail), stopButton);
         const scopeLabel = scope === "server" ? target.guildName : target.channelName;
         const current = job = { target, scope, me, scopeLabel, deleted: 0, skipped: 0, remaining: 0, lanes: new Map(), pausedUntil: 0, failures: 0, unchecked: 0, waiters: new Set(),
             // A fixed upper bound keeps messages sent during the job out of it.
             before: ((BigInt(Date.now()) - 1420070400000n) << 22n).toString(),
-            stopped: false, indexing: false, bar: { node, title, detail } };
+            stopped: false, indexing: false, bar: { node, title, detail, stopButton } };
         document.body.append(node);
+        const unposition = positionBar(node);
         render();
         current.promise = (async () => {
             let failure;
             try { await run(current); } catch (error) { failure = error; }
+            unposition();
             node.remove();
             if (job === current) job = undefined;
             const count = `${current.deleted.toLocaleString()} message${current.deleted === 1 ? "" : "s"}`;

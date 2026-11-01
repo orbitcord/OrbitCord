@@ -20,6 +20,12 @@ if (!userData) throw new Error('Missing test data directory');
 app.setPath('userData', userData);
 app.setPath('sessionData', join(userData, 'Chromium'));
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// One helper fewer on macOS. Network stays out of process because it parses
+// remote data in a sandbox, and in-process video capture hangs getUserMedia.
+if (process.platform === 'darwin') app.commandLine.appendSwitch('disable-features', 'AudioServiceOutOfProcess');
+// Chromium sizes its decoded image cache by system RAM, so large Macs keep
+// hundreds of MB after scrolling media. 64 MB cost 0.2s of CPU in a 16s scroll.
+app.commandLine.appendSwitch('force-gpu-mem-discardable-limit-mb', '64');
 // social-posts.cjs serves this scheme and checks the name when it loads.
 const mediaScheme = 'lowcord-media';
 // Social card media is proxied through tokens minted in social-posts.cjs, so
@@ -322,6 +328,28 @@ const permitted = new Set(['media', 'notifications', 'clipboard-sanitized-write'
 function configureSession(ses) {
     if (configuredSessions.has(ses)) return;
     configuredSessions.add(ses);
+    ses.on('will-download', (_event, item, contents) => {
+        const record = recordFor(contents);
+        if (!record || record.privacy?.inspector === false) return;
+        item.once('done', async (_event, state) => {
+            if (state !== 'completed' || !recordFor(contents) || record.privacy?.inspector === false) return;
+            let report;
+            try { report = await require('./privacy-files.cjs').inspectPath(item.getSavePath(), item.getFilename()); }
+            catch { report = { status: 'uninspectable', reasons: ['Unable to inspect this download.'], entries: [], note: 'Not an antivirus scan.' }; }
+            if (!recordFor(contents)) return;
+            contents.send('lowcord:attachment-inspection', { name: item.getFilename(), ...report });
+            // Only concrete risks interrupt with a dialog; the page notes the rest.
+            if (report.status !== 'warning') return;
+            // No automatic open action. Inspection never extracts the download,
+            // changes its native Save As path or removes OS quarantine metadata.
+            const printable = value => String(value).replace(/[\u0000-\u001f\u202a-\u202e\u2066-\u2069]/g, '\uFFFD');
+            const result = await dialog.showMessageBox(record.window, { type: 'warning',
+                title: 'Attachment inspection', message: 'This download needs care',
+                detail: [printable(item.getFilename()), ...report.reasons, ...report.entries.slice(0, 8).map(printable), report.note].join('\n\n'),
+                buttons: ['Close', 'Show in folder'], defaultId: 0, cancelId: 0, noLink: true }).catch(() => ({ response: 0 }));
+            if (result.response === 1) shell.showItemInFolder(item.getSavePath());
+        });
+    });
     // Set the browser identity before creating WebContents: session changes
     // do not update an existing window's navigator.userAgent.
     ses.setUserAgent(ses.getUserAgent().replace(/\s(?:Electron|Lowcord|Datcord|OrbitCord)\/[\w.-]+/gi, ''));
@@ -528,6 +556,31 @@ async function createDiscordWindow(account) {
 }
 
 function registerIpc() {
+    let sanitizing = 0;
+    ipcMain.handle('lowcord:sanitize-image', async (event, bytes) => {
+        const record = assertSender(event);
+        if (!(bytes instanceof Uint8Array) || bytes.byteLength > 64 * 1024 * 1024 || !bytes.byteLength)
+            throw new Error('Invalid image or image larger than 64 MiB');
+        if (sanitizing >= 2 || record.sanitizing) throw new Error('Image preparation is busy. Try again.');
+        record.sanitizing = true; sanitizing++;
+        const { Worker } = require('node:worker_threads');
+        let worker;
+        try {
+            return await new Promise((resolve, reject) => {
+                worker = new Worker(join(__dirname, 'privacy-worker.cjs'));
+                const timer = setTimeout(() => reject(new Error('Image preparation timed out')), 30_000);
+                const done = callback => value => { clearTimeout(timer); callback(value); };
+                worker.once('message', done(resolve)); worker.once('error', done(reject));
+                worker.once('exit', done(() => reject(new Error('Image preparation ended before returning a result'))));
+                worker.postMessage(bytes);
+            });
+        } finally { await worker?.terminate(); record.sanitizing = false; sanitizing--; }
+    });
+    ipcMain.handle('lowcord:privacy-preferences', (event, value) => {
+        const record = assertSender(event);
+        if (!value || typeof value.inspector !== 'boolean') throw new Error('Invalid privacy preferences');
+        record.privacy = { inspector: value.inspector }; return record.privacy;
+    });
     ipcMain.handle('lowcord:download-dropped-image', async (event, url) => {
         assertSender(event);
         try { return await require('./image-drop.cjs').downloadImage(url, { fetchPage: (url, init) => net.fetch(url, init) }); }

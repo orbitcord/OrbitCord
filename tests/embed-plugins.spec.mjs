@@ -105,7 +105,8 @@ test('provider and volume controls save, reload, and hide when disabled', async 
     await page.reload(); await page.waitForFunction(() => window.fixtureReady);
     expect(await page.evaluate(() => Lowcord.extensions.options)).toEqual({ musicVolume: 25, twitterProvider: 'vxtwitter.com', instagramProvider: 'eeinstagram.com',
         blueskyProvider: 'auto', redditProvider: 'auto', tiktokProvider: 'auto', twitchProvider: 'auto', tumblrProvider: 'auto',
-        facebookProvider: 'auto', threadsProvider: 'auto', pixivProvider: 'auto' });
+        facebookProvider: 'auto', threadsProvider: 'auto', pixivProvider: 'auto',
+        captureReview: true, captureNames: true, captureAvatars: true, captureChannels: true });
     expect(await page.evaluate(() => Lowcord.extensions.socialContent('https://x.com/u/status/1 https://instagram.com/p/ABC/')))
         .toBe('https://vxtwitter.com/u/status/1 https://eeinstagram.com/p/ABC/');
     await page.evaluate(() => window.__lowcordOpenSettings('extensions'));

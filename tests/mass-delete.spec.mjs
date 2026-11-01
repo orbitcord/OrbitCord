@@ -305,3 +305,28 @@ test('a throttled DM falls back to sequential deletion after its active round', 
     expect(await page.evaluate(() => deletion.maxAfterCooldown)).toBe(1);
     expect(await page.evaluate(() => new Set(deletion.deletes).size)).toBe(40);
 });
+
+test('progress capsule follows the composer and Stop settles active requests', async ({ page }) => {
+    await page.evaluate(() => {
+        const composer = document.querySelector('.channelTextArea_test');
+        composer.style.cssText = 'position:fixed;left:300px;right:100px;bottom:20px;height:60px';
+        deletion.messages = [{ id: '100', channel_id: '500', author: { id: '1' } }];
+        deletion.del = () => new Promise(resolve => { deletion.release = resolve; });
+        deletion.start();
+    });
+    const bar = page.locator('.lowcord-purge-bar');
+    await expect(bar).toContainText('Deleting messages');
+    await expect(bar).toContainText('0 deleted');
+    const composer = await page.locator('.channelTextArea_test').boundingBox();
+    await expect.poll(async () => {
+        const box = await bar.boundingBox();
+        return Math.round(box.x + box.width / 2 - composer.x - composer.width / 2);
+    }).toBe(0);
+    const box = await bar.boundingBox();
+    expect(Math.round(composer.y - box.y - box.height)).toBe(16);
+    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await expect(bar).toContainText('Stopping…');
+    await expect(bar.getByRole('button')).toBeDisabled();
+    await page.evaluate(async () => { deletion.release(); await deletion.done; });
+    await expect(bar).toHaveCount(0);
+});

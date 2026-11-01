@@ -1,0 +1,121 @@
+/* Privacy & Security page: a protection list and one detail pane, inside
+   Discord's settings column. One spacing scale (4/8/12/16/24/32) and Discord's
+   semantic tokens throughout, so every theme carries over. */
+.lowcord-settings-inline .lowcord-settings-body:has(> .lowcord-privacy-page) { padding: 40px max(40px, calc((100% - 960px) / 2)) 64px; }
+.lowcord-privacy-page { container-type: inline-size; color: var(--text-normal, #f2f3f5); font-size: 14px; line-height: 20px; }
+.lowcord-privacy-page :is(h1, h2, h3, h4, p, ul, dl, dd) { margin: 0; }
+.lowcord-privacy-intro { display: grid; gap: 8px; margin-bottom: 32px; }
+.lowcord-privacy-intro h1 { font-size: 24px !important; line-height: 30px; font-weight: 700 !important; color: var(--header-primary, #f2f3f5); }
+.lowcord-privacy-intro p { color: var(--text-muted, #b5bac1); }
+
+.lowcord-privacy-split { display: grid; grid-template-columns: 248px minmax(0, 1fr); }
+.lowcord-privacy-nav { display: grid; align-content: start; gap: 24px; padding-right: 16px; border-right: 1px solid var(--border-subtle, rgb(148 155 164 / .16)); }
+.lowcord-privacy-group { display: grid; gap: 2px; }
+.lowcord-privacy-group h2 { padding: 0 8px 6px; font-size: 12px; line-height: 16px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; color: var(--text-muted, #b5bac1); }
+.lowcord-privacy-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.lowcord-privacy-item:hover { background: var(--background-modifier-hover, rgb(78 80 88 / .3)); }
+.lowcord-privacy-item[aria-current="true"] { background: var(--background-modifier-selected, rgb(78 80 88 / .6)); }
+.lowcord-privacy-tile { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 8px; background: var(--background-tertiary, #1e1f22); color: var(--interactive-normal, #b5bac1); }
+.lowcord-privacy-item[aria-current="true"] .lowcord-privacy-tile { background: var(--brand-500, #5865f2); color: #fff; }
+.lowcord-privacy-item-text { display: grid; min-width: 0; }
+.lowcord-privacy-item-text strong { font-size: 14px; line-height: 18px; font-weight: 600; }
+.lowcord-privacy-item-text span { font-size: 12px; line-height: 16px; color: var(--text-muted, #b5bac1); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.lowcord-privacy-item-text .is-warn { color: var(--status-warning, #f0b232); }
+
+.lowcord-privacy-detail { display: grid; align-content: start; gap: 24px; min-width: 0; padding-left: 32px; }
+.lowcord-privacy-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 24px; }
+.lowcord-privacy-head h2 { font-size: 20px; line-height: 28px; font-weight: 700; color: var(--header-primary, #f2f3f5); }
+.lowcord-privacy-head p { grid-column: 1 / -1; max-width: 62ch; color: var(--text-muted, #b5bac1); }
+.lowcord-privacy-section { display: grid; gap: 8px; }
+.lowcord-privacy-section h3 { font-size: 12px; line-height: 16px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; color: var(--text-muted, #b5bac1); }
+.lowcord-privacy-card { display: grid; gap: 16px; padding: 16px; border-radius: 8px; background: var(--background-secondary, #2b2d31); border: 1px solid var(--border-subtle, rgb(148 155 164 / .12)); }
+.lowcord-privacy-note { max-width: 62ch; font-size: 13px; line-height: 18px; color: var(--text-muted, #b5bac1); }
+.lowcord-privacy-note.is-warn { color: var(--status-warning, #f0b232); }
+.lowcord-privacy-note.is-error { color: var(--text-danger, #fa777c); }
+.lowcord-privacy-empty { color: var(--text-muted, #b5bac1); }
+.lowcord-privacy-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+
+/* Controls */
+.lowcord-privacy-switch { appearance: none; position: relative; flex: none; width: 40px; height: 24px; margin: 0; border-radius: 12px; background: var(--background-modifier-accent, #4e5058); cursor: pointer; transition: background-color .15s ease; }
+.lowcord-privacy-switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform .15s ease; }
+.lowcord-privacy-switch:checked { background: var(--brand-500, #5865f2); }
+.lowcord-privacy-switch:checked::after { transform: translateX(16px); }
+@media (prefers-reduced-motion: reduce) { .lowcord-privacy-switch, .lowcord-privacy-switch::after { transition: none; } }
+.lowcord-privacy-select { position: relative; display: block; }
+.lowcord-privacy-select select { appearance: none; display: block; box-sizing: border-box; width: 100%; height: 40px; padding: 0 40px 0 12px; border: 1px solid var(--border-subtle, rgb(148 155 164 / .2)); border-radius: 6px; background: var(--background-tertiary, #1e1f22); color: var(--text-normal, #f2f3f5); font: inherit; font-size: 14px; cursor: pointer; }
+.lowcord-privacy-select select:hover { border-color: var(--border-strong, rgb(148 155 164 / .4)); }
+/* The chevron is drawn in the text color, so it follows every theme. */
+.lowcord-privacy-select::after { content: ''; position: absolute; top: 50%; right: 16px; width: 6px; height: 6px; margin-top: -5px; border-right: 1.5px solid var(--text-muted, #b5bac1); border-bottom: 1.5px solid var(--text-muted, #b5bac1); transform: rotate(45deg); pointer-events: none; }
+.lowcord-privacy-page input:focus-visible, .lowcord-privacy-page select:focus-visible,
+.lowcord-privacy-page a:focus-visible, .lowcord-privacy-page button:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px; }
+.lowcord-privacy-badge { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 10px; background: var(--background-modifier-accent, #4e5058); font-size: 12px; font-weight: 600; white-space: nowrap; text-transform: capitalize; }
+.lowcord-privacy-badge.is-warn { color: #1e1f22; background: var(--status-warning, #f0b232); }
+.lowcord-privacy-badge.is-danger { color: #fff; background: var(--status-danger, #da373c); }
+
+/* Content patterns */
+.lowcord-privacy-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.lowcord-privacy-columns h4 { margin-bottom: 12px; font-size: 14px; font-weight: 600; }
+.lowcord-privacy-points { display: grid; gap: 8px; padding: 0; list-style: none; }
+.lowcord-privacy-points li { display: flex; align-items: center; gap: 8px; }
+.lowcord-privacy-points svg { flex: none; }
+.lowcord-privacy-points.is-removed svg { color: var(--status-danger, #f23f43); }
+.lowcord-privacy-points.is-kept svg { color: var(--status-positive, #23a55a); }
+.lowcord-privacy-facts { display: grid; }
+.lowcord-privacy-facts > div { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 16px; padding: 12px 0; border-top: 1px solid var(--border-subtle, rgb(148 155 164 / .12)); }
+.lowcord-privacy-facts > div:first-child { padding-top: 0; border-top: 0; }
+.lowcord-privacy-facts > div:last-child { padding-bottom: 0; }
+.lowcord-privacy-facts dt { color: var(--text-muted, #b5bac1); }
+.lowcord-privacy-line { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 12px; border-top: 1px solid var(--border-subtle, rgb(148 155 164 / .12)); overflow-wrap: anywhere; }
+.lowcord-privacy-card > .lowcord-privacy-line:first-child, .lowcord-privacy-card > [role="status"] > .lowcord-privacy-line { padding-top: 0; border-top: 0; }
+.lowcord-privacy-line > span { display: grid; gap: 2px; min-width: 0; }
+.lowcord-privacy-line > span > span { font-size: 13px; line-height: 18px; color: var(--text-muted, #b5bac1); }
+.lowcord-privacy-line a { color: var(--text-link, #00a8fc); }
+.lowcord-privacy-reasons { display: grid; gap: 4px; margin-top: 12px !important; padding-left: 18px; color: var(--text-muted, #b5bac1); }
+
+/* Expiry rule builder */
+.lowcord-privacy-segmented { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 8px; background: var(--background-tertiary, #1e1f22); width: fit-content; max-width: 100%; box-sizing: border-box; }
+.lowcord-privacy-segmented button { height: 32px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted, #b5bac1); font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; }
+.lowcord-privacy-segmented button:hover { color: var(--text-normal, #f2f3f5); }
+.lowcord-privacy-segmented button[aria-pressed="true"] { background: var(--background-modifier-selected, #404249); color: var(--text-normal, #f2f3f5); }
+.lowcord-privacy-field { display: grid; gap: 8px; }
+.lowcord-privacy-field > span:first-child { font-size: 13px; line-height: 16px; font-weight: 600; color: var(--text-muted, #b5bac1); }
+.lowcord-privacy-search { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; border-radius: 6px; background: var(--background-tertiary, #1e1f22); border: 1px solid var(--border-subtle, rgb(148 155 164 / .2)); color: var(--text-muted, #b5bac1); }
+.lowcord-privacy-search input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; color: var(--text-normal, #f2f3f5); font: inherit; }
+.lowcord-privacy-search:focus-within { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px; }
+.lowcord-privacy-picker { display: grid; gap: 2px; max-height: 232px; overflow-y: auto; margin: 0 -8px; padding: 0 8px; }
+.lowcord-privacy-picker button { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-normal, #f2f3f5); font: inherit; text-align: left; cursor: pointer; }
+.lowcord-privacy-picker button:hover { background: var(--background-modifier-hover, rgb(78 80 88 / .3)); }
+.lowcord-privacy-picker button[aria-checked="true"] { background: var(--background-modifier-selected, rgb(78 80 88 / .6)); }
+.lowcord-privacy-picker button > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.lowcord-privacy-picker button > svg { flex: none; color: var(--brand-500, #5865f2); }
+.lowcord-privacy-avatar { display: grid; place-items: center; flex: none; width: 32px; height: 32px; overflow: hidden; border-radius: 10px; background: var(--background-modifier-accent, #4e5058); font-size: 13px; font-weight: 600; }
+.lowcord-privacy-avatar.is-round { border-radius: 50%; }
+.lowcord-privacy-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.lowcord-privacy-summary { padding-top: 16px; border-top: 1px solid var(--border-subtle, rgb(148 155 164 / .12)); }
+.lowcord-privacy-preview { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: stretch; gap: 12px; }
+.lowcord-privacy-arrow { align-self: center; color: var(--text-muted, #b5bac1); font-size: 18px; }
+.lowcord-privacy-chat { display: grid; align-content: start; gap: 10px; padding: 12px; border-radius: 8px; background: var(--background-primary, #313338); }
+.lowcord-privacy-chat-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; line-height: 16px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; color: var(--text-muted, #b5bac1); }
+.lowcord-privacy-msg { display: flex; align-items: flex-start; gap: 10px; min-height: 36px; }
+.lowcord-privacy-msg > div { display: grid; gap: 2px; min-width: 0; }
+.lowcord-privacy-msg strong { font-size: 13px; line-height: 16px; }
+.lowcord-privacy-msg p { font-size: 13px; line-height: 18px; }
+.lowcord-privacy-face { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 50%; color: #fff; font-size: 12px; font-weight: 700; }
+.lowcord-privacy-face.is-brand, .lowcord-privacy-face.is-blue { background: var(--brand-500, #5865f2); }
+.lowcord-privacy-face.is-green { background: #248046; }
+.lowcord-privacy-file { display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; padding: 6px 10px; border-radius: 6px; background: var(--background-secondary, #2b2d31); font-size: 12px; }
+.lowcord-privacy-file.is-removed { color: var(--text-muted, #b5bac1); border: 1px dashed var(--border-strong, rgb(148 155 164 / .4)); background: transparent; }
+.lowcord-privacy-ghost { display: flex; align-items: center; min-height: 36px; padding: 0 10px; border-radius: 6px; border: 1px dashed var(--border-strong, rgb(148 155 164 / .4)); color: var(--text-muted, #b5bac1); font-size: 13px; }
+.lowcord-privacy-line.is-first { padding-top: 0; border-top: 0; }
+
+/* Narrow column: list above the pane; tables and pairs stack. */
+@container (max-width: 680px) {
+    .lowcord-privacy-split { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+    .lowcord-privacy-nav { padding: 0 0 24px; border-right: 0; border-bottom: 1px solid var(--border-subtle, rgb(148 155 164 / .16)); }
+    .lowcord-privacy-detail { padding-left: 0; }
+}
+@container (max-width: 440px) {
+    .lowcord-privacy-columns, .lowcord-privacy-preview { grid-template-columns: minmax(0, 1fr); }
+    .lowcord-privacy-arrow { transform: rotate(90deg); justify-self: center; }
+    .lowcord-privacy-facts > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}

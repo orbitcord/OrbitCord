@@ -13,6 +13,93 @@ async function launch(dataDir, { updater = false, mediaSources = false } = {}) {
     return app;
 }
 
+test('audio runs in the main process on macOS and keeps the sandboxed network helper', async () => {
+    test.skip(process.platform !== 'darwin', 'Audio stays out of process elsewhere');
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-audio-process-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
+        const advanced = await page.evaluate(async () => {
+            await navigator.mediaDevices.enumerateDevices();
+            const context = new AudioContext(), oscillator = context.createOscillator(), gain = context.createGain();
+            gain.gain.value = 0; oscillator.connect(gain).connect(context.destination); oscillator.start();
+            await context.resume(); await new Promise(resolve => setTimeout(resolve, 500));
+            const time = context.currentTime; await context.close();
+            return time;
+        });
+        expect(advanced).toBeGreaterThan(.2);
+        const services = await app.evaluate(({ app }) => app.getAppMetrics().map(metric => metric.serviceName).filter(Boolean));
+        expect(services).toContain('network.mojom.NetworkService');
+        expect(services).not.toContain('audio.mojom.AudioService');
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('the GPU image cache stays capped and decoded images still draw', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-gpu-cache-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
+        expect(await app.evaluate(({ app }) => app.commandLine.getSwitchValue('force-gpu-mem-discardable-limit-mb'))).toBe('64');
+        const painted = await page.evaluate(async () => {
+            const canvas = new OffscreenCanvas(1600, 1200), context = canvas.getContext('2d');
+            context.fillStyle = 'rgb(255, 0, 0)'; context.fillRect(0, 0, 1600, 1200);
+            const url = URL.createObjectURL(await canvas.convertToBlob({ type: 'image/png' }));
+            const image = Object.assign(new Image(), { src: url });
+            await image.decode(); document.body.append(image);
+            const bitmap = await createImageBitmap(image), copy = new OffscreenCanvas(1, 1).getContext('2d');
+            copy.drawImage(bitmap, 0, 0, 1, 1);
+            return [...copy.getImageData(0, 0, 1, 1).data];
+        });
+        expect(painted).toEqual([255, 0, 0, 255]);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('privacy image processing crosses the sandbox and retains real JPEG orientation', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-privacy-image-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
+        const result = await page.evaluate(async () => {
+            const source = new OffscreenCanvas(2, 3), ctx = source.getContext('2d');
+            ctx.fillStyle = 'red'; ctx.fillRect(0, 0, 2, 3);
+            const jpeg = new Uint8Array(await (await source.convertToBlob({ type: 'image/jpeg' })).arrayBuffer());
+            const tiff = Uint8Array.from('49492a0008000000010012010300010000000600000000000000'.match(/../g).map(b => parseInt(b, 16)));
+            const metadata = new Uint8Array(6 + tiff.length + 6); metadata.set([69, 120, 105, 102, 0, 0]); metadata.set(tiff, 6); metadata.set(new TextEncoder().encode('SECRET'), 6 + tiff.length);
+            const input = new Uint8Array(jpeg.length + metadata.length + 4); input.set(jpeg.subarray(0, 2)); input.set([255, 225, 0, metadata.length + 2], 2); input.set(metadata, 6); input.set(jpeg.subarray(2), metadata.length + 6);
+            const cleaned = await __LOWCORD_NATIVE__.sanitizeImage(input);
+            const bitmap = await createImageBitmap(new Blob([cleaned.bytes], { type: 'image/jpeg' }));
+            const dimensions = [bitmap.width, bitmap.height]; bitmap.close();
+            let rejected = false;
+            try { await __LOWCORD_NATIVE__.sanitizeImage([1, 2, 3]); } catch { rejected = true; }
+            return { status: cleaned.status, secret: new TextDecoder().decode(cleaned.bytes).includes('SECRET'), dimensions, rejected };
+        });
+        expect(result).toEqual({ status: 'processed', secret: false, dimensions: [3, 2], rejected: true });
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('native attachment download inspection warns about disguised executables without opening them', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-privacy-download-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
+        await app.evaluate(({ BrowserWindow, dialog }, directory) => {
+            const { join } = process.mainModule.require('node:path');
+            const contents = BrowserWindow.getAllWindows()[0].webContents;
+            dialog.showMessageBox = async (_window, options) => { global.privacyInspectionDialog = options; return { response: 0 }; };
+            contents.session.once('will-download', (_event, item) => item.setSavePath(join(directory, 'not-a-photo.png.exe')));
+        }, dir);
+        await page.evaluate(async () => {
+            __LOWCORD_NATIVE__.onAttachmentInspection(value => { window.inspectionResult = value; });
+            await __LOWCORD_NATIVE__.downloadMedia('http://127.0.0.1:4319/media/not-a-photo.png.exe');
+        });
+        await expect.poll(() => page.evaluate(() => window.inspectionResult?.status)).toBe('warning');
+        const result = await app.evaluate(() => global.privacyInspectionDialog);
+        expect(result.detail).toContain('double extension');
+        expect(result.buttons).toEqual(['Close', 'Show in folder']);
+        expect((await readFile(join(dir, 'not-a-photo.png.exe'))).subarray(0, 2).toString()).toBe('MZ');
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
 async function showForFullscreen(app) {
     await app.evaluate(({ BrowserWindow }) => {
         const window = BrowserWindow.getAllWindows()[0];
@@ -593,7 +680,7 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true,
             extensions: await page.evaluate(() => window.Lowcord.extensions.catalog.length), fetchHooked: true });
         expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
-            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged'] });
+            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'sanitizeImage', 'privacyPreferences', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged'] });
         expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsSearch('fixture', -1))).toEqual({ error: 'invalid-search' });
         expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsPrepare('not-a-token', 20_000_000))).toEqual({ error: 'expired' });
         await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsCancel());
@@ -1025,7 +1112,7 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
         await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
         expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
-            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged']);
+            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'setEmbedPreferences', 'sanitizeImage', 'privacyPreferences', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged']);
         expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
     } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
 });
@@ -1216,7 +1303,10 @@ test('chat screenshots capture real window pixels across scrolling, at page zoom
         }, id);
         await expect(page.locator('.lowcord-capture-bar')).toContainText('22 messages selected');
         await page.evaluate(() => [...document.querySelectorAll('.lowcord-capture-bar button')].find(b => b.textContent === 'Capture').click());
-        await expect(page.locator('.lowcord-toast')).toContainText('Chat image copied', { timeout: 15000 });
+        const preview = page.getByRole('dialog', { name: 'Review screenshot' });
+        await expect(preview).toBeVisible({ timeout: 15000 });
+        await preview.getByRole('button', { name: 'Copy image', exact: true }).click();
+        await expect(preview.getByRole('status')).toContainText('Redacted image copied');
         const rows = await page.evaluate(() => {
             const rows = [...document.querySelectorAll('#capture-chat li')].slice(3, 25);
             const top = rows[0].getBoundingClientRect().top;

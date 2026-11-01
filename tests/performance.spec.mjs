@@ -192,7 +192,7 @@ test('one observer serves before-paint and per-frame listeners with only the att
 test('stylesheets test Discord class substrings only on the element being styled', async ({ page }) => {
     // As an ancestor, [class*=…] makes Chromium restyle the whole subtree of any
     // element whose class changes, which made channel switches and hovering stall.
-    const sheets = await Promise.all(['chat-appearance.css', 'lowcord-ui.css', 'themes.css']
+    const sheets = await Promise.all(['chat-appearance.css', 'lowcord-ui.css', 'themes.css', 'privacy.css']
         .map(file => readFile(`src-tauri/injection/${file}`, 'utf8')));
     const offenders = await page.evaluate(sheets => {
         const split = (text, separators) => {

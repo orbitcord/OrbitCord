@@ -8,6 +8,10 @@
     const cameraPath = "M9.4 3.5a2 2 0 0 0-1.66.89L6.66 6H5a3 3 0 0 0-3 3v8.5a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3V9a3 3 0 0 0-3-3h-1.66l-1.08-1.61a2 2 0 0 0-1.66-.89H9.4ZM12 8.5a4.75 4.75 0 1 1 0 9.5 4.75 4.75 0 0 1 0-9.5Zm0 2a2.75 2.75 0 1 0 0 5.5 2.75 2.75 0 0 0 0-5.5Z";
     // Chromium refuses canvases taller than 32767px, or larger than ~268M pixels.
     const maxSide = 32000, maxArea = 200e6;
+    // The review shows a reduced copy; export uses the full capture.
+    const previewArea = 16e6;
+    const redactionTargets = [['name', '[id^="message-username-"], [class*="username_"], [class*="repliedTextUsername_"], span.mention'],
+        ['avatar', '[class*="avatar_"], [class*="replyAvatar_"], .lowcord-bubble-avatar'], ['channel', 'a[href^="/channels/"] [class*="name_"]']];
 
     // One session at a time: picking, then capturing.
     let session;
@@ -184,7 +188,8 @@
         const view = scroller.getBoundingClientRect();
         const anchor = [...scroller.querySelectorAll(rowSelector)].find(row => row.getBoundingClientRect().bottom > view.top);
         const anchorTop = anchor?.getBoundingClientRect().top;
-        const segments = [];
+        const segments = [], redactions = [], messageRegions = [];
+        const seenRegions = new Set();
         let failure;
         try {
             let y = 0, stalls = 0, height = 0, left = 0, width = 0;
@@ -207,6 +212,26 @@
                     continue;
                 }
                 stalls = 0;
+                // Measure against the same origin used by capture. Redactions
+                // are painted into exported pixels, never cosmetic blur layers.
+                for (const row of rows) {
+                    const box = row.getBoundingClientRect();
+                    if (box.bottom <= from || box.top >= to) continue;
+                    if (!seenRegions.has(row.id)) {
+                        seenRegions.add(row.id);
+                        messageRegions.push({ id: row.id, x: 0, y: box.top - top, width, height: box.height });
+                    }
+                    for (const [kind, selector] of redactionTargets) {
+                        row.querySelectorAll(selector).forEach((node, index) => {
+                            const regionKey = `${row.id}:${kind}:${index}`;
+                            if (seenRegions.has(regionKey)) return;
+                            const rect = node.getBoundingClientRect();
+                            if (!rect.width || !rect.height) return;
+                            seenRegions.add(regionKey);
+                            redactions.push({ kind, x: rect.left - left - 2, y: rect.top - top - 2, width: rect.width + 4, height: rect.height + 4 });
+                        });
+                    }
+                }
                 const bytes = await native().captureRegion({ x: left, y: from, width, height: to - from });
                 segments.push({ offset: from - top, height: to - from, blob: new Blob([bytes], { type: "image/png" }) });
                 current.bar.title.textContent = `Capturing… ${Math.min(99, Math.round((to - top) / height * 100))}%`;
@@ -215,7 +240,7 @@
             }
             if (!segments.length) throw new Error("empty");
             const background = getComputedStyle(scroller).backgroundColor;
-            return await finish(segments, width, height, background);
+            return await finish(segments, width, height, background, redactions, messageRegions);
         } catch (error) {
             failure = error;
         } finally {
@@ -227,7 +252,7 @@
         if (failure.message === "unloaded") toast("Couldn't capture that many messages. Pick a shorter range.", true);
         else { console.warn("[lowcord] Chat screenshot:", failure); toast("Couldn't capture the chat. Try again.", true); }
     }
-    async function finish(segments, width, height, background) {
+    async function finish(segments, width, height, background, redactions = [], messageRegions = []) {
         const first = await createImageBitmap(segments[0].blob);
         // Device pixels per CSS pixel, as captured.
         const density = first.width / width;
@@ -239,24 +264,135 @@
         const context = canvas.getContext("2d");
         context.fillStyle = background && background !== "rgba(0, 0, 0, 0)" ? background : "#313338";
         context.fillRect(0, 0, canvas.width, canvas.height);
-        // Decode one screenful at a time to keep memory flat.
-        for (const segment of segments) {
+        // Decode one screenful at a time to keep memory flat. Both edges come
+        // from the running offset, so neighbours meet exactly: rounding each
+        // height on its own left 1px gaps (a visible seam) at fractional zoom.
+        // Each also reaches a pixel into the next, which paints over it.
+        for (const [index, segment] of segments.entries()) {
             const bitmap = await createImageBitmap(segment.blob);
-            context.drawImage(bitmap, 0, Math.round(segment.offset * scale), canvas.width, Math.round(segment.height * scale));
+            const top = Math.round(segment.offset * scale);
+            const bottom = index === segments.length - 1 ? Math.round((segment.offset + segment.height) * scale)
+                : Math.min(canvas.height, Math.round((segment.offset + segment.height) * scale) + 1);
+            context.drawImage(bitmap, 0, top, canvas.width, bottom - top);
             bitmap.close();
         }
-        const png = new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer());
         const channel = window.Lowcord.store?.("ChannelStore")?.getChannel(window.Lowcord.store?.("SelectedChannelStore")?.getChannelId());
         const stamp = new Date().toISOString().slice(0, 16).replace("T", " ").replace(":", ".");
         const name = `${(channel?.name || "Chat").replace(/[\\/:*?"<>|]+/g, " ").trim().slice(0, 60) || "Chat"} ${stamp}.png`;
+        if (extensions.options.captureReview !== false) {
+            await preview(canvas, scale, redactions, messageRegions);
+            return { width: canvas.width, height: canvas.height, segments: segments.length };
+        }
+        const png = new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer());
         await native().copyImage(png);
         toast("Chat image copied. Paste it anywhere, or save it as a file.", false,
             { label: "Save…", onClick: () => native().saveImage(png, name).catch(() => toast("Couldn't save the image", true)) });
         return { width: canvas.width, height: canvas.height, segments: segments.length };
     }
 
+    async function preview(source, scale, regions, messages) {
+        const restoreFocus = document.activeElement;
+        // Defaults come from the Chat screenshots options; each review can change them.
+        const defaults = extensions.options;
+        const hidden = new Set(), options = { name: defaults.captureNames !== false, avatar: defaults.captureAvatars !== false, channel: defaults.captureChannels !== false };
+        const reduce = Math.min(1, Math.sqrt(previewArea / (source.width * source.height)));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(source.width * reduce)); canvas.height = Math.max(1, Math.round(source.height * reduce));
+        canvas.setAttribute('role', 'img');
+        canvas.setAttribute('aria-label', 'Screenshot preview. Click a message to hide or reveal it.');
+        const context = canvas.getContext('2d');
+        const box = (region, factor) => [Math.floor(region.x * factor), Math.floor(region.y * factor), Math.ceil(region.width * factor), Math.ceil(region.height * factor)];
+        const boxes = factor => [...regions.filter(r => options[r.kind]), ...messages.filter(m => hidden.has(m.id))].map(region => box(region, factor));
+        const count = ui('span', { className: 'lowcord-capture-count', 'aria-live': 'polite' });
+        const showAll = ui('button', { type: 'button', className: 'lowcord-capture-link', onClick: () => { hidden.clear(); paint(); } }, 'Show all');
+        // Toggles repaint only the small preview, never the full capture. The
+        // "Hidden" label is a preview aid; exports get plain solid boxes.
+        const paint = () => {
+            context.drawImage(source, 0, 0, canvas.width, canvas.height);
+            context.fillStyle = '#202126';
+            for (const rect of boxes(scale * reduce)) context.fillRect(...rect);
+            context.fillStyle = '#949ba4'; context.font = `500 ${Math.max(11, Math.round(13 * scale * reduce))}px system-ui, sans-serif`; context.textBaseline = 'middle';
+            for (const message of messages.filter(m => hidden.has(m.id))) {
+                const [x, y, , height] = box(message, scale * reduce);
+                if (height > 12) context.fillText('Hidden', x + Math.round(16 * scale * reduce), y + height / 2);
+            }
+            count.textContent = hidden.size ? `${hidden.size} message${hidden.size === 1 ? '' : 's'} hidden` : '';
+            showAll.hidden = !hidden.size;
+        };
+        paint();
+        const backdrop = ui('div', { className: 'lowcord-capture-preview-backdrop' });
+        const close = () => { document.removeEventListener('keydown', onKey, true); backdrop.remove(); canvas.width = canvas.height = 0; source.width = source.height = 0; restoreFocus?.focus?.(); };
+        const onKey = event => {
+            if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); close(); }
+            if (event.key === 'Tab') {
+                const nodes = [...backdrop.querySelectorAll('button:not(:disabled):not([hidden])')];
+                const first = nodes[0], last = nodes.at(-1);
+                if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+                else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+            }
+        };
+        const chip = (kind, label) => {
+            const button = ui('button', { type: 'button', className: 'lowcord-capture-chip', 'aria-pressed': String(options[kind]), 'aria-label': `Hide ${label.toLowerCase()}`,
+                onClick: () => { options[kind] = !options[kind]; button.setAttribute('aria-pressed', String(options[kind])); paint(); } }, label);
+            return button;
+        };
+        // Paint solid boxes into the full capture, encode, then put back only the
+        // covered pixels so later toggles still work. No second full-size copy.
+        const exportBytes = async () => {
+            const full = source.getContext('2d'), saved = [];
+            for (const rect of boxes(scale)) { saved.push([full.getImageData(...rect), rect[0], rect[1]]); full.fillStyle = '#202126'; full.fillRect(...rect); }
+            try { return new Uint8Array(await (await source.convertToBlob({ type: 'image/png' })).arrayBuffer()); }
+            finally { for (const [data, x, y] of saved.reverse()) full.putImageData(data, x, y); }
+        };
+        const status = ui('p', { className: 'lowcord-capture-status', role: 'status', 'aria-live': 'polite' }, 'Covered areas are solid in the saved image.');
+        let exporting = false;
+        const exportImage = async save => {
+            // Overlapping exports would save already-covered pixels as originals.
+            if (exporting) return;
+            exporting = true;
+            try {
+                const bytes = await exportBytes();
+                const result = save ? await native().saveImage(bytes, 'Redacted chat.png') : await native().copyImage(bytes);
+                if (save && result === null) return;
+                status.textContent = save ? 'Redacted image saved.' : 'Redacted image copied.';
+            } catch { status.textContent = 'Could not export the image. Try again.'; }
+            finally { exporting = false; }
+        };
+        // Hover outlines the message a click would hide or reveal.
+        const outline = ui('span', { className: 'lowcord-capture-outline', hidden: true, 'aria-hidden': 'true' });
+        const messageAt = event => {
+            const rect = canvas.getBoundingClientRect(), y = (event.clientY - rect.top) / rect.height * source.height / scale;
+            return messages.find(m => y >= m.y && y < m.y + m.height);
+        };
+        canvas.addEventListener('pointermove', event => {
+            const message = messageAt(event);
+            outline.hidden = !message;
+            if (message) Object.assign(outline.style, { top: `${message.y * scale / source.height * 100}%`, height: `${message.height * scale / source.height * 100}%` });
+        });
+        canvas.addEventListener('pointerleave', () => { outline.hidden = true; });
+        canvas.addEventListener('click', event => {
+            const message = messageAt(event);
+            if (message) { if (hidden.has(message.id)) hidden.delete(message.id); else hidden.add(message.id); paint(); }
+        });
+        const closeButton = ui('button', { type: 'button', className: 'lowcord-settings-close', 'aria-label': 'Close preview', onClick: close }, '×');
+        const panel = ui('section', { className: 'lowcord-capture-preview', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'lowcord-capture-title' },
+            ui('header', {}, ui('div', {}, ui('h2', { id: 'lowcord-capture-title' }, 'Review screenshot'),
+                ui('p', {}, 'Click a message to hide it. Nothing is copied or saved until you choose.')), closeButton),
+            ui('div', { className: 'lowcord-capture-toolbar' },
+                ui('div', { className: 'lowcord-capture-chips', role: 'group', 'aria-label': 'Cover' }, ui('span', {}, 'Cover'),
+                    chip('name', 'Names'), chip('avatar', 'Avatars'), chip('channel', 'Channel mentions')),
+                ui('div', { className: 'lowcord-capture-hidden' }, count, showAll)),
+            ui('div', { className: 'lowcord-capture-preview-image' }, ui('div', { className: 'lowcord-capture-stage' }, canvas, outline)),
+            ui('footer', {}, status,
+                ui('div', { className: 'lowcord-capture-actions' },
+                    ui('button', { type: 'button', className: 'lowcord-button', onClick: () => exportImage(false) }, 'Copy image'),
+                    ui('button', { type: 'button', className: 'lowcord-button lowcord-button-primary', onClick: () => exportImage(true) }, 'Save image'))));
+        backdrop.append(panel); document.body.append(backdrop); document.addEventListener('keydown', onKey, true);
+        closeButton.focus();
+    }
+
     // ----- Message bar action ---------------------------------------------------
     extensions.addComposerAction({ id: "chatCapture", order: 1, label: "Screenshot messages", path: cameraPath, run: start });
     window.addEventListener(extensions.changeEvent, () => { if (session && !extensions.enabled("chatCapture")) stop(); });
-    window.Lowcord.chatCapture = { start, stop, run, get active() { return Boolean(session); } };
+    window.Lowcord.chatCapture = { start, stop, run, preview, finish, get active() { return Boolean(session); } };
 })();

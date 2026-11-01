@@ -75,7 +75,7 @@ test('extension search filters names and descriptions, preserves toggles, and cl
     await expect(dialog.getByRole('switch')).toHaveCount(0);
     await expect(dialog.getByRole('status')).toContainText('No extensions found');
     await search.fill('');
-    await expect(dialog.getByRole('switch')).toHaveCount(await page.evaluate(() => Lowcord.extensions.catalog.length));
+    await expect(dialog.locator('.lowcord-extension-card').getByRole('switch')).toHaveCount(await page.evaluate(() => Lowcord.extensions.catalog.length));
     await expect(dialog.getByRole('switch', { name: /Compress media/ })).not.toBeChecked();
     await expect(dialog.getByRole('slider', { name: 'Embed volume' })).toBeVisible();
     await expect(search).toBeFocused();
@@ -685,7 +685,8 @@ test("OrbitCord section in Discord's settings opens both pages, and toggles save
     await section.getByText("Extensions").click();
     const dialog = page.getByRole("dialog", { name: "OrbitCord Settings" });
     await expect(dialog.getByRole("heading", { name: "Extensions" })).toBeVisible();
-    const toggles = dialog.getByRole("switch");
+    // Extension switches only; option cards (Chat screenshots) have their own.
+    const toggles = dialog.locator(".lowcord-extension-card").getByRole("switch");
     await expect(toggles).toHaveCount(Object.keys(await page.evaluate(() => Lowcord.extensions.state)).length);
     await expect(dialog.getByRole("switch", { name: /Photos and carousels as files/ })).not.toBeChecked();
     expect(await toggles.evaluateAll(inputs => inputs.filter(input => input.checked).length)).toBe((await toggles.count()) - 1);
@@ -757,10 +758,14 @@ test("chat screenshots stitch the picked range into one image and restore the sc
     expect(await page.evaluate(() => window.rowClicks)).toBe(0);
     const scrolled = await page.locator("#capture-scroller").evaluate(node => node.scrollTop);
     await bar.getByRole("button", { name: "Capture" }).click();
+    const preview = page.getByRole('dialog', { name: 'Review screenshot' });
+    await expect(preview).toBeVisible();
+    expect(await page.evaluate(() => Boolean(window.copied))).toBe(false);
+    await preview.getByRole('button', { name: 'Copy image', exact: true }).click();
     await expect.poll(() => page.evaluate(() => Boolean(window.copied))).toBe(true);
     await expect(bar).toHaveCount(0);
     await expect(page.locator("[data-lowcord-capture]")).toHaveCount(0);
-    await expect(page.locator(".lowcord-toast")).toContainText("Chat image copied");
+    await expect(preview.getByRole('status')).toContainText('Redacted image copied');
     expect(await page.locator("#capture-scroller").evaluate(node => node.scrollTop)).toBe(scrolled);
     const result = await page.evaluate(async () => {
         const bitmap = await createImageBitmap(new Blob([window.copied], { type: "image/png" }));
@@ -805,6 +810,9 @@ test("chat screenshots cancel with Escape and leave Discord's clicks alone after
 // messages, one system message that can't be deleted, and other people's.
 async function fakeMessages(page, { guild }) {
     await page.evaluate(guild => {
+        // Model Discord's composer near the bottom of its chat pane; the status
+        // bar anchors above it, rather than above this fixture's document origin.
+        document.querySelector('.channelTextArea_test').style.cssText = 'position:fixed;bottom:16px;left:16px;width:calc(100vw - 32px);z-index:2';
         const me = "1", channelId = "500", guildId = guild ? "900" : null;
         const messages = [];
         for (let i = 1; i <= 70; i++) messages.push({ id: String(10_000 + i), channel_id: i % 7 === 0 && guild ? "501" : channelId,
@@ -1274,4 +1282,81 @@ test("media gallery months: headings open a month picker that scrolls or restart
     await page.keyboard.press("Escape");
     await expect(picker).toHaveCount(0);
     await expect(pane).toBeVisible();
+});
+
+test("screenshot review covers exported pixels solidly and never copies before you choose", async ({ page }) => {
+    await page.evaluate(async () => {
+        window.__LOWCORD_NATIVE__ = { copyImage: async bytes => { window.redactedBytes = Array.from(bytes); }, saveImage: async () => true };
+        const source = new OffscreenCanvas(100, 100), ctx = source.getContext("2d"); ctx.fillStyle = "#ff0000"; ctx.fillRect(0, 0, 100, 100);
+        await Lowcord.chatCapture.preview(source, 1, [{ kind: "name", x: 0, y: 0, width: 20, height: 20 }], [{ id: "100", x: 0, y: 30, width: 100, height: 40 }]);
+    });
+    const review = page.getByRole("dialog", { name: "Review screenshot" });
+    await expect(review.getByRole("combobox")).toHaveCount(0);
+    expect(await page.evaluate(() => window.redactedBytes)).toBeUndefined();
+    // Pills carry no checkmark, and button labels sit centered without a divider above.
+    expect(await review.evaluate(dialog => {
+        const chip = dialog.querySelector(".lowcord-capture-chip"), button = dialog.querySelector(".lowcord-capture-actions .lowcord-button");
+        const range = document.createRange(); range.selectNodeContents(button);
+        const text = range.getBoundingClientRect(), box = button.getBoundingClientRect();
+        return { mark: getComputedStyle(chip, "::before").content, border: getComputedStyle(dialog.querySelector("footer")).borderTopStyle,
+            offset: Math.abs((text.left - box.left) - (box.right - text.right)) < 2 };
+    })).toEqual({ mark: "none", border: "none", offset: true });
+    // Clicking a message hides it; the count and Show all follow.
+    const canvas = review.getByRole("img", { name: /Screenshot preview/ }), box = await canvas.boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await expect(review).toContainText("1 message hidden");
+    await review.getByRole("button", { name: "Copy image", exact: true }).click();
+    await expect(review.getByRole("status").last()).toContainText("copied");
+    const pixels = await page.evaluate(async () => {
+        const bitmap = await createImageBitmap(new Blob([new Uint8Array(redactedBytes)], { type: "image/png" }));
+        const canvas = new OffscreenCanvas(100, 100), ctx = canvas.getContext("2d"); ctx.drawImage(bitmap, 0, 0); bitmap.close();
+        return [10, 50, 90].map(y => Array.from(ctx.getImageData(10, y, 1, 1).data));
+    });
+    // The "Hidden" label is a preview aid only: exports are plain solid boxes.
+    expect(pixels).toEqual([[32, 33, 38, 255], [32, 33, 38, 255], [255, 0, 0, 255]]);
+    await review.getByRole("button", { name: "Show all" }).click();
+    await expect(review).not.toContainText("message hidden");
+    await page.keyboard.press("Escape"); await expect(review).toHaveCount(0);
+});
+
+test("Chat screenshots options set what the review covers, and can skip the review", async ({ page }) => {
+    await page.evaluate(() => {
+        Lowcord.extensions.setOption("captureNames", false);
+        Lowcord.extensions.setOption("captureChannels", false);
+    });
+    await page.evaluate(async () => {
+        const source = new OffscreenCanvas(40, 40); source.getContext("2d").fillRect(0, 0, 40, 40);
+        await Lowcord.chatCapture.preview(source, 1, [], []);
+    });
+    const review = page.getByRole("dialog", { name: "Review screenshot" });
+    await expect(review.getByRole("button", { name: "Hide names" })).toHaveAttribute("aria-pressed", "false");
+    await expect(review.getByRole("button", { name: "Hide avatars" })).toHaveAttribute("aria-pressed", "true");
+    await expect(review.getByRole("button", { name: "Hide channel mentions" })).toHaveAttribute("aria-pressed", "false");
+    await review.getByRole("button", { name: "Hide names" }).click();
+    await expect(review.getByRole("button", { name: "Hide names" })).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Escape");
+    expect(await page.evaluate(() => { try { Lowcord.extensions.setOption("captureReview", "yes"); return "accepted"; } catch { return "rejected"; } })).toBe("rejected");
+});
+
+test("long chat screenshots stitch without a seam at fractional zoom", async ({ page }) => {
+    // Three screenfuls whose CSS heights land between device pixels at 2.19x.
+    const rows = await page.evaluate(async () => {
+        window.__LOWCORD_NATIVE__ = { copyImage: async bytes => { window.stitched = bytes; } };
+        Lowcord.extensions.setOption("captureReview", false);
+        const density = 2.19, width = 100, heights = [333, 333, 334];
+        let offset = 0; const segments = [];
+        for (const height of heights) {
+            const canvas = new OffscreenCanvas(Math.round(width * density), Math.round(height * density));
+            const ctx = canvas.getContext("2d"); ctx.fillStyle = "#3355ff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            segments.push({ offset, height, blob: await canvas.convertToBlob({ type: "image/png" }) }); offset += height;
+        }
+        await Lowcord.chatCapture.finish(segments, width, offset, "rgb(255, 0, 0)");
+        const bitmap = await createImageBitmap(new Blob([window.stitched], { type: "image/png" }));
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height), ctx = canvas.getContext("2d"); ctx.drawImage(bitmap, 0, 0);
+        const column = ctx.getImageData(50, 0, 1, bitmap.height).data, red = [];
+        for (let y = 0; y < bitmap.height; y++) if (column[y * 4] > 128) red.push(y);
+        return red;
+    });
+    // Any row showing the red background would be a seam between screenfuls.
+    expect(rows).toEqual([]);
 });
