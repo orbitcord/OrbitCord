@@ -211,25 +211,62 @@
         return Array.isArray(uploads) ? new Set(uploads.map(upload => upload?.filename ?? upload?.item?.file?.name)) : null;
     }
     // Discord's composer takes pasted files as attachments of the open channel.
-    // It keeps only the first file of a paste, so each file is its own paste.
-    function attachFiles(editor, files, channelId) {
-        if (window.Lowcord.store("SelectedChannelStore")?.getChannelId?.() !== channelId) return false;
+    // It keeps only the first file of a paste, and drops a paste that arrives
+    // while the previous one is still being taken, so each file is its own
+    // paste, sent once the draft has grown.
+    function composerFor(editor, channelId) {
+        if (window.Lowcord.store("SelectedChannelStore")?.getChannelId?.() !== channelId) return null;
         const target = editor?.isConnected ? editor : document.querySelector('[class*="channelTextArea_"] [contenteditable="true"][role="textbox"]');
-        if (!target || target.closest('[role="dialog"]')) return false;
-        for (const file of files) {
-            const data = new DataTransfer();
-            data.items.add(file);
-            target.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+        return target && !target.closest('[role="dialog"]') ? target : null;
+    }
+    const draftSize = channelId => {
+        const uploads = window.Lowcord.store("UploadAttachmentStore")?.getUploads?.(channelId, 0);
+        return Array.isArray(uploads) ? uploads.length : null;
+    };
+    // Pastes one file and waits for the draft to take it; false if it never does.
+    async function pasteFile(target, file, channelId) {
+        const before = draftSize(channelId);
+        const data = new DataTransfer();
+        data.items.add(file);
+        target.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+        // Without a view of the draft, leave the composer a moment instead.
+        if (before === null) { await new Promise(resolve => setTimeout(resolve, 100)); return true; }
+        for (let waited = 0; waited < 1500; waited += 25) {
+            await new Promise(resolve => setTimeout(resolve, 25));
+            if (draftSize(channelId) > before) return true;
         }
-        return true;
+        return false;
+    }
+    // How many of the files are in the draft.
+    async function attachFiles(target, files, channelId) {
+        let attached = 0;
+        for (const file of files) {
+            let taken = false;
+            for (let attempt = 0; attempt < 3 && !taken; attempt++) {
+                if (!target.isConnected || window.Lowcord.store("SelectedChannelStore")?.getChannelId?.() !== channelId) return attached;
+                taken = await pasteFile(target, file, channelId);
+            }
+            if (!taken) return attached;
+            attached++;
+        }
+        return attached;
     }
     // Attaches a finished download to its draft. If the user has moved to
     // another channel, the files wait until they come back to it.
-    function deliver(editor, entry, files, message) {
-        if (attachFiles(editor, files, entry.channelId)) {
-            entry.names = files.map(file => file.name);
+    async function deliver(editor, entry, files, message) {
+        const target = composerFor(editor, entry.channelId);
+        if (target) {
             entry.pending = null;
-            toast(message);
+            // Set first, so a send while the files are still joining drops the link.
+            entry.names = files.map(file => file.name);
+            const attached = await attachFiles(target, files, entry.channelId);
+            if (attached === files.length) {
+                toast(message);
+            } else {
+                // The link stays in the message, since some of the post did not make it.
+                entry.names = null;
+                toast(`Only ${attached} of ${files.length} ${entry.service} files attached, so the link will be sent too.`, true);
+            }
         } else if (window.Lowcord.store("SelectedChannelStore")?.getChannelId?.() !== entry.channelId) {
             entry.pending = { files, message };
             watchChannels();
@@ -328,7 +365,7 @@
                 file = new File([gif], result.name.replace(/\.mp4$/, ".gif"), { type: "image/gif" });
             }
             file = anonymousFile(file);
-            deliver(editor, entry, [file], `${service} ${entry.kind} attached. It will be sent instead of the link.`);
+            await deliver(editor, entry, [file], `${service} ${entry.kind} attached. It will be sent instead of the link.`);
         })().finally(() => { entry.status.end(); entry.done = true; if (!entry.names && !entry.pending) forgetVideo(id); });
         // An entry holds only file names (Discord keeps the files), and lasts
         // until its draft is sent; the bound covers drafts left behind.
@@ -357,7 +394,7 @@
         if (result?.error === "too-many") { toast(`This ${service} post has more than 10 items, so the link will be sent.`, true); return; }
         if (!files.length || files.length !== sent.length) { toast(`Could not get this ${service} post right now, so the link will be sent.`, true); return; }
         const attached = files.map(file => anonymousFile(new File([file.data], file.name, { type: file.type })));
-        deliver(editor, entry, attached, `${service} post attached. It will be sent instead of the link.`);
+        await deliver(editor, entry, attached, `${service} post attached. It will be sent instead of the link.`);
     }
     async function preparePhotos(editor, link, entry, post) {
         const { service } = entry;
@@ -391,7 +428,7 @@
         }
         const attached = files.map(file => anonymousFile(new File([file.data], file.name, { type: file.type })));
         const done = entry.plural ? `${count} ${service} photos` : `${service} ${entry.kind}`;
-        deliver(editor, entry, attached, `${done} attached. ${entry.plural ? "They" : "It"} will be sent instead of the link.`);
+        await deliver(editor, entry, attached, `${done} attached. ${entry.plural ? "They" : "It"} will be sent instead of the link.`);
     }
     const composerVideos = text => {
         const channelId = window.Lowcord.store("SelectedChannelStore")?.getChannelId?.();

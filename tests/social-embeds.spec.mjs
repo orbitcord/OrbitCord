@@ -632,9 +632,16 @@ test.describe('Videos as files', () => {
             editor.contentEditable = 'true'; editor.setAttribute('role', 'textbox'); editor.id = 'composer';
             document.querySelector('.channelTextArea_test').append(editor);
             window.channel = String(Math.floor(Math.random() * 1e9));
-            // Discord's composer takes pasted files as attachments.
+            // Discord's composer takes pasted files as attachments, and drops a
+            // paste that arrives while it is still taking the previous one.
             window.attached = [];
-            editor.addEventListener('paste', event => { for (const file of event.clipboardData.files) attached.push(file.name); });
+            let taking = false;
+            editor.addEventListener('paste', event => {
+                if (!event.clipboardData.files.length || taking) return;
+                taking = true;
+                setTimeout(() => { taking = false; }, 10);
+                for (const file of event.clipboardData.files) attached.push(file.name);
+            });
             // Like Discord's editor, pasted text goes in even when the paste
             // was default-prevented; only a stopped event never reaches it.
             editor.addEventListener('paste', event => {
