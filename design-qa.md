@@ -188,3 +188,15 @@ Verification: 12 of 14 deletion tests passed in the fresh fixture suite run, inc
 - Native/preload build passes. All 37 privacy/updater/release unit checks and all 31 real Electron tests pass. Chromium passed 337/338 on the full parallel run; the unchanged subsecond mass-delete rate-limit clock test passed in isolation, consistent with its earlier QA timing note above.
 - GitHub release verification now includes privacy processor tests and real Electron privacy IPC, download inspection, audio/cache checks on each release platform.
 - Risks: the rate-limit fixture remains timing-sensitive under parallel load. No live messages were deleted for verification. Generated design screenshots in output/privacy remain local.
+
+# Release 0.1.30 audio-readiness check — 2026-11-03
+
+The hosted Mac audio smoke test failed twice at its fixed 500 ms wait: the
+AudioContext had progressed 0.160 s and 0.123 s, below its required 0.200 s.
+The other 12 Mac release checks passed each time, and Windows passed. The test
+was checking device startup speed as well as audio operation. It now waits up
+to five seconds for the same >0.200 s audio-clock progress, retaining the sandboxed
+network/audio-process assertions and closing the context in finally. Three local
+repetitions pass. Application audio behavior is unchanged; a stalled audio clock
+still fails. The social attachment fix passed 106 Chromium, six Electron, and
+17 updater/release checks before the release build.

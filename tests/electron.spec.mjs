@@ -23,9 +23,15 @@ test('audio runs in the main process on macOS and keeps the sandboxed network he
             await navigator.mediaDevices.enumerateDevices();
             const context = new AudioContext(), oscillator = context.createOscillator(), gain = context.createGain();
             gain.gain.value = 0; oscillator.connect(gain).connect(context.destination); oscillator.start();
-            await context.resume(); await new Promise(resolve => setTimeout(resolve, 500));
-            const time = context.currentTime; await context.close();
-            return time;
+            try {
+                await context.resume();
+                // Hosted Macs can spend most of the first 500 ms starting the
+                // audio device. Assert audio progress, not device startup speed.
+                const deadline = performance.now() + 5000;
+                while (context.currentTime <= .2 && performance.now() < deadline)
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                return context.currentTime;
+            } finally { await context.close(); }
         });
         expect(advanced).toBeGreaterThan(.2);
         const services = await app.evaluate(({ app }) => app.getAppMetrics().map(metric => metric.serviceName).filter(Boolean));
