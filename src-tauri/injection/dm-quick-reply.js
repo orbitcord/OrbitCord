@@ -308,15 +308,14 @@
     }
 
     // ----- Emoji ----------------------------------------------------------------
-    // Discord's own emoji picker, opened beside the card. Its reaction picker
-    // is a plain wrapper around the full picker; calling it yields the picker
-    // component, which is rendered here for chat messages instead.
+    // Discord's own emoji picker, opened beside the card and rendered for chat
+    // messages. Only the picker itself gives hasTabWrapper a default; the
+    // expression picker passes it down, and the wrappers around the picker use
+    // hooks, so they can't be called to reach it.
     const source = value => { try { return Function.prototype.toString.call(value); } catch { return ""; } };
     function emojiPicker() {
-        const wrapper = lookup("reactionPicker", value => typeof value === "function" && source(value).length < 600
-            && /pickerIntention:\w+\.EmojiIntention\.REACTION/.test(source(value)));
-        let component;
-        try { component = wrapper?.({})?.type; } catch {}
+        const component = lookup("emojiPicker", value => typeof value?.type === "function"
+            && source(value.type).includes("pickerIntention") && /\bhasTabWrapper:\s*\w+\s*=/.test(source(value.type)));
         const intents = lookup("emojiIntents", value => value?.EmojiIntention?.CHAT !== undefined)?.EmojiIntention;
         return component && intents ? { component, intent: intents.CHAT } : null;
     }

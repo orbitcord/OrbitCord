@@ -25,6 +25,11 @@
         current.waiters.add(resume);
     });
     let job;
+    // Successful full history checks only, scoped to account/channel and this
+    // app session. No message content is retained. Reaction jobs bypass these
+    // because a user can add a reaction to an arbitrarily old message.
+    const verifiedHistory = new Map();
+    const historyKey = (current, channelId) => `${current.me}:${channelId}`;
 
     // ----- Scope --------------------------------------------------------------
     function userName(id) {
@@ -93,11 +98,17 @@
     // History is authoritative for messages that haven't reached search yet.
     // Use the same REST client and back off on rate limits, including global ones.
     async function historyRequest(current, url, query) {
+        const lane = laneOf(current, `history:${url}`);
         for (let attempt = 0; ; attempt++) {
-            await ready(current, { readyAt: 0 });
+            await ready(current, lane);
             if (current.stopped) return null;
             try {
                 const response = await window.Lowcord.RestAPI.get({ url, query, retries: 0 });
+                const remaining = header(response, "x-ratelimit-remaining"), reset = header(response, "x-ratelimit-reset-after");
+                // Read at Discord's reported quota instead of adding a fixed
+                // delay to every history page. Unknown quotas retain pacing.
+                lane.readyAt = performance.now() + (remaining !== null && reset !== null
+                    ? remaining <= 0 ? reset * 1000 : 0 : pacing.search);
                 return response.body;
             } catch (error) {
                 if (error?.status === 429) {
@@ -122,6 +133,9 @@
     }
 
     async function recentHistory(current, newest, seen) {
+        current.phase = "history";
+        current.remaining = 0;
+        render();
         const channels = new Set([current.target.channelId, ...newest.keys()]);
         if (current.scope === "server") {
             const guild = current.target.guildId;
@@ -135,16 +149,29 @@
         }
         current.remaining = 0;
         const queue = [...channels];
+        current.historyTotal = queue.length;
+        render();
         await inParallel(queue, async () => {
             while (queue.length && !current.stopped) {
-                const channelId = queue.shift(), boundary = newest.get(channelId);
-                let before = current.before;
+                const channelId = queue.shift(), key = historyKey(current, channelId);
+                const checkpoint = verifiedHistory.get(key);
+                const boundary = current.reactions ? null : checkpoint ?? newest.get(channelId);
+                let before = current.before, checked = true, hadMessages = false;
                 while (!current.stopped) {
                     const page = await historyRequest(current, `/channels/${channelId}/messages`, { limit: 100, before });
-                    if (page === null || current.stopped) break;
+                    if (page === null || current.stopped) { checked = false; break; }
                     if (!Array.isArray(page)) throw new Error("Unexpected channel history response");
                     if (!page.length) break;
+                    hadMessages = true;
+                    current.historyScanned += page.length;
+                    render();
+                    if (current.reactions) {
+                        current.scanningReactions = true;
+                        render();
+                        await removeReactions(current, page.filter(message => BigInt(message.id) < BigInt(current.before)));
+                    }
                     const fresh = page.filter(message => message.author?.id === current.me
+                        && BigInt(message.id) < BigInt(current.before)
                         && (!boundary || BigInt(message.id) > BigInt(boundary)) && !seen.has(message.id));
                     for (const message of fresh) seen.add(message.id);
                     await deleteAll(current, fresh);
@@ -154,8 +181,17 @@
                     if (page.length < 100 || (boundary && BigInt(oldest) <= BigInt(boundary))) break;
                     if (before && BigInt(oldest) >= BigInt(before)) throw new Error("Channel history did not advance");
                     before = oldest;
-                    await wait(current, pacing.search);
                 }
+                // A search boundary only proves the recent tail was checked.
+                // Cache only full walks (or a walk back to a previous full check).
+                if (checked && hadMessages && !current.stopped && !current.failedChannels.has(channelId)
+                    && (!boundary || checkpoint) && !current.reactions) {
+                    verifiedHistory.delete(key);
+                    verifiedHistory.set(key, idBefore(current.before));
+                    if (verifiedHistory.size > 1000) verifiedHistory.delete(verifiedHistory.keys().next().value);
+                }
+                if (checked && !current.stopped) current.historyDone++;
+                render();
             }
         });
     }
@@ -177,18 +213,20 @@
     async function ready(current, lane) {
         for (;;) {
             const until = Math.max(lane.readyAt, current.pausedUntil) - performance.now();
+            // Never use another account's session to continue this job.
+            if (store("UserStore")?.getCurrentUser?.()?.id !== current.me) current.stopped = true;
             if (until <= 0 || current.stopped) return;
             await wait(current, until);
         }
     }
     // true when gone, false when it can't be deleted, null when stopped.
-    async function remove(current, message) {
+    async function remove(current, message, reactionUrl) {
         const lane = laneOf(current, message.channel_id);
         for (let attempt = 0; ; attempt++) {
             await ready(current, lane);
             if (current.stopped) return null;
             try {
-                const response = await window.Lowcord.RestAPI.del({ url: `/channels/${message.channel_id}/messages/${message.id}`, retries: 0 });
+                const response = await window.Lowcord.RestAPI.del({ url: reactionUrl ?? `/channels/${message.channel_id}/messages/${message.id}`, retries: 0 });
                 const remaining = header(response, "x-ratelimit-remaining"), resetAfter = header(response, "x-ratelimit-reset-after");
                 if (remaining !== null && resetAfter !== null) {
                     lane.gap = 0;
@@ -218,18 +256,43 @@
         }
     }
 
-    async function deleteOne(current, message) {
+    async function deleteOne(current, message, reactionUrl) {
         if (current.stopped) return;
         let gone;
-        try { gone = await remove(current, message); current.failures = 0; }
+        try { gone = await remove(current, message, reactionUrl); current.failures = 0; }
         catch (error) {
-            console.warn("[lowcord] Mass delete:", error);
+            console.warn("[lowcord] Bulk delete:", error);
             if (++current.failures >= 5) throw error;
             gone = false;
         }
         if (gone === null) return;
-        if (gone) current.deleted++; else current.skipped++;
-        if (current.remaining > 0) current.remaining--;
+        if (!gone) {
+            current.failedChannels.add(message.channel_id);
+            verifiedHistory.delete(historyKey(current, message.channel_id));
+        }
+        if (reactionUrl) {
+            if (gone) current.reactionsRemoved++; else current.reactionsSkipped++;
+        } else {
+            if (gone) current.deleted++; else current.skipped++;
+            if (current.remaining > 0) current.remaining--;
+        }
+        render();
+    }
+
+    async function removeReactions(current, messages) {
+        for (const message of messages) {
+            for (const reaction of message.reactions ?? []) {
+                if (current.stopped) return;
+                // Discord's documented own-reaction endpoint handles standard
+                // reactions. Never claim unsupported super reactions were removed.
+                if (reaction.me_burst) current.reactionsSkipped++;
+                if (!reaction.me) continue;
+                const emoji = reaction.emoji;
+                if (!emoji?.name) { current.reactionsSkipped++; continue; }
+                const encoded = encodeURIComponent(emoji.id ? `${emoji.name}:${emoji.id}` : emoji.name);
+                await deleteOne(current, message, `/channels/${message.channel_id}/messages/${message.id}/reactions/${encoded}/@me`);
+            }
+        }
         render();
     }
 
@@ -308,6 +371,7 @@
                 const body = await searchPage(current, maxId);
                 if (!body) break;
                 if (Number.isFinite(body.total_results)) current.remaining = body.total_results;
+                render();
                 // Each result is a list: the hit and, on older API versions, context.
                 const page = (body.messages ?? []).flat()
                     .filter(message => message?.author?.id === current.me && message.id)
@@ -320,7 +384,7 @@
                 // Search may still return a deleted message. Move the cursor
                 // past it, and never queue the same message twice.
                 const next = idBefore(page[page.length - 1].id);
-                if (!fresh.length && next === maxId) break;
+                if (BigInt(next) >= BigInt(maxId)) throw new Error("Message search did not advance");
                 maxId = next;
                 await deletions.add(fresh);
                 for (const message of fresh) seen.add(message.id);
@@ -333,71 +397,54 @@
     }
 
     // ----- Status bar ---------------------------------------------------------
-    function positionBar(node) {
-        let composer;
-        const place = () => {
-            const rect = composer?.getBoundingClientRect();
-            node.style.left = `${rect?.width ? rect.left + rect.width / 2 : innerWidth / 2}px`;
-            node.style.bottom = `${rect?.width ? Math.max(16, innerHeight - rect.top + 16) : 96}px`;
-            node.style.maxWidth = `${Math.max(0, Math.min(innerWidth - 32, rect?.width || innerWidth - 32))}px`;
-        };
-        const resize = new ResizeObserver(place);
-        const locate = () => {
-            if (composer?.isConnected) return;
-            resize.disconnect();
-            composer = document.querySelector('[class*="channelTextArea_"]');
-            if (composer) resize.observe(composer);
-            place();
-        };
-        // Follow channel changes only while a deletion runs. Message mutations
-        // require no layout reads while the same composer remains mounted.
-        const navigation = new MutationObserver(locate);
-        navigation.observe(document.body, { childList: true, subtree: true });
-        window.addEventListener("resize", place);
-        locate();
-        return () => { resize.disconnect(); navigation.disconnect(); window.removeEventListener("resize", place); };
-    }
     function render() {
         if (!job) return;
-        const { bar, deleted, skipped, remaining, indexing, stopped, scopeLabel } = job;
-        bar.title.textContent = stopped ? "Stopping…" : indexing && !deleted ? "Discord is preparing search…"
-            : "Deleting messages";
-        const left = remaining > 0 ? `About ${remaining.toLocaleString()} left` : "Looking for more";
-        bar.detail.textContent = [scopeLabel, `${deleted.toLocaleString()} deleted`, left, skipped ? `${skipped.toLocaleString()} cannot be deleted` : ""].filter(Boolean).join(" · ");
-        bar.detail.title = bar.detail.textContent;
+        const { bar, deleted, skipped, remaining, indexing, stopped } = job;
+        const reactions = job.reactions && `${job.reactionsRemoved.toLocaleString()} reaction${job.reactionsRemoved === 1 ? "" : "s"}`;
+        bar.count.textContent = bar.count.title = [stopped && "Stopping…", `${deleted.toLocaleString()} deleted`, reactions, skipped ? `${skipped.toLocaleString()} could not be deleted` : ""].filter(Boolean).join(" · ");
+        const phase = indexing ? "Preparing search…" : job.scanningReactions ? "Removing reactions…"
+            : job.phase === "history" ? "Checking message history" : "Searching messages…";
+        const detail = job.phase === "history"
+            ? `${job.historyDone} of ${job.historyTotal} chats checked · ${job.historyScanned.toLocaleString()} messages scanned`
+            : remaining > 0 ? `About ${remaining.toLocaleString()} messages left` : "";
+        bar.detail.textContent = bar.detail.title = [job.scopeText, phase, detail].filter(Boolean).join(" · ");
         bar.stopButton.disabled = stopped;
     }
-    async function start(target, scope) {
+    async function start(target, scope, options = {}) {
         if (job) return job.promise;
         const me = store("UserStore")?.getCurrentUser?.()?.id;
         if (!me || !window.Lowcord.RestAPI) { toast("Couldn't start deleting. Try again in a moment.", true); return; }
-        const title = ui("span", { className: "lowcord-toast-title" });
-        const detail = ui("span", { className: "lowcord-toast-detail", "aria-live": "polite" });
-        const stopButton = ui("button", { type: "button", className: "lowcord-button", onClick: stop }, "Stop");
-        const node = ui("div", { className: "lowcord-purge-bar", role: "status", "aria-label": "Deleting your messages" },
-            ui("span", { className: "lowcord-purge-spinner", "aria-hidden": "true" }),
-            ui("span", { className: "lowcord-toast-copy" }, title, detail), stopButton);
+        const count = ui("span", { className: "lowcord-toast-title lowcord-purge-count" });
+        const detail = ui("span", { className: "lowcord-toast-detail" });
+        const stopButton = ui("button", { type: "button", className: "lowcord-toast-action", onClick: stop }, "Stop");
         const scopeLabel = scope === "server" ? target.guildName : target.channelName;
-        const current = job = { target, scope, me, scopeLabel, deleted: 0, skipped: 0, remaining: 0, lanes: new Map(), pausedUntil: 0, failures: 0, unchecked: 0, waiters: new Set(),
+        const node = ui("div", { className: "lowcord-purge-bar", role: "status", "aria-label": options.reactions ? "Deleting your messages and removing your reactions" : "Deleting your messages" },
+            extensions.toastBadge("progress"), ui("span", { className: "lowcord-toast-copy" }, count, ui("span", { className: "lowcord-purge-more" }, detail)),
+            ui("span", { className: "lowcord-purge-stop" }, ui("div", {}, stopButton)));
+        const current = job = { target, scope, me, scopeLabel, scopeText: scope === "server" ? `${scopeLabel} · All channels` : scopeLabel, reactions: options.reactions === true, reactionsRemoved: 0, reactionsSkipped: 0, deleted: 0, skipped: 0, remaining: 0, phase: "search", historyTotal: 0, historyDone: 0, historyScanned: 0, failedChannels: new Set(), lanes: new Map(), pausedUntil: 0, failures: 0, unchecked: 0, waiters: new Set(),
             // A fixed upper bound keeps messages sent during the job out of it.
             before: ((BigInt(Date.now()) - 1420070400000n) << 22n).toString(),
-            stopped: false, indexing: false, bar: { node, title, detail, stopButton } };
-        document.body.append(node);
-        const unposition = positionBar(node);
+            stopped: false, indexing: false, bar: { node, count, detail, stopButton } };
+        extensions.mountComposerPopup(node);
         render();
         current.promise = (async () => {
             let failure;
             try { await run(current); } catch (error) { failure = error; }
-            unposition();
             node.remove();
             if (job === current) job = undefined;
             const count = `${current.deleted.toLocaleString()} message${current.deleted === 1 ? "" : "s"}`;
-            if (failure) toast(`Deleting stopped after ${count} because Discord did not respond. Try again later to continue.`, true);
+            if (current.reactions) {
+                const summary = `Deleted ${count} and removed ${current.reactionsRemoved.toLocaleString()} reaction${current.reactionsRemoved === 1 ? "" : "s"}.`;
+                const problem = failure ? " Discord did not respond; try again later."
+                    : current.stopped ? " Cleanup stopped." : current.unchecked ? " Some channel histories could not be checked." : "";
+                const skipped = current.skipped + current.reactionsSkipped;
+                toast(summary + problem + (skipped ? ` ${skipped.toLocaleString()} messages or reactions could not be removed.` : ""), Boolean(failure || current.unchecked));
+            } else if (failure) toast(`Deleting stopped after ${count} because Discord did not respond. Try again later to continue.`, true);
             else if (current.stopped) toast(`Stopped after deleting ${count}.`);
             else if (current.unchecked) toast(`Deleted ${count}. Some channel histories could not be checked. Try again later to continue.`, true);
             else if (current.skipped) toast(`Deleted ${count}. ${current.skipped.toLocaleString()} could not be deleted, such as system messages or archived threads.`);
             else toast(current.deleted ? `Deleted ${count}.` : `No messages from you were found in ${scopeLabel}.`);
-            return { deleted: current.deleted, skipped: current.skipped, stopped: current.stopped, failed: Boolean(failure), incomplete: current.unchecked > 0 };
+            return { deleted: current.deleted, skipped: current.skipped, reactionsRemoved: current.reactionsRemoved, reactionsSkipped: current.reactionsSkipped, stopped: current.stopped, failed: Boolean(failure), incomplete: current.unchecked > 0 };
         })();
         return current.promise;
     }
@@ -418,25 +465,35 @@
         const option = (value, label, hint) => ui("label", { className: "lowcord-purge-option" },
             ui("input", { type: "radio", name: "lowcord-purge-scope", value, onChange: () => { scope = value; } }),
             ui("span", {}, ui("strong", {}, label), ui("span", {}, hint)));
-        const options = target.guildId && ui("div", { className: "lowcord-purge-options", role: "radiogroup", "aria-label": "Where to delete" },
-            option("channel", `Only in ${target.channelName}`, "This does not include threads."),
-            option("server", `Everywhere in ${target.guildName}`, "Every channel and thread you can still open."));
+        const options = target.guildId && ui("div", { className: "lowcord-purge-options", role: "radiogroup", "aria-label": "Delete from" },
+            option("channel", target.channelName, "This channel, not its threads"),
+            option("server", `All of ${target.guildName}`, "Channels and threads you can open"));
         options?.querySelector("input").setAttribute("checked", "");
-        const lead = target.guildId ? "Delete all your messages in the selected channel or server, including older messages."
-            : `Delete all messages you sent to ${target.channelName}, including older messages. Messages from other people stay.`;
+        // The caveats only apply once reactions are part of the job.
+        const reactionNote = ui("p", { id: "lowcord-purge-reaction-note", className: "lowcord-purge-note", hidden: true }, "Takes longer. Archived threads may be missed. Super reactions stay.");
+        const reactions = ui("input", { type: "checkbox", "aria-describedby": "lowcord-purge-reaction-note", onChange: () => { reactionNote.hidden = !reactions.checked; } });
         const confirmButton = ui("button", { type: "button", className: "lowcord-button lowcord-button-danger", onClick: () => {
-            close(); start(target, scope);
-        } }, "Delete my messages");
+            close(); start(target, scope, { reactions: reactions.checked });
+        } }, "Delete");
         const cancel = ui("button", { type: "button", className: "lowcord-button", onClick: () => close() }, "Cancel");
         const dialog = ui("div", { className: "lowcord-voice lowcord-purge", role: "dialog", "aria-modal": "true", "aria-labelledby": "lowcord-purge-title" },
             ui("h2", { id: "lowcord-purge-title" }, "Delete your messages?"),
-            ui("p", { className: "lowcord-voice-status" }, lead),
-            options,
-            ui("p", { className: "lowcord-voice-status" }, "You cannot undo this. Deleting a long history can take time because Discord limits requests. You can keep using Discord while it runs."),
+            options || ui("p", { className: "lowcord-voice-status" }, `Delete your messages in ${target.channelName}. Other people's messages stay.`),
+            ui("div", { className: "lowcord-purge-reactions" },
+                ui("label", {}, reactions, "Also remove my reactions"), reactionNote),
             ui("div", { className: "lowcord-dialog-actions" }, cancel, confirmButton));
         const backdrop = ui("div", { className: "lowcord-voice-backdrop lowcord-purge-backdrop", onMousedown: event => { if (event.target === backdrop) close(); } }, dialog);
-        const onKey = event => { if (event.key === "Escape") { event.stopPropagation(); close(); } };
-        function close() { window.removeEventListener("keydown", onKey, true); backdrop.remove(); }
+        const previousFocus = document.activeElement;
+        const onKey = event => {
+            if (event.key === "Escape") { event.stopPropagation(); close(); }
+            if (event.key === "Tab") {
+                const controls = [...dialog.querySelectorAll('input, button')].filter(node => node.type !== "radio" || node.checked);
+                const index = controls.indexOf(document.activeElement);
+                if (event.shiftKey && index <= 0) { event.preventDefault(); controls.at(-1).focus(); }
+                else if (!event.shiftKey && index === controls.length - 1) { event.preventDefault(); controls[0].focus(); }
+            }
+        };
+        function close() { window.removeEventListener("keydown", onKey, true); backdrop.remove(); if (previousFocus?.isConnected) previousFocus.focus(); }
         window.addEventListener("keydown", onKey, true);
         document.body.append(backdrop);
         cancel.focus();

@@ -19,7 +19,7 @@
         { id: "pictureInPicture", title: "Picture-in-picture", description: "Hover a chat video and use the pop-out button, or press Alt+P, to watch in a floating window." },
         { id: "downloadVideos", title: "Download linked videos", description: "Right-click a linked or embedded video to save its media file." },
         { id: "copyMediaLink", title: "Copy media link", description: "Right-click a photo or video to copy its link." },
-        { id: "massDelete", title: "Bulk delete", description: "Delete your messages from a DM, channel or server with the trash button." },
+        { id: "massDelete", title: "Bulk delete", description: "Delete your messages from a DM, channel or server. Optionally remove your reactions too." },
         { id: "dmQuickReply", title: "DM quick reply", description: "Hover over a DM to read and reply without switching chats." },
         { id: "quickReply", title: "Quick reply", description: "In an empty message box, press Shift with the up or down arrow to choose a message to reply to. Replaces the edit shortcut." },
         { id: "clickReply", title: "Click to reply", description: "Click a message to reply. Requires chat bubbles." },
@@ -41,7 +41,8 @@
     function read() {
         let saved = {};
         try { saved = JSON.parse(storage.getItem(storageKey)) ?? {}; } catch {}
-        return Object.fromEntries(catalog.map(({ id, defaultEnabled = true }) => [id, typeof saved[id] === "boolean" ? saved[id] : defaultEnabled]));
+        return { ...Object.fromEntries(catalog.map(({ id, defaultEnabled = true }) => [id, typeof saved[id] === "boolean" ? saved[id] : defaultEnabled])),
+            compressVideosWithNitro: saved.compressVideosWithNitro === true };
     }
     let state = read();
     const optionsKey = "lowcord.embed-options";
@@ -84,12 +85,15 @@
     }
     window.addEventListener(changeEvent, syncEmbedPreferences);
     syncEmbedPreferences();
-    // Unknown account/subscription state must not trigger compression. Read the
-    // real account field, independently of Fake Nitro's emoji/sticker helpers.
-    const compressionEligible = () => window.Lowcord.store("UserStore")?.getCurrentUser?.()?.premiumType === 0;
-    const enabled = id => state[id] === true && (id !== "compressVideos" || compressionEligible());
+    // Discord leaves premiumType empty or 0 without Nitro, so only 1-3 mean
+    // Nitro. Read the real account field, independently of Fake Nitro's helpers.
+    // Compression is off with Nitro until chosen, in a setting of its own so an
+    // earlier saved choice can't turn it on.
+    const currentUser = () => window.Lowcord.store("UserStore")?.getCurrentUser?.();
+    const compressionKey = () => currentUser()?.premiumType > 0 ? "compressVideosWithNitro" : "compressVideos";
+    const enabled = id => id === "compressVideos" ? Boolean(currentUser()) && state[compressionKey()] === true : state[id] === true;
     function set(id, value) {
-        const next = { ...state, [id]: Boolean(value) };
+        const next = { ...state, [id === "compressVideos" ? compressionKey() : id]: Boolean(value) };
         try { storage.setItem(storageKey, JSON.stringify(next)); }
         catch { throw new Error("Couldn't save this setting. Try again."); }
         state = next;
@@ -1302,6 +1306,59 @@
     const micPath = "M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Zm7 9a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V20H8a1 1 0 1 0 0 2h8a1 1 0 1 0 0-2h-3v-2.08A7 7 0 0 0 19 11Z";
     const waveformPath = "M3 9a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-3 0v-3A1.5 1.5 0 0 1 3 9Zm4.5-4A1.5 1.5 0 0 1 9 6.5v11a1.5 1.5 0 0 1-3 0v-11A1.5 1.5 0 0 1 7.5 5ZM12 2a1.5 1.5 0 0 1 1.5 1.5v17a1.5 1.5 0 0 1-3 0v-17A1.5 1.5 0 0 1 12 2Zm4.5 4A1.5 1.5 0 0 1 18 7.5v9a1.5 1.5 0 0 1-3 0v-9A1.5 1.5 0 0 1 16.5 6ZM21 9a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-3 0v-3A1.5 1.5 0 0 1 21 9Z";
 
+    // A shared right edge for every transient composer surface. Keep layout
+    // observers alive only while a surface is open, never poll Discord at idle.
+    let composerPopups, popupComposer, popupResize, stopPopupDom;
+    function positionComposerPopups() {
+        const rect = popupComposer?.getBoundingClientRect();
+        const visible = rect?.width && rect.height && rect.bottom > 0 && rect.top < innerHeight;
+        const right = visible ? Math.min(innerWidth - 8, rect.right) : innerWidth - 16;
+        const left = visible ? Math.max(8, rect.left) : 16;
+        composerPopups.style.right = `${innerWidth - right}px`;
+        const below = visible && rect.top < 96;
+        composerPopups.style.top = below ? `${rect.bottom + 12}px` : "auto";
+        composerPopups.style.bottom = below ? "auto" : `${visible ? innerHeight - rect.top + 12 : 96}px`;
+        composerPopups.style.maxWidth = `${Math.max(0, right - left)}px`;
+        composerPopups.style.maxHeight = `${Math.max(0, (below ? innerHeight - rect.bottom - 12 : visible ? rect.top - 12 : innerHeight - 96) - 8)}px`;
+    }
+    function locatePopupComposer() {
+        const focused = document.activeElement?.closest('[class*="channelTextArea_"]');
+        const next = focused ?? [...document.querySelectorAll('[class*="channelTextArea_"]')]
+            .reverse().find(node => node.getClientRects().length && node.getBoundingClientRect().height);
+        if (next === popupComposer && popupComposer?.isConnected) return;
+        popupResize.disconnect();
+        popupComposer = next;
+        if (next) popupResize.observe(next);
+        // Parent resizing also catches sidebars opening without a window resize.
+        if (next?.parentElement) popupResize.observe(next.parentElement);
+        positionComposerPopups();
+    }
+    function mountComposerPopup(node) {
+        if (!composerPopups) {
+            composerPopups = ui("div", { className: "lowcord-composer-popups" });
+            document.body.append(composerPopups);
+            popupResize = new ResizeObserver(positionComposerPopups);
+            stopPopupDom = window.Lowcord.onDomChange(records => {
+                if (!popupComposer?.isConnected || window.Lowcord.domChanged(records, '[class*="channelTextArea_"]')) locatePopupComposer();
+            });
+            window.addEventListener("resize", positionComposerPopups);
+            window.addEventListener("scroll", positionComposerPopups, true);
+            window.addEventListener("focusin", locatePopupComposer);
+            const children = new MutationObserver(() => {
+                if (composerPopups.childElementCount) return;
+                children.disconnect(); popupResize.disconnect(); stopPopupDom();
+                window.removeEventListener("resize", positionComposerPopups);
+                window.removeEventListener("scroll", positionComposerPopups, true);
+                window.removeEventListener("focusin", locatePopupComposer);
+                composerPopups.remove(); composerPopups = popupComposer = undefined;
+            });
+            children.observe(composerPopups, { childList: true });
+        }
+        composerPopups.append(node);
+        locatePopupComposer();
+        return node;
+    }
+
     // ----- Toasts -------------------------------------------------------------
     // A headline and, quieter below it, what happens next. A message written
     // as one string splits at its first sentence, or at ", so ...".
@@ -1316,6 +1373,7 @@
         progress: [["circle", { cx: 12, cy: 12, r: 9, class: "lowcord-toast-track" }], ["path", { d: "M21 12a9 9 0 0 0-9-9", class: "lowcord-toast-arc" }]],
         success: [["path", { d: "M5.5 12.5 10 17l8.5-9.5", class: "lowcord-toast-check" }]],
         failure: [["path", { d: "M12 7v6.2M12 17.2v.1" }]],
+        capture: [["path", { d: "M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4" }]],
     };
     function toastIcon(tone) {
         const svg = document.createElementNS(svgNs, "svg");
@@ -1328,13 +1386,14 @@
         }
         return svg;
     }
+    const toastBadge = tone => ui("span", { className: "lowcord-toast-badge", "aria-hidden": "true" }, toastIcon(tone));
     function buildToast(tone, title, detail, action) {
         const copy = ui("span", { className: "lowcord-toast-copy" }, ui("span", { className: "lowcord-toast-title" }, title));
         if (detail) copy.append(ui("span", { className: "lowcord-toast-detail" }, detail));
         const button = action && ui("button", { type: "button", className: "lowcord-toast-action",
             onClick: () => { dismissToast(toast); action.onClick(); } }, action.label);
         const toast = ui("div", { className: `lowcord-toast lowcord-toast-${tone}`, role: "status" },
-            ui("span", { className: "lowcord-toast-badge", "aria-hidden": "true" }, toastIcon(tone)), copy, button);
+            toastBadge(tone), copy, button);
         return toast;
     }
     // One toast at a time. A toast that replaces another settles into its
@@ -1343,7 +1402,7 @@
         const previous = document.querySelectorAll(".lowcord-toast");
         previous.forEach(old => old.remove());
         if (previous.length) toast.classList.add("lowcord-toast-swap");
-        document.body.append(toast);
+        mountComposerPopup(toast);
     }
     function dismissToast(toast) {
         if (!toast?.isConnected) return;
@@ -1692,13 +1751,16 @@
             onClick: () => { closeActions(true); action.run(); } }, svg(action.path), ui("span", {}, action.label)));
         const node = ui("div", { className: "lowcord-actions", role: "menu", "aria-label": "Extensions" }, ...items);
         document.body.append(node);
-        // Above the button, or below it without room, centred on it where the
-        // window allows; the animation grows from the button.
+        // Centred on its chevron, but clear of the whole message bar around it,
+        // at the same 12px as the status cards.
         const box = button.getBoundingClientRect(), width = node.offsetWidth;
+        const bar = (button.closest('[class*="channelTextArea_"]') ?? button).getBoundingClientRect();
         const left = Math.max(8, Math.min(box.left + box.width / 2 - width / 2, innerWidth - width - 8));
-        const below = box.top - node.offsetHeight - 6 < 8;
+        const above = bar.top - 12 - 8, belowSpace = innerHeight - bar.bottom - 12 - 8;
+        const below = node.offsetHeight > above && belowSpace > above;
+        node.style.maxHeight = `${Math.max(0, below ? belowSpace : above)}px`;
         node.style.left = `${left}px`;
-        if (below) node.style.top = `${box.bottom + 6}px`; else node.style.bottom = `${innerHeight - box.top + 6}px`;
+        if (below) node.style.top = `${bar.bottom + 12}px`; else node.style.bottom = `${innerHeight - bar.top + 12}px`;
         node.toggleAttribute("data-below", below);
         node.style.setProperty("--lowcord-origin", `${box.left + box.width / 2 - left}px`);
         button.setAttribute("aria-expanded", "true");
@@ -1748,14 +1810,14 @@
     window.Lowcord.onDomChange(fixMusicFrames);
     window.addEventListener(changeEvent, fixMusicFrames);
     window.Lowcord.extensions = { catalog, enabled, set, setOption, changeEvent,
-        get state() { return { ...state, compressVideos: enabled("compressVideos") }; }, get options() { return { ...options }; },
-        cleanContent, socialContent, anonymous, openRecorder, toast, progress, ui, addComposerAction };
+        get state() { const { compressVideosWithNitro, ...shown } = state; return { ...shown, compressVideos: enabled("compressVideos") }; }, get options() { return { ...options }; },
+        cleanContent, socialContent, anonymous, openRecorder, toast, toastBadge, progress, ui, mountComposerPopup, addComposerAction };
     window.Lowcord.waitForStore("UserStore", store => {
-        let eligible;
+        let compressing;
         const update = () => {
-            const next = compressionEligible();
-            if (next === eligible) return;
-            eligible = next;
+            const next = enabled("compressVideos");
+            if (next === compressing) return;
+            compressing = next;
             window.dispatchEvent(new Event(changeEvent));
         };
         store.addChangeListener?.(update);

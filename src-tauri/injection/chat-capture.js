@@ -48,13 +48,12 @@
         bar.capture.disabled = !end;
         place();
     }
-    // Centred over the chat, clear of Discord's channel header.
+    // While capturing, keep the controls over the header and out of the image.
     function place() {
-        const scroller = session?.scroller;
-        if (!scroller?.isConnected) return;
-        const rect = scroller.getBoundingClientRect();
-        session.bar.node.style.left = `${rect.left + rect.width / 2}px`;
-        session.bar.node.style.top = `${rect.top + 12}px`;
+        if (!session?.capturing || !session.scroller?.isConnected) return;
+        const rect = session.scroller.getBoundingClientRect();
+        session.bar.node.style.right = `${Math.max(8, innerWidth - rect.right)}px`;
+        session.bar.node.style.top = `${Math.max(4, rect.top - session.bar.node.offsetHeight - 4)}px`;
     }
     function rowAt(event) {
         const row = event.target instanceof Element ? event.target.closest(rowSelector) : null;
@@ -111,9 +110,9 @@
         const title = ui("span", { className: "lowcord-toast-title" });
         const detail = ui("span", { className: "lowcord-toast-detail" });
         const node = ui("div", { className: "lowcord-capture-bar", role: "dialog", "aria-label": "Chat screenshot" },
-            ui("span", { className: "lowcord-toast-copy" }, title, detail), cancel, capture);
+            extensions.toastBadge("capture"), ui("span", { className: "lowcord-toast-copy" }, title, detail), cancel, capture);
         session = { scroller, start: null, end: null, marked: [], bar: { node, title, detail, capture, cancel } };
-        document.body.append(node);
+        extensions.mountComposerPopup(node);
         scroller.setAttribute("data-lowcord-capture-picking", "true");
         for (const type of pointerEvents) window.addEventListener(type, onPointer, true);
         window.addEventListener("keydown", onKey, true);
@@ -182,7 +181,8 @@
         document.documentElement.setAttribute("data-lowcord-capturing", "true");
         // Move the bar onto the channel header, out of the picture.
         const bar = current.bar.node;
-        bar.style.top = `${Math.max(4, scroller.getBoundingClientRect().top - bar.offsetHeight - 4)}px`;
+        document.body.append(bar);
+        place();
         await frame(); await frame();
         // Put the reader back where they were afterwards.
         const view = scroller.getBoundingClientRect();

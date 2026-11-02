@@ -11,37 +11,16 @@
         : /^video\//i.test(file.type) || /\.(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg|ts|mts|m2ts|wmv|flv|ogv)$/i.test(file.name) ? 'video'
         : /^image\/(?:png|apng|jpeg|webp|avif|bmp|tiff)$/i.test(file.type) || /\.(png|apng|jpe?g|webp|avif|bmp|tiff?)$/i.test(file.name) ? 'image' : null;
     function status(batch) {
-        const { ui } = extensions();
-        const title = ui('strong', {}, 'Preparing media…');
-        const detail = ui('span', {}, `Under ${batch.limit / 1_000_000} MB`);
-        // Lucide circle + loader-circle (ISC); geometry kept from the library.
-        const ring = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        for (const [key, value] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
-            'stroke-width': '4.5', 'stroke-linecap': 'round', 'aria-hidden': 'true', class: 'lowcord-compression-ring' })) ring.setAttribute(key, value);
-        const track = document.createElementNS(ring.namespaceURI, 'circle');
-        for (const [key, value] of Object.entries({ cx: '12', cy: '12', r: '10', class: 'lowcord-compression-track' })) track.setAttribute(key, value);
-        const arc = document.createElementNS(ring.namespaceURI, 'path');
-        arc.setAttribute('d', 'M21 12a9 9 0 1 1-6.219-8.56');
-        ring.append(track, arc);
-        const button = ui('button', { type: 'button', onClick: () => cancel('Media compression cancelled. Attach the files again when ready.') }, 'Cancel');
+        const { ui, toastBadge } = extensions();
+        const title = ui('span', { className: 'lowcord-toast-title' }, 'Preparing media…');
+        const detail = ui('span', { className: 'lowcord-toast-detail' }, `Under ${batch.limit / 1_000_000} MB`);
+        const button = ui('button', { type: 'button', className: 'lowcord-toast-action', onClick: () => cancel('Media compression cancelled. Attach the files again when ready.') }, 'Cancel');
         const root = ui('div', { className: 'lowcord-video-compression', role: 'status', 'aria-live': 'polite' },
-            ring, ui('div', { className: 'lowcord-compression-copy' }, title, detail), button);
-        document.body.append(root);
-        const composer = document.querySelector(composerSelector);
-        const place = () => {
-            const rect = composer?.isConnected && composer.getBoundingClientRect();
-            if (!rect || rect.width <= 0) return;
-            root.style.setProperty('--lowcord-compression-width', `${rect.width}px`);
-            root.style.setProperty('--lowcord-compression-center', `${rect.left + rect.width / 2}px`);
-            root.style.bottom = `${Math.max(16, Math.min(window.innerHeight - rect.top + 16, window.innerHeight - root.offsetHeight - 16))}px`;
-        };
-        const observer = new ResizeObserver(place);
-        if (composer) observer.observe(composer);
-        window.addEventListener('resize', place);
-        place();
+            toastBadge('progress'), ui('span', { className: 'lowcord-toast-copy' }, title, detail), button);
+        extensions().mountComposerPopup(root);
         return {
             update(next, text, filename = '') { title.textContent = next; detail.textContent = text; detail.title = text; root.title = filename; },
-            end() { observer.disconnect(); window.removeEventListener('resize', place); root.remove(); },
+            end() { root.remove(); },
         };
     }
     function targetLimit(id) {

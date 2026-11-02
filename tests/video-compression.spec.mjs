@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test';
 test.beforeEach(async ({ page }) => {
     await page.goto('/uploads');
     await page.addScriptTag({ url: '/injection/discord.js' });
+    await page.addStyleTag({ url: '/injection/lowcord-ui.css' });
     await page.addStyleTag({ url: '/injection/video-compression.css' });
     await page.evaluate(async () => {
         window.Lowcord.storage = localStorage;
@@ -233,27 +234,33 @@ test('settings file inputs are outside compression scope and pending status prov
     await select(page);
     await expect.poll(() => page.evaluate(() => calls.some(c => c.action === 'finish'))).toBe(true);
     await expect(page.locator('.lowcord-video-compression[role="status"]')).toContainText('20 MB');
-    await expect(page.locator('.lowcord-video-compression strong')).toHaveText('Compressing 1 video');
-    await expect(page.locator('.lowcord-video-compression span')).toHaveText('MP4 · under 20 MB');
+    await expect(page.locator('.lowcord-video-compression .lowcord-toast-title')).toHaveText('Compressing 1 video');
+    await expect(page.locator('.lowcord-video-compression .lowcord-toast-detail')).toHaveText('MP4 · under 20 MB');
     await expect(page.locator('.lowcord-video-compression')).toHaveAttribute('title', 'SPOILER_walk.mov');
-    const toast = await page.locator('.lowcord-video-compression').boundingBox();
     const composer = await page.locator('.channelTextArea_test').boundingBox();
+    // Measured once the entrance has settled.
+    await expect.poll(async () => {
+        const card = await page.locator('.lowcord-video-compression').boundingBox();
+        return Math.round(composer.y - card.y - card.height);
+    }).toBe(12);
+    const toast = await page.locator('.lowcord-video-compression').boundingBox();
     expect(toast.height).toBeLessThanOrEqual(64);
-    expect(Math.abs(toast.x + toast.width / 2 - composer.x - composer.width / 2)).toBeLessThanOrEqual(1);
-    expect(composer.y - toast.y - toast.height).toBe(16);
+    expect(Math.abs(toast.x + toast.width - composer.x - composer.width)).toBeLessThanOrEqual(1);
     await page.screenshot({ path: '/tmp/lowcord-video-compression.png' });
     await page.setViewportSize({ width: 360, height: 520 });
-    const bounds = await page.locator('.lowcord-video-compression').boundingBox();
-    expect(bounds.x).toBeGreaterThanOrEqual(16); expect(bounds.x + bounds.width).toBeLessThanOrEqual(344);
+    await expect.poll(async () => {
+        const bounds = await page.locator('.lowcord-video-compression').boundingBox();
+        return bounds.x >= 16 && bounds.x + bounds.width <= 344;
+    }).toBe(true);
     await page.screenshot({ path: '/tmp/lowcord-video-compression-narrow.png' });
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    expect(await page.locator('.lowcord-compression-ring').evaluate(node => getComputedStyle(node).animationName)).toBe('none');
+    expect(await page.locator('.lowcord-video-compression .lowcord-toast-icon-progress').evaluate(node => getComputedStyle(node).animationDuration)).toBe('2.6s');
     await page.locator('.channelTextArea_test').evaluate(node => { node.style.height = '120px'; });
     await expect.poll(async () => {
         const card = await page.locator('.lowcord-video-compression').boundingBox();
         const box = await page.locator('.channelTextArea_test').boundingBox();
         return Math.round(box.y - card.y - card.height);
-    }).toBe(16);
+    }).toBe(12);
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
 });
 
@@ -287,7 +294,7 @@ test('selected bottom toast matches the compact reference at desktop and stays w
     await page.screenshot({ path: '/tmp/lowcord-compression-option-one.png' });
     await page.locator('.lowcord-video-compression').screenshot({ path: '/tmp/lowcord-compression-option-one-toast.png' });
     const box = await page.locator('.lowcord-video-compression').boundingBox();
-    expect(box.y).toBeGreaterThan(800); expect(box.width).toBe(360);
+    expect(box.y).toBeGreaterThan(800); expect(Math.round(box.width)).toBe(340);
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     await expect.poll(() => page.evaluate(() => Lowcord.videoCompression.busy())).toBe(false);
     await expect(page.locator('.lowcord-video-compression')).toHaveCount(0);
@@ -303,14 +310,36 @@ test('a GIF that cannot fit stays an original GIF and explains the limit', async
     expect(await page.evaluate(() => receipts.length)).toBe(0);
 });
 
-for (const premiumType of [1, 2, 3, null, undefined]) {
-    test(`Nitro or unknown subscription (${premiumType}) keeps oversized uploads native`, async ({ page }) => {
-        await page.evaluate(value => { window.fixtureUser = { id: 'self', premiumType: value }; Lowcord.extensions.set('compressVideos', true); }, premiumType);
+for (const premiumType of [1, 2, 3]) {
+    test(`Nitro (${premiumType}) keeps oversized uploads native until chosen`, async ({ page }) => {
+        await page.evaluate(value => {
+            Lowcord.extensions.set('compressVideos', true);
+            window.fixtureUser = { id: 'self', premiumType: value };
+        }, premiumType);
+        expect(await page.evaluate(() => Lowcord.extensions.state.compressVideos)).toBe(false);
         await select(page);
         await ready(page);
         expect(await page.evaluate(() => calls)).toEqual([]);
-        expect(await page.evaluate(() => Lowcord.extensions.state.compressVideos)).toBe(false);
         await expect(page.locator('#drafts article span')).toHaveText('SPOILER_walk.mov');
+        await page.evaluate(() => Lowcord.extensions.set('compressVideos', true));
+        expect(await page.evaluate(() => Lowcord.extensions.state.compressVideos)).toBe(true);
+        await page.evaluate(() => { window.hold = true; });
+        await select(page, { name: 'second.mov' });
+        await expect.poll(() => page.evaluate(() => calls.length)).toBeGreaterThan(0);
+        await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+        await page.evaluate(() => { window.fixtureUser = { id: 'self', premiumType: 0 }; Lowcord.extensions.set('compressVideos', false); window.fixtureUser = { id: 'self', premiumType: 1 }; });
+        expect(await page.evaluate(() => Lowcord.extensions.state.compressVideos)).toBe(true);
+    });
+}
+
+for (const premiumType of [0, null, undefined]) {
+    test(`no Nitro (${premiumType}) follows the switch`, async ({ page }) => {
+        await page.evaluate(value => { window.fixtureUser = { id: 'self', premiumType: value }; }, premiumType);
+        expect(await page.evaluate(() => Lowcord.extensions.state.compressVideos)).toBe(true);
+        await page.evaluate(() => Lowcord.extensions.set('compressVideos', false));
+        expect(await page.evaluate(() => Lowcord.extensions.state.compressVideos)).toBe(false);
+        await page.evaluate(() => Lowcord.extensions.set('compressVideos', true));
+        expect(await page.evaluate(() => Lowcord.extensions.state.compressVideos)).toBe(true);
     });
 }
 

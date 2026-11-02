@@ -62,7 +62,19 @@ test.beforeEach(async ({ page }) => {
             event.target.textContent = "";
             fixture.cancel();
         });
-        window.webpackChunkdiscord_app[0][2]({ c: { fixture: { exports: { ...stores, dispatcher, createReply } } } });
+        // Shapes observed in Discord's module cache: the reaction picker uses
+        // hooks, so calling it outside React throws; the expression picker
+        // only passes these props down and crashes without a type; the full
+        // picker is a memo with its own defaults.
+        const { React, createRoot } = Lowcord;
+        const reactionPicker = () => { const intents = { EmojiIntention: { REACTION: 0 } }; throw new Error(`#321 ${{ pickerIntention: intents.EmojiIntention.REACTION }}`); };
+        const expressionPicker = React.memo(({ type }) => React.createElement("div", { pickerIntention: type.gifs, onSelectEmoji: 0, persistSearch: 0, hasTabWrapper:!0 }));
+        const emojiPicker = React.memo(({ pickerIntention:intention, hasTabWrapper:tabs=false, onSelectEmoji:select }) => {
+            fixture.picker = [intention, select, tabs];
+            return React.createElement("div", null, "Emoji picker");
+        });
+        window.webpackChunkdiscord_app[0][2]({ c: { fixture: { exports: { ...stores, dispatcher, createReply, reactionPicker, expressionPicker, emojiPicker,
+            intentions: { EmojiIntention: { REACTION: 0, CHAT: 3 } }, React, createRoot } } } });
     });
     await expect.poll(() => page.evaluate(() => !!Lowcord.store("MessageStore"))).toBe(true);
     await page.getByRole("textbox", { name: "Message composer" }).focus();
@@ -373,4 +385,20 @@ test.describe("click to reply", () => {
         await text(page, "2").click();
         await expect(target(page)).toHaveText("2");
     });
+});
+
+test("the DM card opens Discord's full emoji picker for chat and inserts the pick", async ({ page }) => {
+    await page.evaluate(() => document.querySelector("main").insertAdjacentHTML("afterbegin",
+        '<ul aria-label="Direct Messages"><li><a href="/channels/@me/100">Friend</a></li></ul>'));
+    await page.getByRole("link", { name: "Friend" }).hover();
+    await page.getByRole("button", { name: "Select emoji" }).dispatchEvent("click");
+    await expect(page.locator(".lowcord-dm-emoji-layer")).toHaveText("Emoji picker");
+    await expect(page.getByText("The emoji picker is not available. Try again.")).toHaveCount(0);
+    expect(await page.evaluate(() => {
+        const [intention, onSelectEmoji] = replyFixture.picker;
+        onSelectEmoji({ emoji: { surrogates: "😀" }, willClose: true });
+        return intention;
+    })).toBe(3);
+    await expect(page.locator(".lowcord-dm-emoji-layer")).toHaveCount(0);
+    await expect(page.getByPlaceholder(/^Message/).last()).toHaveValue("😀");
 });

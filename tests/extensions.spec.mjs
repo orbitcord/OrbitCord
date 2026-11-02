@@ -876,10 +876,10 @@ test("mass delete removes every own message in a DM, past rate limits and indexi
     await fakeMessages(page, { guild: false });
     await runAction(page, "Delete my messages");
     const dialog = page.getByRole("dialog", { name: "Delete your messages?" });
-    await expect(dialog).toContainText("Delete all messages you sent to Sam");
+    await expect(dialog).toContainText("Delete your messages in Sam");
     await expect(dialog.getByRole("radiogroup")).toHaveCount(0);
     await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
-    await dialog.getByRole("button", { name: "Delete my messages" }).click();
+    await dialog.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(dialog).toBeHidden();
     await expect(page.locator(".lowcord-toast")).toContainText("Deleted 62 messages", { timeout: 15_000 });
     await expect(page.locator(".lowcord-toast")).toContainText("1 could not be deleted");
@@ -983,8 +983,8 @@ test("mass delete in a server picks the channel or the whole server and can stop
     await fakeMessages(page, { guild: true });
     await runAction(page, "Delete my messages");
     const dialog = page.getByRole("dialog", { name: "Delete your messages?" });
-    await expect(dialog.getByRole("radio", { name: /Only in #general/ })).toBeChecked();
-    await dialog.getByRole("button", { name: "Delete my messages" }).click();
+    await expect(dialog.getByRole("radio", { name: /#general/ })).toBeChecked();
+    await dialog.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(page.locator(".lowcord-toast")).toContainText("Deleted 53 messages", { timeout: 15_000 });
     let state = await page.evaluate(() => window.purge);
     expect(state.searches.at(-1).url).toBe("/guilds/900/messages/search");
@@ -996,12 +996,13 @@ test("mass delete in a server picks the channel or the whole server and can stop
         purge.deletes = []; purge.searches = []; purge.slow = 50;
     });
     await runAction(page, "Delete my messages");
-    await dialog.getByRole("radio", { name: /Everywhere in Test server/ }).check();
-    await dialog.getByRole("button", { name: "Delete my messages" }).click();
+    await dialog.getByRole("radio", { name: /All of Test server/ }).check();
+    await dialog.getByRole("button", { name: "Delete", exact: true }).click();
     const bar = page.locator(".lowcord-purge-bar");
     await expect(bar).toContainText("Test server");
     await expect.poll(() => page.evaluate(() => purge.deletes.length)).toBeGreaterThan(2);
-    await bar.getByRole("button", { name: "Stop" }).click();
+    // This job is short, so Stop is pressed without waiting for the hover reveal.
+    await bar.getByRole("button", { name: "Stop" }).dispatchEvent("click");
     await expect(page.locator(".lowcord-toast")).toContainText("Stopped after deleting");
     state = await page.evaluate(() => window.purge);
     expect(state.searches.at(-1).query.channel_id).toBeUndefined();
@@ -1376,12 +1377,18 @@ test('compression follows subscription detection and preserves the saved prefere
     await page.evaluate(() => window.__lowcordOpenSettings('extensions'));
     const toggle = page.getByRole('switch', { name: 'Compress media', exact: true });
     await expect(toggle).toBeChecked();
-    for (const user of [null, { id: 'self' }, { id: 'self', premiumType: 1 }, { id: 'self', premiumType: 2 }, { id: 'self', premiumType: 3 }]) {
-        await page.evaluate(user => { fixtureUser = user; for (const fn of accountListeners) fn(); }, user);
+    await page.evaluate(() => { fixtureUser = null; for (const fn of accountListeners) fn(); });
+    await expect(toggle).not.toBeChecked();
+    // Discord leaves premiumType empty without Nitro; the switch still applies.
+    await page.evaluate(() => { fixtureUser = { id: 'self' }; for (const fn of accountListeners) fn(); });
+    await expect(toggle).toBeChecked();
+    for (const premiumType of [1, 2, 3]) {
+        await page.evaluate(premiumType => { fixtureUser = { id: 'self', premiumType }; for (const fn of accountListeners) fn(); }, premiumType);
         await expect(toggle).not.toBeChecked();
-        await page.evaluate(() => Lowcord.extensions.set('compressVideos', true));
+        await toggle.check();
+        expect(await page.evaluate(() => Lowcord.extensions.enabled('compressVideos'))).toBe(true);
+        await toggle.uncheck();
         expect(await page.evaluate(() => Lowcord.extensions.enabled('compressVideos'))).toBe(false);
-        await expect(toggle).not.toBeChecked();
     }
     await page.evaluate(() => { fixtureUser = { id: 'other', premiumType: 0 }; for (const fn of accountListeners) fn(); });
     await expect(toggle).toBeChecked();

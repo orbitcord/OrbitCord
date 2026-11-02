@@ -57,3 +57,55 @@ These quotas are test inputs, not hard-coded Discord limits. The benchmark uses 
 Verification adds cases for out-of-order quota responses, absent headers, cancellation during an active DM round, and returning to sequential deletion after a 429. Combined with the previous deletion checks, all 23 deletion regressions pass. The unrelated media-gallery assertion was updated to the UI wording from the earlier copy pass. Build, syntax and whitespace checks pass. No live-account deletion was used.
 
 Risks: quota-bound DMs will see little improvement, and clients that do not expose quota headers remain sequential. Discord may change a quota or another action may consume it between responses; any resulting throttling immediately disables overlap and follows the supplied cooldown. The fixture speedup is not a promise that a real 1,200-message DM will finish in 43 seconds.
+
+## History verification progress and repeated scans — 2026-11-02
+
+Reproduced two regressions before changing the scanner. Running message-only
+cleanup twice over 350 messages from other people made four history requests
+both times, including after all own messages had already been removed. Holding
+the history request open left the bar saying `Deleting messages · Looking for
+more` with no indication that deletion had moved into verification.
+
+The bar now identifies the history phase and reports completed/total chats and
+messages scanned, updating after each page and channel. A successful full history
+walk records an account/channel cutoff in memory. Later message-only jobs still
+search normally and verify messages newer than that cutoff, stopping once a page
+crosses it. A scan stopped at an indexed search boundary does not establish a
+full-history checkpoint. Failed, stopped and empty/inaccessible scans cannot
+advance a checkpoint; failed deletions invalidate the channel's entry. Reaction
+jobs always bypass these cutoffs, since reactions can be added to old messages.
+The cache stores only account/channel IDs and snowflake cutoffs, is capped at
+1,000 entries, and resets on app reload. It writes nothing to disk.
+
+History paging now honors reported read quota and reset headers, retaining the
+existing conservative page delay when headers are unavailable. Exhausted quotas,
+429s and global cooldowns still pause work. Channel workers remain bounded at
+four and page size at 100. Search cursors must move backwards to prevent a
+non-advancing response from spinning indefinitely. Search result counts remain
+estimates: Discord documents that counts can be inaccurate during deletion, so
+an apparent zero is not used to skip the final verification.
+
+The repeat fixture falls from four history requests to one (75% fewer) while
+still deleting a newly arrived own message absent from search. A 350-message
+history with available quota finishes within 10 ms of simulated time instead of
+spending 750 ms in artificial page delays, excluding network latency. The quota
+reset fixture proves the second page waits for the supplied 120 ms reset.
+These are controlled fixture measurements, not live throughput promises.
+
+Verification covers progress, repeated scans, new unindexed messages, account
+isolation, failed histories, full reaction scans after a message-only cleanup,
+available and exhausted read quota, and existing deletion/cancellation cases.
+Preload build, syntax and whitespace checks pass. No live deletion was run.
+
+Reference: [Discord message history and search](https://docs.discord.com/developers/resources/message#get-channel-messages).
+
+Risks: the first full walk of a large history still requires reading that
+history, and rate-limit-bound jobs cannot outrun Discord's quotas. Existing
+thread-discovery limits remain. Cutoffs do not survive a restart, so the first
+cleanup after restarting can require a full check again.
+
+Final verification: all 30 targeted deletion checks pass (29 in the combined
+run, plus the added stale-cursor case). The combined run passed 62 of 67 checks;
+five voice-message/composer-menu tests failed with pointer interception or
+out-of-viewport menus while separate composer-popup edits appeared in the shared
+workspace. Those edits were preserved and not changed as part of this scan fix.

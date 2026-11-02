@@ -78,15 +78,15 @@
     flex: 1; min-height: 0; overflow-y: auto; padding: 20px 40px 32px;
 }
 .lowcord-extension-search {
-    display: block; box-sizing: border-box; width: 100%; min-width: 0; margin: 0 0 16px; padding: 10px 12px;
-    border: 1px solid var(--border-subtle, #ffffff1a); border-radius: 8px;
+    display: block; box-sizing: border-box; width: 100%; min-width: 0; margin: 0 0 8px; padding: 10px 14px;
+    border: 1px solid var(--border-subtle, #ffffff1a); border-radius: 10px;
     background: var(--input-background, var(--background-secondary, #2b2d31)); color: var(--text-normal, #f2f3f5);
     font: inherit;
 }
 .lowcord-extension-search::placeholder { color: var(--text-muted, #949ba4); }
 .lowcord-extension-search:focus-visible { outline: 2px solid var(--text-link, #82b7ff); outline-offset: 2px; }
 .lowcord-extension-tabs {
-    display: flex; gap: 24px; margin: 0 0 24px; overflow-x: auto;
+    display: flex; gap: 24px; margin: 0 0 16px; overflow-x: auto;
     border-bottom: 1px solid var(--border-subtle, #ffffff1a);
 }
 .lowcord-extension-tabs button {
@@ -100,9 +100,10 @@
 .lowcord-extension-tabs button:focus-visible, .lowcord-extension-info:focus-visible {
     outline: 2px solid var(--text-link, #82b7ff); outline-offset: -3px; border-radius: 4px;
 }
-.lowcord-extension-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.lowcord-extension-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 10px; }
+/* Every row matches, and each switch lines up with its card's title. */
 .lowcord-extension-card.lowcord-chat-toggle {
-    align-items: center; gap: 12px; padding: 0 16px 0 0; border-radius: 8px;
+    position: relative; align-items: stretch; gap: 0; min-width: 0; border-radius: 12px;
     background: var(--background-base-lower, var(--background-secondary, #2b2d31));
     border: 1px solid var(--border-subtle, #ffffff0d); cursor: default;
 }
@@ -111,13 +112,13 @@
     border-color: var(--brand-500, #5865f2);
 }
 .lowcord-extension-info {
-    display: block; align-self: stretch; flex: 1; min-width: 0; min-height: 110px; padding: 18px 0 18px 16px;
-    border: 0; border-radius: 8px; background: transparent; color: var(--text-normal, #f2f3f5);
+    display: flex; flex-direction: column; justify-content: flex-start; flex: 1; box-sizing: border-box; min-width: 0; padding: 16px;
+    border: 0; border-radius: 11px; background: transparent; color: var(--text-normal, #f2f3f5);
     font: inherit; text-align: left; cursor: pointer;
 }
-.lowcord-extension-info strong { color: var(--header-primary, #fff); font-size: 15px; }
-.lowcord-extension-info .lowcord-chat-description { margin-top: 4px; font-size: 13px; line-height: 1.4; }
-.lowcord-extension-card > input { flex: none; }
+.lowcord-extension-info strong { display: block; padding-right: 56px; color: var(--header-primary, #fff); font-size: 14px; line-height: 20px; font-weight: 600; }
+.lowcord-extension-info .lowcord-chat-description { margin-top: 6px; font-size: 13px; line-height: 18px; text-wrap: pretty; }
+.lowcord-extension-card > input { position: absolute; top: 14px; right: 16px; flex: none; margin: 0; }
 .lowcord-extension-details {
     box-sizing: border-box; width: min(440px, calc(100vw - 32px));
     position: fixed; inset: auto; position-area: bottom span-right;
@@ -255,7 +256,7 @@
 .lowcord-actions-button svg { transition: transform 190ms cubic-bezier(.34, 1.56, .64, 1); }
 .lowcord-actions-button[aria-expanded="true"] svg { transform: rotate(180deg); }
 .lowcord-actions {
-    position: fixed; z-index: 10002; box-sizing: border-box; min-width: 212px; padding: 6px;
+    position: fixed; z-index: 10002; box-sizing: border-box; min-width: min(212px, calc(100vw - 16px)); max-width: calc(100vw - 16px); overflow-y: auto; padding: 6px;
     display: flex; flex-direction: column; gap: 2px; border-radius: 12px;
     background: var(--background-surface-highest, var(--background-floating, #111214));
     border: 1px solid var(--border-subtle, rgb(255 255 255 / .06));
@@ -288,50 +289,72 @@
     .lowcord-actions-button, .lowcord-actions-button svg, .lowcord-actions-item svg { transition: none; }
 }
 
-/* Chat screenshots: a picking bar over the chat, and the chosen range. */
-.lowcord-capture-bar {
-    position: fixed; z-index: 10001; transform: translateX(-50%);
-    display: flex; align-items: center; gap: 10px; box-sizing: border-box;
-    max-width: min(520px, calc(100vw - 32px)); padding: 8px 8px 8px 16px; border-radius: 16px;
-    background: rgb(24 25 28 / .9);
-    -webkit-backdrop-filter: blur(18px) saturate(1.5); backdrop-filter: blur(18px) saturate(1.5);
-    border: 1px solid rgb(255 255 255 / .1);
-    box-shadow: 0 14px 36px rgb(0 0 0 / .34), 0 2px 8px rgb(0 0 0 / .2);
-    color: #f2f3f5;
+/* Content-sized surfaces share the composer's right edge and stack upward. */
+.lowcord-composer-popups {
+    position: fixed; z-index: 10002; display: flex; flex-direction: column;
+    align-items: flex-end; gap: 8px; width: max-content; pointer-events: none;
+    padding: 24px; margin: -24px; overflow-y: auto; scrollbar-width: thin;
 }
-/* Mass delete: a choice of where, then a status card that stays while it runs. */
-.lowcord-purge-options { display: flex; flex-direction: column; gap: 8px; }
-.lowcord-purge-option {
-    display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 8px; cursor: pointer;
-    background: var(--background-base-lower, var(--background-secondary, #2b2d31));
+.lowcord-composer-popups > :is(.lowcord-toast, .lowcord-purge-bar, .lowcord-capture-bar, .lowcord-video-compression) {
+    position: relative; inset: auto; flex: none; max-width: 100%;
+    pointer-events: auto; transform-origin: right bottom;
 }
-.lowcord-purge-option input { margin: 3px 0 0; accent-color: var(--brand-500, #5865f2); }
-.lowcord-purge-option > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.lowcord-purge-option strong { font-weight: 600; overflow-wrap: anywhere; }
-.lowcord-purge-option strong + span { font-size: 13px; color: var(--text-muted, #949ba4); }
+.lowcord-composer-popups > .lowcord-toast-out { pointer-events: none; }
+
+/* Bulk delete: a macOS-style sheet of selection rows, then a progress pill. */
+.lowcord-purge {
+    box-sizing: border-box; width: min(340px, calc(100vw - 32px)); max-height: calc(100vh - 32px);
+    overflow-y: auto; gap: 14px; padding: 18px; border-radius: 16px; font: 14px/1.4 var(--font-primary, sans-serif);
+    box-shadow: 0 0 0 .5px rgb(255 255 255 / .12), 0 18px 44px rgb(0 0 0 / .5);
+}
+.lowcord-purge h2 { margin: 0 10px; font-size: 16px; line-height: 22px; }
+.lowcord-purge > .lowcord-voice-status { margin: -8px 10px 0; font-size: 13px; }
+.lowcord-purge-options { display: grid; gap: 2px; }
+.lowcord-purge-option { position: relative; display: flex; align-items: center; padding: 8px 34px 8px 10px; border-radius: 10px; cursor: pointer; min-width: 0; }
+.lowcord-purge-option:hover { background: var(--background-modifier-hover, rgb(148 155 164 / .08)); }
+.lowcord-purge-option:has(input:checked) { background: var(--background-modifier-selected, rgb(148 155 164 / .16)); }
+.lowcord-purge-option:has(input:checked)::after {
+    content: ""; position: absolute; right: 15px; top: 50%; width: 5px; height: 10px; margin-top: -7px;
+    border: solid var(--brand-500, #5865f2); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.lowcord-purge-option:has(input:focus-visible) { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 1px; }
+.lowcord-purge-option input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; }
+.lowcord-purge-option > span { display: flex; flex-direction: column; min-width: 0; }
+.lowcord-purge-option strong { font-size: 13px; line-height: 18px; font-weight: 500; overflow-wrap: anywhere; }
+.lowcord-purge-option strong + span { font-size: 12px; line-height: 16px; color: var(--text-muted, #949ba4); }
+.lowcord-purge-reactions { display: grid; gap: 4px; margin: 0 10px; }
+.lowcord-purge-reactions label { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 18px; cursor: pointer; }
+.lowcord-purge-reactions input { flex: none; width: 15px; height: 15px; margin: 0; accent-color: var(--brand-500, #5865f2); }
+.lowcord-purge-note { margin: 0 0 0 23px; color: var(--text-muted, #949ba4); font-size: 12px; line-height: 16px; }
+.lowcord-purge .lowcord-dialog-actions { margin-top: 2px; }
+.lowcord-purge .lowcord-button { justify-content: center; min-height: 30px; padding: 0 14px; font-size: 13px; border-radius: 9px; }
+.lowcord-purge .lowcord-button:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px; }
+/* A bare spinner and the count at rest; hover or keyboard focus opens the full
+   banner. Everything shares one eased reveal, held briefly so a passing pointer
+   doesn't set it off. The detail keeps a fixed width: squeezed text wraps tall. */
 .lowcord-purge-bar {
-    position: fixed; left: 50%; bottom: 96px; z-index: 10001; transform: translateX(-50%);
-    display: flex; align-items: center; gap: 10px; box-sizing: border-box;
-    width: 360px; min-height: 52px; padding: 8px 10px 8px 12px; border-radius: 16px;
-    background: rgb(24 25 28 / .9);
-    -webkit-backdrop-filter: blur(18px) saturate(1.5); backdrop-filter: blur(18px) saturate(1.5);
-    border: 1px solid rgb(255 255 255 / .1);
-    box-shadow: 0 14px 36px rgb(0 0 0 / .34), 0 2px 8px rgb(0 0 0 / .2);
-    color: #f2f3f5;
+    interpolate-size: allow-keywords;
+    transition: width var(--lowcord-reveal), padding var(--lowcord-reveal), gap var(--lowcord-reveal);
 }
-.lowcord-capture-bar .lowcord-toast-copy, .lowcord-purge-bar .lowcord-toast-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.lowcord-capture-bar .lowcord-toast-title, .lowcord-purge-bar .lowcord-toast-title { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.lowcord-capture-bar .lowcord-toast-detail, .lowcord-purge-bar .lowcord-toast-detail { font-size: 12px; color: #b5bac1; }
-.lowcord-capture-bar .lowcord-button, .lowcord-purge-bar .lowcord-button { flex: none; padding: 6px 14px; }
-.lowcord-purge-bar .lowcord-toast-copy { gap: 2px; }
-.lowcord-purge-bar .lowcord-toast-title { line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lowcord-purge-bar .lowcord-toast-detail { line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lowcord-purge-bar .lowcord-button { padding: 7px 14px; border-radius: 9px; background: #b52c35; color: #fff; font-size: 13px; }
-.lowcord-purge-bar .lowcord-button:hover:not(:disabled) { background: #98252d; }
-.lowcord-purge-bar .lowcord-button:focus-visible { outline: 2px solid #949cf7; outline-offset: 2px; }
-.lowcord-purge-bar .lowcord-button:disabled { opacity: .5; cursor: default; }
-.lowcord-purge-spinner { flex: none; width: 20px; height: 20px; border: 3px solid rgb(148 156 247 / .22); border-top-color: #949cf7; border-radius: 50%; animation: lowcord-toast-spin .85s linear infinite; }
-@media (prefers-reduced-motion: reduce) { .lowcord-purge-spinner { animation: none; } }
+.lowcord-purge-bar:is(:hover, :focus-within) { --lowcord-reveal: 240ms cubic-bezier(.32, .72, 0, 1) 50ms; }
+.lowcord-purge-bar:not(:hover, :focus-within) { --lowcord-reveal: 200ms cubic-bezier(.32, .72, 0, 1) 120ms; width: max-content; gap: 7px; padding: 5px 5px 5px 8px; }
+.lowcord-purge-bar .lowcord-toast-badge { transition: width var(--lowcord-reveal), height var(--lowcord-reveal), background-color var(--lowcord-reveal); }
+.lowcord-purge-bar:not(:hover, :focus-within) .lowcord-toast-badge { width: 16px; height: 18px; background: transparent; }
+.lowcord-purge-bar .lowcord-toast-icon { transition: width var(--lowcord-reveal), height var(--lowcord-reveal); }
+.lowcord-purge-bar:not(:hover, :focus-within) .lowcord-toast-icon { width: 14px; height: 14px; }
+.lowcord-purge-more, .lowcord-purge-stop { display: grid; min-width: 0; transition: grid-template var(--lowcord-reveal), opacity var(--lowcord-reveal); }
+.lowcord-purge-more { grid-template-rows: 1fr; contain: inline-size; }
+.lowcord-purge-more > .lowcord-toast-detail { width: min(220px, calc(100vw - 150px)); min-height: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.lowcord-purge-stop { flex: none; grid-template: 1fr / 1fr; }
+.lowcord-purge-stop > div { min-width: 0; min-height: 0; overflow: hidden; }
+.lowcord-purge-stop .lowcord-toast-action { background: var(--button-danger-background, #da373c); color: #fff; }
+.lowcord-purge-stop .lowcord-toast-action:hover:not(:disabled) { background: var(--button-danger-background, #da373c); filter: brightness(1.12); }
+.lowcord-purge-stop .lowcord-toast-action:focus-visible { outline-offset: -2px; }
+.lowcord-purge-bar:not(:hover, :focus-within) .lowcord-purge-more { grid-template-rows: 0fr; opacity: 0; }
+.lowcord-purge-bar:not(:hover, :focus-within) .lowcord-purge-stop { grid-template: 0fr / 0fr; opacity: 0; }
+.lowcord-purge-count { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lowcord-capture-bar .lowcord-toast-title { font-variant-numeric: tabular-nums; }
+.lowcord-capture-bar .lowcord-button { flex: none; min-height: 26px; padding: 0 11px; border-radius: 13px; font-size: 12px; }
 [data-lowcord-capture-picking] [id^="chat-messages-"] { cursor: crosshair; }
 /* Chat screenshot options (Extensions) and the review dialog. */
 .lowcord-capture-options { display: grid; gap: 12px; margin-top: 32px; }
@@ -387,7 +410,7 @@
 }
 /* While capturing, the bar sits on the channel header: compact, no shadow over the chat. */
 [data-lowcord-capturing] .lowcord-capture-bar { box-shadow: none; padding-block: 4px; }
-[data-lowcord-capturing] .lowcord-capture-bar .lowcord-toast-detail { display: none; }
+[data-lowcord-capturing] .lowcord-capture-bar :is(.lowcord-toast-detail, .lowcord-toast-badge) { display: none; }
 
 /* Keep selection inside the message so tightly grouped rows never overlap. */
 [id^="chat-messages-"][data-lowcord-quick-reply] > [data-list-item-id^="chat-messages"] {
@@ -400,54 +423,55 @@
     box-shadow: inset 0 0 0 2px var(--brand-500, #5865f2);
 }
 
-/* Status toasts: a frosted card with a tinted icon badge, a headline and a
-   quieter line below it. One at a time; a toast that replaces another settles
-   into its place. */
-.lowcord-toast {
+/* Banners: every notice, job and picking bar is one frosted macOS-style
+   surface with a rounded icon tile, a headline and a quieter line below it.
+   One toast at a time; a toast that replaces another settles into its place. */
+:is(.lowcord-toast, .lowcord-purge-bar, .lowcord-video-compression, .lowcord-capture-bar) {
     /* A dark card in every theme, so its colours are its own rather than
        Discord's theme variables. */
-    --lowcord-tone: #949cf7; --lowcord-ink: #f2f3f5; --lowcord-ink-muted: #b5bac1;
-    position: fixed; left: 50%; bottom: 96px; z-index: 10001; transform: translateX(-50%);
-    display: flex; align-items: center; gap: 12px; box-sizing: border-box;
-    max-width: min(420px, calc(100vw - 32px)); padding: 9px 18px 9px 10px; border-radius: 18px;
-    background: rgb(24 25 28 / .86);
+    --lowcord-tone: #949cf7; --lowcord-tile: rgb(255 255 255 / .1); --lowcord-ink: #f2f3f5; --lowcord-ink-muted: #b5bac1;
+    position: fixed; right: 16px; bottom: 96px; z-index: 10001;
+    display: flex; align-items: center; gap: 10px; box-sizing: border-box;
+    width: 340px; max-width: calc(100vw - 32px); padding: 9px 11px; border-radius: 14px;
+    background: rgb(36 37 42 / .88);
     -webkit-backdrop-filter: blur(18px) saturate(1.5); backdrop-filter: blur(18px) saturate(1.5);
-    border: 1px solid rgb(255 255 255 / .1);
-    box-shadow: 0 14px 36px rgb(0 0 0 / .34), 0 2px 8px rgb(0 0 0 / .2);
-    color: var(--lowcord-ink);
-    animation: lowcord-toast-in 260ms cubic-bezier(.22, 1, .36, 1);
+    box-shadow: 0 0 0 .5px rgb(255 255 255 / .14), 0 6px 18px rgb(0 0 0 / .3);
+    color: var(--lowcord-ink); font: 13px/18px var(--font-primary, sans-serif);
 }
-.lowcord-toast-success { --lowcord-tone: #3ecf7e; }
-.lowcord-toast-failure { --lowcord-tone: #fa777c; }
+:is(.lowcord-toast, .lowcord-purge-bar, .lowcord-video-compression) { animation: lowcord-toast-in 260ms cubic-bezier(.22, 1, .36, 1); }
+.lowcord-toast-success { --lowcord-tone: #3ecf7e; --lowcord-tile: color-mix(in srgb, #3ecf7e 20%, transparent); }
+.lowcord-toast-failure { --lowcord-tone: #fa777c; --lowcord-tile: color-mix(in srgb, #fa777c 20%, transparent); }
 .lowcord-toast-swap { animation: lowcord-toast-swap 150ms ease-out; }
 .lowcord-toast-out { animation: lowcord-toast-out 170ms ease-in forwards; pointer-events: none; }
-@keyframes lowcord-toast-in { from { opacity: 0; transform: translate(-50%, 12px) scale(.95); } }
-@keyframes lowcord-toast-swap { from { opacity: .35; transform: translate(-50%, 0) scale(.985); } }
-@keyframes lowcord-toast-out { to { opacity: 0; transform: translate(-50%, 6px) scale(.97); } }
+@keyframes lowcord-toast-in { from { opacity: 0; transform: translateY(12px) scale(.95); } }
+@keyframes lowcord-toast-swap { from { opacity: .35; transform: scale(.985); } }
+@keyframes lowcord-toast-out { to { opacity: 0; transform: translateY(6px) scale(.97); } }
 .lowcord-toast-badge {
-    flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%;
-    background: color-mix(in srgb, var(--lowcord-tone) 17%, transparent); color: var(--lowcord-tone);
+    flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px;
+    background: var(--lowcord-tile); color: var(--lowcord-tone);
 }
-.lowcord-toast-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.lowcord-toast-icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
 .lowcord-toast-track { opacity: .22; }
 .lowcord-toast-icon-progress { animation: lowcord-toast-spin .85s linear infinite; }
 .lowcord-toast-check { stroke-dasharray: 22; stroke-dashoffset: 22; animation: lowcord-toast-draw 320ms 90ms cubic-bezier(.4, 0, .2, 1) forwards; }
 @keyframes lowcord-toast-spin { to { transform: rotate(360deg); } }
 @keyframes lowcord-toast-draw { to { stroke-dashoffset: 0; } }
-.lowcord-toast-copy { display: grid; gap: 1px; min-width: 0; }
-.lowcord-toast-title { font-size: 14px; line-height: 18px; font-weight: 600; color: #fff; text-wrap: balance; }
-.lowcord-toast-detail { font-size: 12.5px; line-height: 16px; color: var(--lowcord-ink-muted); text-wrap: pretty; }
+.lowcord-toast-copy { flex: 1; display: grid; min-width: 0; overflow-wrap: anywhere; }
+.lowcord-toast-title { font-size: 13px; line-height: 18px; font-weight: 600; color: #fff; text-wrap: pretty; }
+.lowcord-toast-detail { font-size: 12px; line-height: 16px; color: var(--lowcord-ink-muted); text-wrap: pretty; }
 .lowcord-toast-detail[hidden] { display: none; }
 .lowcord-toast-action {
-    flex: none; margin-left: 6px; padding: 5px 12px; border: 0; border-radius: 10px; cursor: pointer;
-    background: rgb(255 255 255 / .12); color: inherit; font: inherit; font-size: 13px; font-weight: 600;
+    flex: none; min-height: 26px; margin: 0; padding: 0 11px; border: 0; border-radius: 13px; cursor: pointer;
+    background: rgb(255 255 255 / .12); color: inherit; font: inherit; font-size: 12px; font-weight: 500;
     transition: background-color 120ms;
 }
-.lowcord-toast-action:hover { background: rgb(255 255 255 / .2); }
+.lowcord-toast-action:hover:not(:disabled) { background: rgb(255 255 255 / .2); }
+.lowcord-toast-action:disabled { opacity: .5; cursor: default; }
 .lowcord-toast-action:focus-visible { outline: 2px solid var(--lowcord-tone); outline-offset: 2px; }
 /* Progress and the arrival still read, without the motion. */
 @media (prefers-reduced-motion: reduce) {
-    .lowcord-toast, .lowcord-toast-swap, .lowcord-toast-out { animation: none; }
+    .lowcord-toast, .lowcord-purge-bar, .lowcord-video-compression, .lowcord-toast-swap, .lowcord-toast-out { animation: none; }
+    .lowcord-purge-bar, .lowcord-purge-bar :is(.lowcord-toast-badge, .lowcord-toast-icon, .lowcord-purge-more, .lowcord-purge-stop) { transition: none; }
     .lowcord-toast-check { animation: none; stroke-dashoffset: 0; }
     .lowcord-toast-icon-progress { animation-duration: 2.6s; }
 }
