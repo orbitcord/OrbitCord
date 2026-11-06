@@ -86,7 +86,9 @@
     const lockPaths = ['M6 11h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1Z', 'M8 11V8a4 4 0 0 1 8 0v3'];
     const fingerPaths = ['M12 11v3a6 6 0 0 1-1 3', 'M8 14a4 4 0 0 1 8 0c0 2-.5 4-1.5 5.5', 'M5 13a7 7 0 0 1 14 0c0 2-.3 3.5-.8 5', 'M7 6.5A8 8 0 0 1 12 5a8 8 0 0 1 5 1.5'];
     const setInert = value => { if (document.body) document.body.inert = value; };
+    let lockRootObserver;
     function unlock() {
+        lockRootObserver?.disconnect(); lockRootObserver = null;
         if (!lockEl) return;
         lockEl.remove(); lockEl = null; misses = 0; setInert(false);
         window.removeEventListener('keydown', trapKeys, true); window.removeEventListener('keyup', trapKeys, true); window.removeEventListener('keypress', trapKeys, true);
@@ -123,6 +125,19 @@
     }
     function lock() {
         if (lockEl || !state.appLock || !passcode) return;
+        // Electron can run this before Chromium creates <html>. Mount on its
+        // first mutation, before paint, without aborting the rest of the preload.
+        if (!document.documentElement) {
+            if (!lockRootObserver) {
+                lockRootObserver = new MutationObserver(() => {
+                    if (!document.documentElement) return;
+                    lockRootObserver.disconnect(); lockRootObserver = null;
+                    lock();
+                });
+                lockRootObserver.observe(document, { childList: true });
+            }
+            return;
+        }
         lockReturnFocus = document.activeElement;
         const el = document.createElement('div');
         el.className = 'lowcord-lock'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-labelledby', 'lowcord-lock-title');

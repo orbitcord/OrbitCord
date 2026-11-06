@@ -1367,3 +1367,31 @@ test('a screen lock reaches the page, and signing out on quit keeps OrbitCord se
         expect(await page.evaluate(() => [__lowcordStorage.getItem('token'), __lowcordStorage.getItem('lowcord.theme'), document.cookie])).toEqual([null, 'kept', '']);
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test('saved App Lock preserves settings and completes the preload before streamed HTML arrives', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-lock-startup-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
+        await page.evaluate(async () => {
+            await Lowcord.privacy.setPasscode('2468');
+            Lowcord.privacy.set({ appLock: true, metadata: false });
+            Lowcord.extensions.set('silentTyping', false);
+        });
+        await app.evaluate(({ BrowserWindow }) => {
+            global.lockPreloadErrors = [];
+            BrowserWindow.getAllWindows()[0].webContents.on('preload-error', (_event, _path, error) => global.lockPreloadErrors.push(error.message));
+        });
+        await page.goto('http://127.0.0.1:4319/electron-slow-start');
+        const lock = page.getByRole('dialog', { name: 'Lowcord is locked' });
+        await expect(lock).toBeVisible();
+        expect(await page.evaluate(() => ({ settings: typeof __lowcordOpenSettings,
+            metadata: Lowcord.privacy.state.metadata, typing: Lowcord.extensions.enabled('silentTyping'), inert: document.body.inert })))
+            .toEqual({ settings: 'function', metadata: false, typing: false, inert: true });
+        expect(await app.evaluate(() => global.lockPreloadErrors)).toEqual([]);
+        await lock.getByLabel('Passcode').fill('2468');
+        await lock.getByRole('button', { name: 'Unlock', exact: true }).click();
+        await expect(lock).toHaveCount(0);
+        expect(await page.evaluate(() => document.body.inert)).toBe(false);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});

@@ -96,7 +96,7 @@ jobs:
       - name: Verify local privacy processors
         run: node --test tests/privacy-files.test.cjs tests/privacy-core.test.cjs tests/privacy-media.test.cjs tests/traces.test.cjs tests/remote-fetch.test.cjs tests/zip-preview.test.cjs
       - name: Verify media, privacy and update settings on the release platform
-        run: node node_modules/@playwright/test/cli.js test --config playwright.electron.config.mjs --grep "decodes|fullscreen|file-backed|downloaded update|settings checks updates|installer download resumes|privacy image processing|native attachment download inspection|GPU image cache|audio runs|screen lock"
+        run: node node_modules/@playwright/test/cli.js test --config playwright.electron.config.mjs --grep "decodes|fullscreen|file-backed|downloaded update|settings checks updates|installer download resumes|privacy image processing|native attachment download inspection|GPU image cache|audio runs|screen lock|saved App Lock"
       - if: matrix.platform == 'macos'
         run: pnpm build:mac
       - if: matrix.platform == 'windows'

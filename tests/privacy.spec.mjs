@@ -417,3 +417,40 @@ test('forgot passcode logs out through Discord and only then removes the lock', 
     await expect(lock).toHaveCount(0);
     expect(await page.evaluate(() => [window.loggedOut, Lowcord.privacy.state.appLock, Lowcord.storage.getItem('lowcord.privacy.lock.v1')])).toEqual([1, false, 'null']);
 });
+
+test('saved app lock waits for the document root without aborting settings or losing preferences', async ({ page }) => {
+    const { pbkdf2Sync } = require('node:crypto');
+    const salt = Buffer.alloc(16, 7);
+    const savedCode = { v: 1, salt: salt.toString('base64'), hash: pbkdf2Sync('2468', salt, 150000, 32, 'sha256').toString('base64') };
+    const preferences = { appLock: true, metadata: false, inspector: true, lockAfter: 5 };
+    await page.addInitScript(({ preferences, savedCode }) => {
+        localStorage.setItem('lowcord.privacy.v1', JSON.stringify(preferences));
+        localStorage.setItem('lowcord.privacy.lock.v1', JSON.stringify(savedCode));
+        localStorage.setItem('lowcord.extensions', JSON.stringify({ silentTyping: false }));
+    }, { preferences, savedCode });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    const source = readFileSync('src-tauri/injection/privacy.js', 'utf8');
+    await page.route('**/injection/privacy.js', route => route.fulfill({ contentType: 'text/javascript', body: `
+        // Electron may run the preload before Chromium has created <html>.
+        Object.defineProperty(document, 'documentElement', { configurable: true, value: null });
+        try { ${source}\nwindow.privacyReadyBeforeRoot = !!window.Lowcord.privacy; }
+        finally { delete document.documentElement; document.appendChild(document.createComment('root-ready')); }
+    ` }));
+    await page.goto('/extensions');
+    await page.waitForFunction(() => window.fixtureReady);
+    expect(await page.evaluate(() => window.privacyReadyBeforeRoot)).toBe(true);
+    const lock = page.getByRole('dialog', { name: 'Lowcord is locked' });
+    await expect(lock).toBeVisible();
+    expect(await page.evaluate(() => document.body.inert)).toBe(true);
+    expect(await page.evaluate(() => Lowcord.storage.getItem('lowcord.privacy.lock.v1'))).toBe(JSON.stringify(savedCode));
+    expect(await page.evaluate(() => Lowcord.privacy.state.metadata)).toBe(false);
+    expect(await page.evaluate(() => Lowcord.extensions.enabled('silentTyping'))).toBe(false);
+    await lock.getByLabel('Passcode').fill('2468');
+    await lock.getByRole('button', { name: 'Unlock', exact: true }).click();
+    await expect(lock).toHaveCount(0);
+    expect(await page.evaluate(() => document.body.inert)).toBe(false);
+    await page.evaluate(() => window.__lowcordOpenSettings('extensions'));
+    await expect(page.getByRole('searchbox', { name: 'Search extensions' })).toBeVisible();
+    expect(errors).toEqual([]);
+});

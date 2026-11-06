@@ -81,6 +81,13 @@ createServer((request, response) => {
         });
         return;
     }
+    if (url.pathname === '/electron-slow-start') {
+        response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
+        response.flushHeaders();
+        // Deliver headers before HTML, as a real network navigation can do.
+        setTimeout(() => response.end(routes['/electron'][1]), 150);
+        return;
+    }
     const route = routes[url.pathname];
     if (route && url.pathname.startsWith('/media/')) {
         const bytes = route[1];
