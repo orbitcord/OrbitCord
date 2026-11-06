@@ -41,13 +41,14 @@ test("a theme repaints Discord's tokens from one stylesheet and persists", async
 
 test("each theme loads only its own rules", async ({ page }) => {
     const ids = await page.evaluate(() => window.__lowcordThemes.catalog.map(theme => theme.id));
-    expect(ids).toEqual(["fjord", "ember", "moss", "velvet", "phosphor", "custom"]);
-    for (const id of ids) {
+    expect(ids).toEqual(["fjord", "ember", "moss", "velvet", "phosphor", "music", "custom"]);
+    // Match music is a gradient through Discord's own theme layer, tested on its own.
+    for (const id of ids.filter(id => id !== "music")) {
         await page.evaluate(id => window.__lowcordThemes.set({ id }), id);
         await expect.poll(() => applied(page)).toEqual({ id, sheets: 1 });
         const text = await css(page);
         expect(text).toContain(`[data-orbitcord-theme="${id}"]`);
-        for (const other of ids.filter(other => other !== id)) {
+        for (const other of ids.filter(other => other !== id && other !== "music")) {
             expect(text, `${id} carries ${other}`).not.toContain(`"${other}"`);
         }
     }

@@ -352,6 +352,18 @@ function setupLowcordSettings() {
         instagramVideoUpload: ["Uploads", "Send an Instagram Reel or video link to upload its video as a file."],
         twitterVideoUpload: ["Uploads", "Send an X video link to upload the video as a file."],
         socialPhotoUpload: ["Uploads", "Send an Instagram, Reddit or X photo post or carousel link to upload its photos as files.", "Off by default. Turn it on with the card switch."],
+        splitMessages: ["Messaging", "Send a message longer than Discord's limit and OrbitCord posts it as several messages in order."],
+        readAll: ["Utilities", "Use the button in the server list to clear every unread badge at once."],
+        callTimer: ["Utilities", "See how long you have been in a voice call, beside the call controls."],
+        onlineFriendCount: ["Utilities", "See how many friends are online under the Home button."],
+        translate: ["Messaging", "Right-click a message and choose Translate. Use Translate target language below the extension list to change the language.", "The message text is sent to Google Translate only when you ask."],
+        fullQualityImages: ["Media", "Chat images load at their original quality instead of Discord's compressed previews.", "Off by default. Uses more memory and data."],
+        embedMoreImages: ["Media", "Attachments in BMP, ICO, AVIF, APNG and JFIF formats show as images in chat."],
+        zipPreview: ["Media", "Select a zip attachment to browse the files inside it without downloading the whole archive."],
+        gifCaptioner: ["Media", "Hover a GIF in the picker or right-click one in chat. Choose bar, meme, subtitle or bubble text, trim the clip, then press Enter to send or Shift+Enter to add it to your message."],
+        bringBackTenor: ["Media", "Searches, trending and suggestions in the GIF picker come from Tenor again. Turn it off to use Discord's Klipy results."],
+        miniChat: ["Messaging", "Pin a DM or channel as a small floating chat that stays open while you browse."],
+        smoothAnimations: ["Utilities", "Adds gentle transitions when you switch channels and open menus."],
     };
 
     function ExtensionsPanel() {

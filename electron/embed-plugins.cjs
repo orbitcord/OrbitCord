@@ -68,7 +68,7 @@ function musicVolume(settings) {
 }
 
 function setupEmbedPlugins(contents) {
-    let settings = { youtubeAdblock: true, musicEmbeds: true, musicVolume: 50 };
+    let settings = { youtubeAdblock: true, musicEmbeds: true, musicVolume: 50, fullQualityImages: false };
     async function apply(frame) {
         try {
             if (frame === contents.mainFrame) return;
@@ -85,10 +85,11 @@ function setupEmbedPlugins(contents) {
         });
     });
     return {
+        get fullQualityImages() { return settings.fullQualityImages; },
         set(next) {
             if (!next || typeof next.youtubeAdblock !== 'boolean' || typeof next.musicEmbeds !== 'boolean'
-                || !Number.isFinite(next.musicVolume) || next.musicVolume < 0 || next.musicVolume > 100) throw new Error('Invalid embed preferences');
-            settings = { youtubeAdblock: next.youtubeAdblock, musicEmbeds: next.musicEmbeds, musicVolume: next.musicVolume };
+                || (next.fullQualityImages !== undefined && typeof next.fullQualityImages !== 'boolean') || !Number.isFinite(next.musicVolume) || next.musicVolume < 0 || next.musicVolume > 100) throw new Error('Invalid embed preferences');
+            settings = { youtubeAdblock: next.youtubeAdblock, musicEmbeds: next.musicEmbeds, musicVolume: next.musicVolume, fullQualityImages: next.fullQualityImages === true };
             for (const frame of contents.mainFrame.framesInSubtree) void apply(frame);
         },
     };

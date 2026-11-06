@@ -49,15 +49,21 @@ async function inlineSettings(page) {
 }
 test('selected privacy design fills native settings and choices persist after reload', async ({ page }, info) => {
     await setup(page); const panel = await inlineSettings(page);
-    await expect(panel.getByRole('navigation', { name: 'Protections' }).getByRole('button')).toHaveText([/^Media metadata/, /^Cover image details/, /^Message expiry/, /^Attachment inspector/, /^Walk-away protection/, /^Leave no trace/, /^Privacy report/]);
+    await expect(panel.locator('.lowcord-privacy-row-main')).toHaveText([/^Media metadata/, /^Attachment inspector/, /^Cover image details/, /^Message expiry/, /^App lock/, /^Walk-away protection/, /^Leave no trace/]);
+    await expect(panel.locator('.lowcord-privacy-group > h2')).toHaveText(['Uploads', 'Messages', 'This device']);
+    await expect(panel.getByRole('heading', { name: 'Privacy & Security' })).toHaveCount(1);
+    await expect(panel.locator('.lowcord-privacy-status')).toContainText('3 of 7 protections on');
     await expect(panel.getByRole('switch', { name: 'Remove media metadata' })).toBeChecked();
     await expect(page.locator('.contentHeader_test button')).toBeVisible();
     await expect(page.locator('.lowcord-settings-backdrop')).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('privacy-settings.png') });
-    await panel.getByRole('navigation', { name: 'Protections' }).getByRole('button', { name: /^Attachment inspector/ }).click();
+    const row = panel.getByRole('button', { name: /^Attachment inspector/ });
+    await row.click(); await expect(row).toHaveAttribute('aria-expanded', 'true');
+    await panel.getByRole('button', { name: /^Media metadata/ }).click(); await expect(row).toHaveAttribute('aria-expanded', 'false');
     await panel.getByRole('switch', { name: 'Attachment inspector' }).click();
+    await expect(row).toHaveAttribute('aria-expanded', 'false');
     await page.reload(); await page.waitForFunction(() => window.fixtureReady);
-    expect(await page.evaluate(() => Lowcord.privacy.state)).toEqual({ metadata: true, inspector: false, walkAway: true, coverAsk: false });
+    expect(await page.evaluate(() => Lowcord.privacy.state)).toEqual({ metadata: true, inspector: false, walkAway: true, coverAsk: false, appLock: false, lockAfter: 5 });
 });
 test('privacy controls remain within the native column in a narrow light window', async ({ page }, info) => {
     await setup(page); const panel = await inlineSettings(page);
@@ -350,7 +356,7 @@ test('the privacy report counts protections, stays on reload and resets', async 
         Lowcord.privacy.count('links', 3); Lowcord.privacy.report.flush();
     });
     const panel = await inlineSettings(page);
-    await panel.getByRole('button', { name: /^Privacy report/ }).click();
+    await panel.getByRole('button', { name: 'View report' }).click();
     await expect(panel.locator('.lowcord-privacy-stats > div', { hasText: 'Link trackers' }).locator('dd')).toHaveText('3');
     await expect(panel.locator('.lowcord-privacy-total')).toContainText('protections');
     await page.reload(); await page.waitForFunction(() => window.fixtureReady);
@@ -364,12 +370,50 @@ test('each new protection pane stays inside the settings column', async ({ page 
         window.__LOWCORD_NATIVE__ = { ...window.__LOWCORD_NATIVE__, traces: async () => ({ clearOnQuit: true, signOut: false, cacheBytes: 1.2 * 1024 ** 3 }) };
         Lowcord.privacy.count('analytics', 13); Lowcord.privacy.count('links', 2); Lowcord.privacy.count('images', 1);
     });
-    for (const name of ['Cover image details', 'Walk-away protection', 'Leave no trace', 'Privacy report']) {
+    for (const name of ['Cover image details', 'Walk-away protection', 'Leave no trace', 'App lock']) {
         await panel.getByRole('button', { name: new RegExp(`^${name}`) }).click();
-        await expect(panel.locator('#lowcord-privacy-detail-title')).toHaveText(name);
+        await expect(panel.getByRole('button', { name: new RegExp(`^${name}`) })).toHaveAttribute('aria-expanded', 'true');
         if (name === 'Leave no trace') await expect(panel.getByText('1.2 GB')).toBeVisible();
         await page.screenshot({ path: info.outputPath(`${name}.png`) });
         const bounds = await panel.locator('.lowcord-settings-body').evaluate(node => ({ width: node.clientWidth, content: node.scrollWidth }));
         expect(bounds.content).toBeLessThanOrEqual(bounds.width + 1);
     }
+});
+
+test('app lock sets a hashed passcode, covers the app, throttles guesses and needs the passcode to turn off', async ({ page }) => {
+    await setup(page); const panel = await inlineSettings(page);
+    await panel.getByRole('switch', { name: 'App lock' }).click();
+    await panel.getByLabel('New passcode (4 to 8 digits)').fill('2468'); await panel.getByLabel('Confirm passcode').fill('2468');
+    await panel.getByRole('button', { name: 'Turn on app lock' }).click();
+    await expect(panel.getByRole('switch', { name: 'App lock' })).toBeChecked();
+    const stored = await page.evaluate(() => Lowcord.storage.getItem('lowcord.privacy.lock.v1'));
+    expect(stored).not.toContain('2468'); expect(JSON.parse(stored).hash.length).toBeGreaterThan(20);
+    await page.evaluate(() => Lowcord.privacy.walkAwayChanged('away'));
+    const lock = page.getByRole('dialog', { name: 'Lowcord is locked' }); await expect(lock).toBeVisible();
+    await page.keyboard.press('Escape'); await expect(lock).toBeVisible();
+    await lock.getByLabel('Passcode').fill('1111'); await page.keyboard.press('Enter');
+    await expect(lock).toContainText('Wrong passcode');
+    await lock.getByLabel('Passcode').fill('2468'); await page.keyboard.press('Enter');
+    await expect(lock).toHaveCount(0);
+    // Reload: covered again before Discord is usable.
+    await page.reload(); await expect(page.getByRole('dialog', { name: 'Lowcord is locked' })).toBeVisible();
+    for (let i = 0; i < 5; i++) { await page.getByLabel('Passcode').fill('0000'); await page.keyboard.press('Enter'); await page.waitForTimeout(150); }
+    await expect(page.locator('.lowcord-lock')).toContainText('Too many tries');
+    await expect(page.getByLabel('Passcode')).toBeDisabled();
+});
+
+test('forgot passcode logs out through Discord and only then removes the lock', async ({ page }) => {
+    await setup(page);
+    await page.evaluate(async () => { await Lowcord.privacy.setPasscode('2468'); Lowcord.privacy.set({ appLock: true }); window.loggedOut = 0; Lowcord.privacy.lock(); });
+    const lock = page.getByRole('dialog', { name: 'Lowcord is locked' });
+    await lock.getByRole('button', { name: 'Forgot passcode?' }).click();
+    await expect(lock).toContainText('Log out of Discord to remove the lock');
+    // No logout module: the lock stays.
+    await lock.getByRole('button', { name: 'Log out' }).click();
+    await expect(lock).toContainText('quit Lowcord and try again');
+    expect(await page.evaluate(() => Lowcord.privacy.state.appLock)).toBe(true);
+    await page.evaluate(() => webpackChunkdiscord_app[0][2]({ c: { auth: { exports: { logout: () => { window.loggedOut++; } } } } }));
+    await lock.getByRole('button', { name: 'Log out' }).click();
+    await expect(lock).toHaveCount(0);
+    expect(await page.evaluate(() => [window.loggedOut, Lowcord.privacy.state.appLock, Lowcord.storage.getItem('lowcord.privacy.lock.v1')])).toEqual([1, false, 'null']);
 });

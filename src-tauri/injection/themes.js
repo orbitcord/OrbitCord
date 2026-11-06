@@ -207,6 +207,143 @@ function setupLowcordThemes() {
                 code: shade(.2), bubbleOut, bubbleOutText: "#ffffff", bubbleIn: lift(.1), bubbleInText: text } };
     }
 
+    // "Match music": the colors follow the art of the song the user is playing.
+    // Only the palette is derived here; it flows through customTheme() like the
+    // custom theme, so every other color stays consistent and readable.
+    const musicNeutral = { background: "#1c1d23", accent: "#9aa3f0", colors: ["#2a2d4a", "#1c1d23"] };
+    // Album colors are laid out like a Nitro gradient, through Discord's own theme layer.
+    const musicGradient = music => ({ colors: music.colors, stops: null, angle: 135 });
+    const musicTheme = music => ({ ...customTheme({ ...music, text: null, radius: 8 }), id: "music", name: "Match music",
+        blurb: "Colors follow the album art of the song you are playing." });
+    // A dominant vibrant color and a dark tone of it from a 32x32 RGBA sample.
+    function musicColors(data) {
+        const bins = Array.from({ length: 12 }, () => ({ w: 0, r: 0, g: 0, b: 0 }));
+        let total = 0;
+        for (let i = 0; i + 3 < data.length; i += 4) {
+            if (data[i + 3] < 128) continue;
+            const r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255;
+            const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min;
+            if (!d || l < .08 || l > .95) continue;
+            const s = d / (1 - Math.abs(2 * l - 1));
+            const h = max === r ? ((g - b) / d + 6) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+            const weight = s * s * (1 - Math.abs(2 * l - 1));
+            const bin = bins[Math.min(11, Math.floor(h * 2))];
+            bin.w += weight; bin.r += data[i] * weight; bin.g += data[i + 1] * weight; bin.b += data[i + 2] * weight;
+            total += weight;
+        }
+        const best = bins.reduce((a, b) => b.w > a.w ? b : a);
+        if (total < .5 || best.w < .25) return { ...musicNeutral, colors: [...musicNeutral.colors] };
+        const average = bin => `#${[bin.r, bin.g, bin.b].map(value => Math.round(value / bin.w).toString(16).padStart(2, "0")).join("")}`;
+        const [hue, saturation] = rgbToHsl(average(best));
+        // The gradient: the art's strongest hues, deepened so text stays readable.
+        const strong = bins.filter(bin => bin.w >= best.w * .15).sort((a, b) => b.w - a.w).slice(0, 3);
+        const colors = strong.map(bin => { const [h, s] = rgbToHsl(average(bin)); return hslToHex(h, Math.min(.85, Math.max(.45, s)), .3); });
+        if (colors.length < 2) colors.push(hslToHex((hue + 32) % 360, Math.min(.85, Math.max(.45, saturation)), .2));
+        return { accent: hslToHex(hue, Math.min(.85, Math.max(.5, saturation)), .66),
+            background: hslToHex(hue, Math.min(.4, saturation * .5), .14), colors };
+    }
+    const musicHosts = new Set(["i.scdn.co", "media.discordapp.net", "cdn.discordapp.com", "i.ytimg.com", "lh3.googleusercontent.com"]);
+    // The image address of an activity's large art, on hosts OrbitCord may fetch.
+    function musicArtURL(activity) {
+        const image = activity?.assets?.large_image;
+        if (typeof image !== "string" || !image) return null;
+        if (image.startsWith("spotify:")) return /^[\w-]+$/.test(image.slice(8)) ? `https://i.scdn.co/image/${image.slice(8)}` : null;
+        if (image.startsWith("mp:external/")) return `https://media.discordapp.net/${image.slice(3)}?width=64&height=64`;
+        if (image.startsWith("mp:attachments/")) return `https://media.discordapp.net/${image.slice(3)}?width=64&height=64`;
+        if (/^https:\/\//.test(image)) {
+            try { return musicHosts.has(new URL(image).hostname) ? image : null; } catch { return null; }
+        }
+        return /^\d+$/.test(image) && /^\d+$/.test(activity.application_id ?? "")
+            ? `https://cdn.discordapp.com/app-assets/${activity.application_id}/${image}.png?size=64` : null;
+    }
+    function currentMusicURL() {
+        const lowcord = window.Lowcord;
+        const me = lowcord?.store("UserStore")?.getCurrentUser?.()?.id;
+        if (!me) return null;
+        const lists = [lowcord.store("LocalActivityStore")?.getActivities?.(), lowcord.store("PresenceStore")?.getActivities?.(me),
+            [lowcord.store("SpotifyStore")?.getActivity?.()]];
+        for (const list of lists) {
+            if (!Array.isArray(list)) continue;
+            for (const activity of list) {
+                if (activity?.type !== 2) continue;
+                const url = musicArtURL(activity);
+                if (url) return url;
+            }
+        }
+        return null;
+    }
+    const drawPixels = source => new Promise((resolve, reject) => {
+        const image = new Image();
+        image.crossOrigin = "anonymous";
+        image.onload = () => {
+            try {
+                const canvas = document.createElement("canvas");
+                canvas.width = canvas.height = 32;
+                const context = canvas.getContext("2d", { willReadFrequently: true });
+                context.drawImage(image, 0, 0, 32, 32);
+                resolve(context.getImageData(0, 0, 32, 32).data);
+            } catch (error) { reject(error); }
+        };
+        image.onerror = () => reject(new Error("image"));
+        image.src = source;
+    });
+    async function musicPixels(url) {
+        try { return await drawPixels(url); }
+        catch {
+            const fetched = await window.__LOWCORD_NATIVE__?.fetchRemote?.(url, { as: "dataUrl", maxBytes: 2097152 });
+            const dataUrl = typeof fetched === "string" ? fetched : fetched?.status === 200 ? fetched.body : null;
+            if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) throw new Error("art");
+            return drawPixels(dataUrl);
+        }
+    }
+    const musicCache = new Map();
+    let musicTimer, musicToken = 0, musicListening = false, musicShown;
+    async function updateMusic() {
+        const url = currentMusicURL();
+        // Nothing playing: keep the last palette.
+        if (!url || url === musicShown || state.id !== "music") return;
+        const token = ++musicToken;
+        let colors = musicCache.get(url);
+        if (colors) { musicCache.delete(url); }
+        else {
+            try { colors = musicColors(await musicPixels(url)); } catch { return; }
+        }
+        musicCache.set(url, colors);
+        if (musicCache.size > 20) musicCache.delete(musicCache.keys().next().value);
+        if (token !== musicToken || state.id !== "music") return;
+        musicShown = url;
+        if (JSON.stringify(colors) !== JSON.stringify(state.music)) change({ music: colors });
+    }
+    const musicEvents = ["SPOTIFY_PLAYER_STATE", "LOCAL_ACTIVITY_UPDATE", "PRESENCE_UPDATES"];
+    function musicEvent(event) {
+        if (event?.type === "PRESENCE_UPDATES") {
+            const me = window.Lowcord.store("UserStore")?.getCurrentUser?.()?.id;
+            if (!event.updates?.some(update => update?.user?.id === me)) return;
+        }
+        clearTimeout(musicTimer);
+        musicTimer = setTimeout(() => updateMusic().catch(() => {}), 400);
+    }
+    // Listens to Discord's events only while the Match music theme is chosen.
+    function syncMusic(attempt = 0) {
+        const wanted = state.id === "music";
+        const dispatcher = window.Lowcord?.Dispatcher;
+        if (wanted && !musicListening) {
+            if (!dispatcher) {
+                if (attempt < 40) setTimeout(() => syncMusic(attempt + 1), 1500);
+                return;
+            }
+            for (const type of musicEvents) dispatcher.subscribe(type, musicEvent);
+            musicListening = true;
+            musicShown = undefined;
+            musicEvent();
+        } else if (!wanted && musicListening) {
+            for (const type of musicEvents) dispatcher?.unsubscribe(type, musicEvent);
+            musicListening = false;
+            clearTimeout(musicTimer);
+            musicToken++;
+        }
+    }
+
     // System fonts offered for all of Discord. Only the ones this computer
     // has are listed, so each renders as itself.
     const fontChoices = [
@@ -275,13 +412,17 @@ function setupLowcordThemes() {
             const theme = nitroValue(entry), name = typeof entry?.name === "string" ? entry.name.trim().slice(0, 40) : "";
             return theme && name ? { name, ...theme } : null;
         }).filter((entry, index, all) => entry && all.findIndex(other => other?.name === entry.name) === index).slice(0, 30);
-        return { id: ["custom", "nitro"].includes(value?.id) || themes.some(theme => theme.id === value?.id) ? value.id : "discord",
-            fonts: value?.fonts !== false, bubbles: value?.bubbles !== false, font: fontStack(value?.font) ? value.font : "", custom,
+        const savedMusic = value?.music ?? {};
+        const music = { background: hex.test(savedMusic.background ?? "") ? savedMusic.background.toLowerCase() : musicNeutral.background,
+            accent: hex.test(savedMusic.accent ?? "") ? savedMusic.accent.toLowerCase() : musicNeutral.accent,
+            colors: nitroValue({ colors: savedMusic.colors })?.colors ?? [...musicNeutral.colors] };
+        return { id: ["custom", "nitro", "music"].includes(value?.id) || themes.some(theme => theme.id === value?.id) ? value.id : "discord",
+            fonts: value?.fonts !== false, bubbles: value?.bubbles !== false, font: fontStack(value?.font) ? value.font : "", custom, music,
             nitro: nitroValue(value?.nitro) ?? nitroDefault,
             nitroStrength: Number.isFinite(value?.nitroStrength) ? Math.round(Math.min(100, Math.max(0, value.nitroStrength))) : nitroStrength,
             nitroSaved: mixes };
     }
-    const themeFor = id => id === "custom" ? customTheme(state.custom) : themes.find(entry => entry.id === id);
+    const themeFor = id => id === "custom" ? customTheme(state.custom) : id === "music" ? musicTheme(state.music) : themes.find(entry => entry.id === id);
     let state;
     try { state = normalize(JSON.parse(storage?.getItem(storageKey) ?? "null")); }
     catch { state = normalize(null); }
@@ -309,7 +450,8 @@ function setupLowcordThemes() {
     }
     function render() {
         const root = document.documentElement;
-        const nitro = state.id === "nitro" && fakeNitroOn();
+        const music = state.id === "music";
+        const nitro = (state.id === "nitro" && fakeNitroOn()) || music;
         const theme = nitro ? null : themeFor(state.id);
         const stack = fontStack(state.font);
         keepNitroClasses(nitro);
@@ -320,11 +462,11 @@ function setupLowcordThemes() {
             for (const name of ["data-orbitcord-theme", "data-orbitcord-theme-fonts", "data-orbitcord-theme-bubbles", "data-orbitcord-font"]) root.removeAttribute(name);
             return;
         }
-        const key = `${nitro ? "nitro" : theme?.id}|${state.font}|${theme?.id === "custom" ? JSON.stringify(state.custom) : ""}`
+        const key = `${music ? "music" : nitro ? "nitro" : theme?.id}|${state.font}|${music ? JSON.stringify(state.music) : ""}|${theme?.id === "custom" ? JSON.stringify(state.custom) : theme?.id === "music" ? JSON.stringify(state.music) : ""}`
             + (nitro ? `|${JSON.stringify(state.nitro)}|${state.nitroStrength}` : "");
         if (renderedKey !== key) {
             // The chosen font outranks a theme's own and keeps Discord's text size.
-            style.textContent = (nitro ? nitroCSS(state.nitro, state.nitroStrength)
+            style.textContent = (nitro ? nitroCSS(music ? musicGradient(state.music) : state.nitro, music ? nitroStrength : state.nitroStrength)
                 : theme ? paletteCSS(theme) + sections.shared + (sections[theme.id] ?? "") : "")
                 + (stack ? `:root:root[data-orbitcord-font]{--font-primary:${stack};--font-display:${stack};--font-headline:${stack};`
                     + "font-size-adjust:ex-height .47}\n" : "");
@@ -347,7 +489,9 @@ function setupLowcordThemes() {
         if (boot) boot.textContent = `html,body,#app-mount{background:${theme.palette.frame}!important;color-scheme:${theme.scheme}}`;
     }
     // At document start <html> may not exist yet.
-    const start = () => { try { render(); } catch (error) { console.error("[Lowcord] Theme:", error); } };
+    const syncAnimations = () => document.documentElement?.toggleAttribute("data-lowcord-animations",
+        window.Lowcord?.extensions?.enabled?.("smoothAnimations") !== false);
+    const start = () => { try { render(); syncAnimations(); syncMusic(); } catch (error) { console.error("[Lowcord] Theme:", error); } };
     if (document.documentElement) start();
     else {
         const waiting = new MutationObserver(() => {
@@ -360,6 +504,7 @@ function setupLowcordThemes() {
 
     // Turning Fake Nitro off or on shows or hides a chosen Nitro theme.
     window.addEventListener("lowcord-extensions-change", () => {
+        syncAnimations();
         if (state.id !== "nitro") return;
         start();
         window.dispatchEvent(new Event(changeEvent));
@@ -377,6 +522,7 @@ function setupLowcordThemes() {
             && document.visibilityState === "visible" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
         if (fade) document.startViewTransition(render);
         else render();
+        syncMusic();
         window.dispatchEvent(new Event(changeEvent));
     }
 
@@ -410,7 +556,9 @@ function setupLowcordThemes() {
             palette: { frame: nitroGradient(current.nitro), rail: "rgb(0 0 0 / .34)", sidebar: "rgb(0 0 0 / .22)", chat: "rgb(0 0 0 / .1)",
                 surface: "rgb(255 255 255 / .1)", border: "rgb(255 255 255 / .14)", mention: "rgb(255 255 255 / .1)",
                 text: "#f2f3f5", muted: "#c4c9ce", accent: "#5865f2" } };
-        const choices = [discord, ...themes, custom, ...(nitroOn ? [nitroCard] : [])];
+        const musicCard = { ...nitroCard, id: "music", name: "Match music", blurb: "A gradient from the album art of the song you are playing.",
+            palette: { ...nitroCard.palette, frame: nitroGradient(musicGradient(current.music)), accent: current.music.accent } };
+        const choices = [discord, ...themes, musicCard, custom, ...(nitroOn ? [nitroCard] : [])];
         const active = themeFor(current.id);
         // Any edit to the custom theme also selects it, so the change shows.
         const edit = value => save({ id: "custom", custom: value });
@@ -595,9 +743,9 @@ function setupLowcordThemes() {
 
     window.__lowcordThemes = {
         get catalog() {
-            return [...themes, customTheme(state.custom)].map(({ id, name, scheme, palette }) => ({ id, name, scheme,
+            return [...themes, musicTheme(state.music), customTheme(state.custom)].map(({ id, name, scheme, palette }) => ({ id, name, scheme,
                 bubbles: { outgoingColor: palette.bubbleOut, outgoingTextColor: palette.bubbleOutText,
                     incomingColor: palette.bubbleIn, incomingTextColor: palette.bubbleInText } }));
         },
-        get state() { return { ...state, custom: { ...state.custom } }; }, set: change, fonts: installedFonts, changeEvent, SettingsPanel: ThemesPanel };
+        get state() { return { ...state, custom: { ...state.custom }, music: { ...state.music } }; }, set: change, musicColors, musicArtURL, fonts: installedFonts, changeEvent, SettingsPanel: ThemesPanel };
 }

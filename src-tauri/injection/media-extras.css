@@ -1,0 +1,52 @@
+/* Translate, embedded images and zip preview. Everything is lowcord-owned. */
+
+/* Translation under a message's own text. */
+.lowcord-translation { margin-top: 4px; padding-left: 8px; border-left: 2px solid var(--background-modifier-accent, rgb(148 155 164 / .3)); }
+.lowcord-translation-head { font-size: 12px; line-height: 16px; color: var(--text-muted, #949ba4); }
+.lowcord-translation-link { padding: 0; border: 0; background: none; color: var(--text-link, #00a8fc); font: inherit; cursor: pointer; }
+.lowcord-translation-link:hover { text-decoration: underline; }
+.lowcord-translation-text { font-size: 14px; line-height: 1.375; color: var(--text-normal, #dbdee1); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Language picker above the composer. */
+.lowcord-composer-popups > .lowcord-translate-picker {
+    position: relative; display: grid; gap: 10px; box-sizing: border-box; width: min(300px, calc(100vw - 32px)); padding: 14px;
+    border-radius: 14px; pointer-events: auto; transform-origin: right bottom; font: 14px/1.4 var(--font-primary, sans-serif);
+    color: var(--text-normal, #dbdee1); background: var(--background-floating, var(--background-secondary, #2b2d31));
+    box-shadow: 0 0 0 .5px rgb(255 255 255 / .12), 0 12px 32px rgb(0 0 0 / .45);
+}
+.lowcord-translate-select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--background-modifier-accent, rgb(148 155 164 / .3)); border-radius: 8px;
+    background: var(--input-background, var(--background-tertiary, #1e1f22)); color: inherit; font: inherit;
+}
+.lowcord-translate-select:focus-visible, .lowcord-translate-button:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 1px; }
+.lowcord-translate-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.lowcord-translate-button { padding: 6px 14px; border: 0; border-radius: 8px; background: var(--background-modifier-hover, rgb(148 155 164 / .12)); color: inherit; font: inherit; cursor: pointer; }
+.lowcord-translate-primary { background: var(--brand-500, #5865f2); color: #fff; }
+
+/* Embedded image attachments. */
+.lowcord-embed-image { margin-top: 6px; max-width: 400px; }
+.lowcord-embed-image-button { display: block; padding: 0; border: 0; border-radius: 8px; background: none; cursor: zoom-in; overflow: hidden; }
+.lowcord-embed-image-button:focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px; }
+.lowcord-embed-image img { display: block; max-width: 400px; max-height: 300px; width: auto; height: auto; object-fit: contain; border-radius: 8px; }
+
+/* Zip preview. */
+.lowcord-zip { margin-top: 4px; max-width: 520px; font: 14px/1.4 var(--font-primary, sans-serif); color: var(--text-normal, #dbdee1); }
+.lowcord-zip-toggle, .lowcord-zip-action, .lowcord-zip-crumb {
+    padding: 3px 10px; border: 0; border-radius: 6px; background: var(--background-modifier-hover, rgb(148 155 164 / .12)); color: inherit; font-size: 13px; cursor: pointer;
+}
+.lowcord-zip-toggle:hover, .lowcord-zip-action:hover, .lowcord-zip-crumb:hover:not(:disabled), .lowcord-zip-row:hover { background: var(--background-modifier-selected, rgb(148 155 164 / .2)); }
+.lowcord-zip :is(button):focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 1px; }
+.lowcord-zip-crumb:disabled { opacity: .4; cursor: default; }
+.lowcord-zip-panel { margin-top: 6px; padding: 8px; border-radius: 8px; background: var(--background-secondary, #2b2d31); border: 1px solid var(--background-modifier-accent, rgb(148 155 164 / .2)); }
+.lowcord-zip-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-bottom: 6px; }
+.lowcord-zip-sep { color: var(--text-muted, #949ba4); }
+.lowcord-zip-list { display: grid; max-height: 220px; overflow-y: auto; scrollbar-width: thin; }
+.lowcord-zip-row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 8px; border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.lowcord-zip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lowcord-zip-size, .lowcord-zip-status { color: var(--text-muted, #949ba4); font-size: 12px; flex: none; }
+.lowcord-zip-status { padding: 4px 8px; }
+.lowcord-zip-preview { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--background-modifier-accent, rgb(148 155 164 / .2)); }
+.lowcord-zip-preview-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.lowcord-zip-preview-head strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.lowcord-zip-text { margin: 0; max-height: 260px; overflow: auto; padding: 8px; border-radius: 6px; background: var(--background-tertiary, #1e1f22); font: 12px/1.45 var(--font-code, ui-monospace, Menlo, Consolas, monospace); white-space: pre; tab-size: 4; user-select: text; }
+.lowcord-zip-image { display: block; max-width: 100%; max-height: 260px; object-fit: contain; border-radius: 6px; }

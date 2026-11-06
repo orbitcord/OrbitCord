@@ -2,6 +2,7 @@
 // video; frames are drawn one at a time, mapped to one shared palette and
 // written as they are made, so memory stays bounded to a couple of frames.
 // Each frame stores only the box of pixels that changed, the rest transparent.
+// Animated GIF and WebP sources decode through WebCodecs, one frame at a time.
 (() => {
     const transparent = 255;
     // Largest first; each step trades size and smoothness for a smaller file.
@@ -122,14 +123,74 @@
     // sharing one dictionary, as before, without retaining it once all finish.
     let activeLzw, activeConversions = 0;
 
-    function load(bytes) {
+    const imageType = bytes => bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38 ? "image/gif"
+        : String.fromCharCode(...bytes.subarray(0, 4)) === "RIFF" && String.fromCharCode(...bytes.subarray(8, 12)) === "WEBP" ? "image/webp" : "";
+    // An animated image that stands in for a <video>: videoWidth, videoHeight,
+    // duration and a currentTime setter that decodes the frame at that time,
+    // keeps it as `.frame` and fires "seeked". Only one decoded frame is held.
+    class AnimatedImage extends EventTarget {
+        constructor(decoder, starts, duration, frame) {
+            super();
+            Object.assign(this, { decoder, starts, duration, frame, index: 0, time: 0, chain: Promise.resolve(), closed: false,
+                videoWidth: frame.displayWidth, videoHeight: frame.displayHeight });
+        }
+        get currentTime() { return this.time; }
+        set currentTime(value) {
+            this.time = value;
+            this.chain = this.chain.then(() => this.show(value));
+        }
+        async show(time) {
+            const { starts } = this;
+            let low = 0, high = starts.length - 1;
+            while (low < high) { const mid = (low + high + 1) >> 1; if (starts[mid] <= time) low = mid; else high = mid - 1; }
+            if (!this.closed && low !== this.index) {
+                try {
+                    const { image } = await this.decoder.decode({ frameIndex: low });
+                    if (this.closed) image.close();
+                    else { this.frame?.close(); this.frame = image; this.index = low; }
+                } catch {}
+            }
+            if (!this.closed) this.dispatchEvent(new Event("seeked"));
+        }
+        close() { this.closed = true; this.frame?.close(); this.frame = null; try { this.decoder.close(); } catch {} }
+    }
+    // Resolves to an AnimatedImage for GIF or WebP bytes, else null.
+    async function animated(bytes) {
+        const type = imageType(bytes);
+        if (!type) return null;
+        if (typeof ImageDecoder !== "function") throw new Error("Animated images can't be decoded here");
+        const decoder = new ImageDecoder({ data: bytes, type });
+        let first;
+        try {
+            await decoder.tracks.ready;
+            await decoder.completed;
+            const count = Math.max(1, decoder.tracks.selectedTrack?.frameCount || 1);
+            // Frame start times come from decoding each frame once, closed at once.
+            const starts = [];
+            let total = 0;
+            for (let index = 0; index < count; index++) {
+                const { image } = await decoder.decode({ frameIndex: index });
+                starts.push(total);
+                total += image.duration > 0 ? image.duration / 1e6 : .1;
+                if (index) image.close(); else first = image;
+            }
+            return new AnimatedImage(decoder, starts, total, first);
+        } catch (error) {
+            first?.close(); decoder.close();
+            throw error;
+        }
+    }
+    async function load(bytes) {
+        const image = await animated(bytes);
+        if (image) return { video: image, close: () => image.close() };
         const video = document.createElement("video");
-        const url = URL.createObjectURL(new Blob([bytes], { type: "video/mp4" }));
+        const url = URL.createObjectURL(new Blob([bytes], { type: bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3 ? "video/webm" : "video/mp4" }));
+        const release = () => URL.revokeObjectURL(url);
         Object.assign(video, { muted: true, playsInline: true, preload: "auto", src: url });
         return new Promise((resolve, reject) => {
             video.addEventListener("loadeddata", () => resolve(video), { once: true });
             video.addEventListener("error", () => reject(new Error("Undecodable video")), { once: true });
-        }).catch(error => { URL.revokeObjectURL(url); throw error; }).then(video => ({ video, close: () => { video.removeAttribute("src"); video.load(); URL.revokeObjectURL(url); } }));
+        }).catch(error => { release(); throw error; }).then(video => ({ video, close: () => { video.removeAttribute("src"); video.load(); release(); } }));
     }
     function seek(video, time) {
         return new Promise((resolve, reject) => {
@@ -139,23 +200,36 @@
         });
     }
 
-    async function encode(video, { size, fps }, limit, lzw) {
+    // The part of the clip to convert: compose.start/end in seconds, at most 60s.
+    function span(video, compose) {
+        const total = video.duration;
+        const start = Math.max(0, Math.min(total, Number(compose?.start) || 0));
+        const end = compose?.end == null ? total : Math.max(start, Math.min(total, Number(compose.end)));
+        return { start, length: Math.min(end - start > 0 ? end - start : total, 60) };
+    }
+    // `compose` (optional, used by captions) places the scaled video inside a
+    // larger canvas: layout(width, height) -> { width, height, x, y, w, h }.
+    async function encode(video, { size, fps }, limit, lzw, compose) {
         const scale = Math.min(1, size / Math.max(video.videoWidth, video.videoHeight));
-        const width = Math.max(1, Math.round(video.videoWidth * scale)), height = Math.max(1, Math.round(video.videoHeight * scale));
+        const videoWidth = Math.max(1, Math.round(video.videoWidth * scale)), videoHeight = Math.max(1, Math.round(video.videoHeight * scale));
+        const box = compose ? compose.layout(videoWidth, videoHeight) : { width: videoWidth, height: videoHeight, x: 0, y: 0, w: videoWidth, h: videoHeight };
+        const { width, height } = box;
         const canvas = document.createElement("canvas");
         Object.assign(canvas, { width, height });
         const context = canvas.getContext("2d", { willReadFrequently: true });
-        const duration = Math.min(video.duration, 60);
-        const count = Math.max(1, Math.min(900, Math.round(duration * fps)));
+        const range = span(video, compose);
+        const count = Math.max(1, Math.min(900, Math.round(range.length * fps)));
         const frame = async index => {
-            await seek(video, Math.min(index / fps, Math.max(0, video.duration - 0.001)));
-            context.drawImage(video, 0, 0, width, height);
+            await seek(video, Math.min(range.start + index / fps, Math.max(0, video.duration - 0.001)));
+            if (compose) { context.fillStyle = "#fff"; context.fillRect(0, 0, width, height); }
+            context.drawImage(video.frame ?? video, box.x, box.y, box.w, box.h);
+            compose?.drawOverlay(context, width, height);
             return context.getImageData(0, 0, width, height).data;
         };
         // The palette comes from a handful of frames across the clip.
         const histogram = new Uint32Array(32768);
-        for (let sample = 0; sample < Math.min(8, count); sample++) {
-            const rgba = await frame(Math.floor(sample * count / Math.min(8, count)));
+        for (let n = 0, picks = Math.min(8, count); n < picks; n++) {
+            const rgba = await frame(Math.floor(n * count / picks));
             for (let i = 0; i < rgba.length; i += 4) histogram[(rgba[i] >> 3) << 10 | (rgba[i + 1] >> 3) << 5 | rgba[i + 2] >> 3]++;
         }
         const colors = palette(histogram), nearest = mapper(colors);
@@ -167,6 +241,7 @@
         let previous = null;
         const current = new Uint8Array(width * height);
         for (let index = 0; index < count; index++) {
+            compose?.progress?.(index / count);
             const rgba = await frame(index);
             for (let i = 0, p = 0; p < current.length; i += 4, p++) current[p] = nearest((rgba[i] >> 3) << 10 | (rgba[i + 1] >> 3) << 5 | rgba[i + 2] >> 3);
             // Only the box of changed pixels is written; unchanged ones are transparent.
@@ -218,5 +293,25 @@
             close();
         }
     }
-    window.Lowcord.gif = { fromVideo };
+    // Same pipeline with an overlay: layout(w, h) sizes the canvas around the
+    // scaled video and drawOverlay(ctx, w, h) paints on every frame.
+    async function fromVideoWith(bytes, limit, compose) {
+        const { video, close } = await load(bytes);
+        activeConversions++;
+        try {
+            if (!video.videoWidth || !Number.isFinite(video.duration)) return null;
+            const lzw = activeLzw ??= createLzw();
+            for (const step of steps.slice(span(video, compose).length > 20 ? 1 : 0)) {
+                compose.step?.(step);
+                const data = await encode(video, step, limit, lzw, compose);
+                if (data) return data;
+            }
+            return null;
+        } finally {
+            if (!--activeConversions) activeLzw = undefined;
+            close();
+        }
+    }
+    window.Lowcord.gif = { fromVideo, animated,
+        encode: ({ bytes, limit, layout, drawOverlay, progress, step, start, end }) => fromVideoWith(bytes, limit, { layout, drawOverlay, progress, step, start, end }) };
 })();

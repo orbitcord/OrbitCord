@@ -1,0 +1,29 @@
+/* Mark all as read: a "Read all" line under Home and the friend count. */
+.lowcord-readall { display: flex; justify-content: center; width: 72px; margin: 0 0 8px; }
+.lowcord-readall[hidden] { display: none; }
+/* Styled like the friend count above it: one quiet line of text, no chip. */
+.lowcord-readall-button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 2px; box-sizing: border-box; height: 16px; padding: 0 4px;
+    border: 0; border-radius: 4px; background: none; color: var(--text-muted, #949ba4); cursor: pointer;
+    font: 600 10px/12px var(--font-primary, system-ui); text-transform: uppercase; white-space: nowrap; transition: color .15s ease;
+}
+.lowcord-readall-button svg { flex: none; }
+.lowcord-readall-button:hover, .lowcord-readall-button:focus-visible { color: var(--text-normal, #dbdee1); }
+.lowcord-readall-button:focus-visible { outline: 2px solid var(--focus-primary, #00a8fc); outline-offset: 0; }
+@media (prefers-reduced-motion: reduce) { .lowcord-readall-button { transition: none; } }
+
+/* Online friend count: small label under Home. */
+.lowcord-online-friends {
+    display: block; box-sizing: border-box; width: 72px; margin: 6px 0 2px; padding: 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 0; background: none; cursor: pointer;
+    font: 600 10px/12px var(--font-primary, system-ui); letter-spacing: 0; text-transform: uppercase; text-align: center;
+    color: var(--text-muted, var(--text-subtle, #949ba4));
+}
+.lowcord-online-friends:hover, .lowcord-online-friends:focus-visible { color: var(--text-normal, #dbdee1); }
+.lowcord-online-friends:focus-visible { outline: 2px solid var(--focus-primary, #00a8fc); border-radius: 4px; }
+
+/* Call timer: a row under the voice connection status. */
+[class*="rtcConnectionStatus_"]:has(> .lowcord-call-timer) { flex-wrap: wrap; }
+.lowcord-call-timer {
+    flex: 1 0 100%; box-sizing: border-box; padding: 0 8px 6px; font: 500 12px/16px var(--font-primary, system-ui);
+    font-variant-numeric: tabular-nums; color: var(--text-muted, var(--text-subtle, #949ba4));
+}

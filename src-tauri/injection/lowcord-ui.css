@@ -1064,6 +1064,7 @@
 }
 .lowcord-dm-icon:hover, .lowcord-dm-icon[aria-expanded="true"] { background: var(--background-modifier-hover, rgb(255 255 255 / .06)); color: var(--interactive-hover, #dbdee1); }
 .lowcord-dm-icon:focus-visible { outline: 2px solid var(--focus-primary, #00a8fc); outline-offset: -2px; }
+.lowcord-dm-icon[hidden] { display: none; }
 
 .lowcord-dm-body { position: relative; height: 252px; }
 .lowcord-dm-list {
@@ -1152,6 +1153,23 @@
 .lowcord-dm-emoji-layer > * { flex: 1; min-width: 0; min-height: 0; }
 /* The button keeps Discord's sprite face at the size of the other icons. */
 .lowcord-dm-emoji-button { position: relative; }
+
+/* Mini chats: the same card, pinned. Dragged by the header, resized by the
+   corner; the message area takes whatever height the panel has. */
+.lowcord-minichat.lowcord-dm-card.lowcord-chat-preview {
+    z-index: 1000; width: 340px; height: 460px; min-width: 280px; min-height: 320px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px);
+    overflow: hidden; resize: both; transform-origin: bottom center;
+    animation: lowcord-minichat-in 180ms cubic-bezier(.22, 1, .36, 1);
+}
+.lowcord-minichat .lowcord-dm-body { flex: 1; height: auto; min-height: 0; }
+.lowcord-minichat > header { cursor: grab; user-select: none; touch-action: none; }
+.lowcord-minichat > header:active { cursor: grabbing; }
+.lowcord-minichat.lowcord-dm-card.lowcord-chat-preview[data-collapsed] { height: auto !important; min-height: 0; resize: none; }
+.lowcord-minichat[data-collapsed] > :is(.lowcord-dm-body, footer) { display: none; }
+@keyframes lowcord-minichat-in { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+@media (prefers-reduced-motion: reduce) {
+    .lowcord-minichat.lowcord-dm-card.lowcord-chat-preview { animation-duration: 1ms; }
+}
 
 .lowcord-dm-card > footer {
     display: flex; flex-direction: column; gap: 8px;

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, session, screen, dialog, desktopCapturer, protocol, net, shell, clipboard, ClipboardItem } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, session, screen, dialog, desktopCapturer, protocol, net, shell, clipboard, ClipboardItem, systemPreferences } = require('electron');
 const { join } = require('node:path');
 const { readFileSync, writeFileSync } = require('node:fs');
 const { writeFile } = require('node:fs/promises');
@@ -7,6 +7,7 @@ const { migrateProfile } = require('./profile.cjs');
 const { setupEmbedPlugins } = require('./embed-plugins.cjs');
 const { createUpdateController, latestRelease, macAsset, downloadMacInstaller } = require('./updates.cjs');
 const { createBackgroundSaver } = require('./background.cjs');
+const { fetchRemote, fullQualityUrl } = require('./remote-fetch.cjs');
 const { watchNetwork } = require('./network-watch.cjs');
 const { createTraces } = require('./traces.cjs');
 
@@ -374,6 +375,13 @@ function configureSession(ses) {
     const allowsPermission = (contents, permission, requestingUrl) =>
         Boolean(recordFor(contents)) && contents.session === ses && trusted(contents.getURL())
         && (permission === 'fullscreen' || (trusted(requestingUrl) && permitted.has(permission)));
+    // Full-quality images: send attachment previews to the original file. Only
+    // images are touched; the switch lives on the window's embed preferences.
+    ses.webRequest.onBeforeRequest({ urls: ['https://media.discordapp.net/attachments/*'] }, (details, callback) => {
+        const redirectURL = details.method === 'GET' && details.resourceType === 'image'
+            && recordFor(details.webContents)?.embedPlugins.fullQualityImages ? fullQualityUrl(details.url) : null;
+        callback(redirectURL ? { redirectURL } : {});
+    });
     ses.setPermissionRequestHandler((contents, permission, callback, details) =>
         callback(allowsPermission(contents, permission, details.requestingUrl)));
     ses.setPermissionCheckHandler((contents, permission, origin) =>
@@ -640,6 +648,17 @@ function registerIpc() {
         event.sender.downloadURL(url);
     });
     ipcMain.handle('lowcord:embed-preferences', (event, settings) => { assertSender(event).embedPlugins.set(settings); });
+    ipcMain.handle('lowcord:fetch-remote', (event, url, options) => { assertSender(event); return fetchRemote(url, options, (target, init) => net.fetch(target, init)); });
+    ipcMain.handle('lowcord:touch-id-available', event => {
+        assertSender(event);
+        return process.platform === 'darwin' && systemPreferences.canPromptTouchID();
+    });
+    ipcMain.handle('lowcord:touch-id', async (event, reason) => {
+        assertSender(event);
+        if (process.platform !== 'darwin' || !systemPreferences.canPromptTouchID()) return { ok: false, unavailable: true };
+        try { await systemPreferences.promptTouchID(String(reason).slice(0, 120)); return { ok: true }; }
+        catch (error) { return { ok: false, error: String(error?.message ?? error).slice(0, 200) }; }
+    });
     ipcMain.handle('lowcord:background', (event, settings) => {
         const { background } = assertSender(event);
         if (settings === undefined) return background.get();

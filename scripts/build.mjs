@@ -65,6 +65,8 @@ export async function buildPreload({ sourceRoot = root, output = join(sourceRoot
     const [videoCompression, videoCompressionCSS] = await Promise.all(['video-compression.js', 'video-compression.css'].map(read));
     const [mediaSources,mediaSourcesCSS]=await Promise.all(['media-sources.js','media-sources.css'].map(read));
     const imageDrop = await read('image-drop.js');
+    const extraScripts = await Promise.all(['split-messages.js', 'read-all.js', 'call-timer.js', 'online-friends.js', 'translate.js', 'embed-images.js', 'zip-preview.js', 'gif-captioner.js', 'tenor.js'].map(read));
+    const extraStyles = await Promise.all(['ui-extras.css', 'media-extras.css', 'gif-captioner.css', 'animations.css'].map(read));
     const [privacyCore, privacyMedia, privacy, privacyCSS, imageCover] = await Promise.all(['privacy-core.js', 'privacy-media.js', 'privacy.js', 'privacy.css', 'image-cover.js'].map(read));
     const contents = `const { contextBridge, ipcRenderer, webFrame } = require('electron');
 // The sleep page (a data: URL) gets no bridge or Discord hooks.
@@ -88,6 +90,9 @@ if (process.isMainFrame && location.protocol !== 'data:') {
             return () => ipcRenderer.removeListener('lowcord:updates-status', listener);
         },
         appIcon: id => ipcRenderer.invoke('lowcord:app-icon', id),
+        fetchRemote: (url, options) => ipcRenderer.invoke('lowcord:fetch-remote', url, options),
+        touchId: reason => ipcRenderer.invoke('lowcord:touch-id', reason),
+        touchIdAvailable: () => ipcRenderer.invoke('lowcord:touch-id-available'),
         setEmbedPreferences: settings => ipcRenderer.invoke('lowcord:embed-preferences', settings),
         sanitizeImage: bytes => ipcRenderer.invoke('lowcord:sanitize-image', bytes),
         privacyPreferences: settings => ipcRenderer.invoke('lowcord:privacy-preferences', settings),
@@ -168,6 +173,13 @@ if (process.isMainFrame && location.protocol !== 'data:') {
         if (document.documentElement) document.documentElement.append(pipStyle);
         else document.addEventListener('DOMContentLoaded', () => document.documentElement.append(pipStyle), { once: true });
         ${pictureInPicture}
+        for (const css of ${JSON.stringify(extraStyles)}) {
+            const extraStyle = document.createElement('style');
+            extraStyle.textContent = css;
+            if (document.documentElement) document.documentElement.append(extraStyle);
+            else document.addEventListener('DOMContentLoaded', () => document.documentElement.append(extraStyle), { once: true });
+        }
+        ${extraScripts.join('\n')}
         ${settings}\nsetupLowcordSettings();
         ${release ? '' : 'window.__LOWCORD_REPORT__();'}
     }, args: [${JSON.stringify(themesCSS)}, ${JSON.stringify(appearanceCSS)}, ${JSON.stringify(uiCSS)}] });

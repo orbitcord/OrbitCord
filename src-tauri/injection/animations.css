@@ -1,0 +1,31 @@
+/* Smooth animations. Gated on <html data-lowcord-animations> (the Smooth
+   animations extension) and on the system's motion setting. Only opacity and
+   transform are animated, once, on insertion; nothing is promoted permanently
+   and no rule matches broadly. */
+@media (prefers-reduced-motion: no-preference) {
+    @keyframes lowcord-anim-fade-in { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes lowcord-anim-slide-in { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+    @keyframes lowcord-anim-pop-in { from { opacity: 0; transform: scale(.96) } to { opacity: 1; transform: none } }
+
+    /* The message list, when a channel opens. */
+    :root[data-lowcord-animations] [class*="chatContent_"] [class*="messagesWrapper_"] {
+        animation: lowcord-anim-slide-in 160ms ease-out;
+    }
+
+    /* Menus, context menus and popouts grow slightly from their corner. */
+    :root[data-lowcord-animations] [class*="layerContainer_"] [role="menu"],
+    :root[data-lowcord-animations] [class*="layerContainer_"] [class*="popout_"] {
+        animation: lowcord-anim-pop-in 120ms ease-out;
+        transform-origin: top left;
+    }
+
+    /* Modals fade in; Discord positions and scales them itself. */
+    :root[data-lowcord-animations] [class*="layerContainer_"] [role="dialog"][aria-modal="true"] {
+        animation: lowcord-anim-fade-in 140ms ease-out;
+    }
+
+    /* Server icons ease the way they already change shape. */
+    :root[data-lowcord-animations] [data-list-item-id^="guildsnav___"] [class*="icon_"] {
+        transition-timing-function: cubic-bezier(.2, .8, .2, 1);
+    }
+}

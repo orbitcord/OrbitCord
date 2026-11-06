@@ -35,6 +35,18 @@
         { id: "instagramVideoUpload", title: "Instagram Reels as files", description: "Upload linked Instagram Reels and videos as files." },
         { id: "twitterVideoUpload", title: "X videos as files", description: "Upload linked X videos as files." },
         { id: "socialPhotoUpload", defaultEnabled: false, title: "Photos and carousels as files", description: "Upload linked Instagram, Reddit and X photos or carousels as files." },
+        { id: "splitMessages", title: "Split long messages", description: "Send messages over the length limit as several messages." },
+        { id: "readAll", defaultEnabled: false, title: "Mark all as read", description: "Adds a button to the server list that clears every unread badge." },
+        { id: "callTimer", title: "Call timer", description: "Shows how long you've been in a voice call." },
+        { id: "onlineFriendCount", defaultEnabled: false, title: "Online friend count", description: "Shows how many friends are online under the Home button." },
+        { id: "translate", title: "Translate", description: "Right-click a message to translate it. Text is sent to Google Translate only when you ask." },
+        { id: "fullQualityImages", defaultEnabled: false, title: "Full-quality images", description: "Load original images instead of Discord's compressed previews. Uses more memory and data." },
+        { id: "embedMoreImages", title: "Embed more images", description: "Preview BMP, ICO, AVIF, APNG and JFIF attachments in chat." },
+        { id: "zipPreview", title: "Zip preview", description: "Browse the files inside zip attachments without downloading them." },
+        { id: "gifCaptioner", title: "GIF captions", description: "Caption a GIF from the GIF picker, or right-click one in chat. Trim it and pick a style before sending." },
+        { id: "miniChat", title: "Mini chat", description: "Pin a DM or channel as a small floating chat that stays open while you browse." },
+        { id: "bringBackTenor", title: "Bring back Tenor", description: "Search Tenor instead of Klipy in the GIF picker." },
+        { id: "smoothAnimations", title: "Smooth animations", description: "Gentle transitions when switching channels and opening menus." },
     ];
     const storage = window.Lowcord.storage;
     const changeEvent = "lowcord-extensions-change";
@@ -50,6 +62,11 @@
     const musicLinks = window.Lowcord.musicLinks;
     // Chat screenshot review: on/off, and what it covers by default.
     const captureOptions = ["captureReview", "captureNames", "captureAvatars", "captureChannels"];
+    const translateTargetPattern = /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/;
+    function defaultTranslateTarget() {
+        const language = (navigator.language || "en").split("-")[0].toLowerCase();
+        return translateTargetPattern.test(language) ? language : "en";
+    }
     function readOptions() {
         let saved = {}, privacy = {};
         try { saved = JSON.parse(storage.getItem(optionsKey)) ?? {}; } catch {}
@@ -58,6 +75,7 @@
         const legacy = { captureReview: privacy.screenshots, captureNames: privacy.captureNames, captureAvatars: privacy.captureAvatars, captureChannels: privacy.captureChannels };
         return {
             musicVolume: Number.isFinite(saved.musicVolume) ? Math.max(0, Math.min(100, saved.musicVolume)) : 50,
+            translateTarget: translateTargetPattern.test(saved.translateTarget) ? saved.translateTarget : defaultTranslateTarget(),
             ...Object.fromEntries(captureOptions.map(id => [id, typeof saved[id] === "boolean" ? saved[id] : typeof legacy[id] === "boolean" ? legacy[id] : true])),
             ...Object.fromEntries(Object.entries(links.providers).map(([site, hosts]) =>
                 [`${site}Provider`, hosts.includes(saved[`${site}Provider`]) ? saved[`${site}Provider`] : "auto"])),
@@ -67,6 +85,8 @@
     function setOption(id, value) {
         if (id === "musicVolume") {
             if (!Number.isFinite(value) || value < 0 || value > 100) throw new Error("Invalid volume");
+        } else if (id === "translateTarget") {
+            if (typeof value !== "string" || !translateTargetPattern.test(value)) throw new Error("Invalid language");
         } else if (captureOptions.includes(id)) {
             if (typeof value !== "boolean") throw new Error("Invalid screenshot setting");
         } else {
@@ -81,7 +101,7 @@
     }
     function syncEmbedPreferences() {
         window.__LOWCORD_NATIVE__?.setEmbedPreferences?.({ youtubeAdblock: state.youtubeAdblock,
-            musicEmbeds: state.musicEmbeds, musicVolume: options.musicVolume })?.catch(error => console.warn("[lowcord] Embed settings:", error.message));
+            musicEmbeds: state.musicEmbeds, musicVolume: options.musicVolume, fullQualityImages: state.fullQualityImages === true })?.catch(error => console.warn("[lowcord] Embed settings:", error.message));
     }
     window.addEventListener(changeEvent, syncEmbedPreferences);
     syncEmbedPreferences();
@@ -800,6 +820,17 @@
         return { url: parsed, path: discord ? api.exec(parsed.pathname)?.[1] ?? null : null };
     }
     const rpcPorts = port => Number(port) >= 6463 && Number(port) <= 6472;
+    // Responders answer a Discord API GET themselves: respond(target) returns a
+    // promise of a JSON-able body, or null to let the request go to Discord.
+    const responders = [];
+    function addResponder(respond) { responders.push(respond); return () => responders.splice(responders.indexOf(respond), 1); }
+    function responderFor(method, url) {
+        if (method !== "GET" || !responders.length) return null;
+        const target = route(url);
+        if (!target?.path) return null;
+        for (const respond of responders) { const answer = respond(target); if (answer) return answer; }
+        return null;
+    }
     // "ok" answers like the server would, so Discord drops the batch instead of retrying.
     function decide(method, url) {
         const target = route(url);
@@ -1261,6 +1292,16 @@
             if (meta.pending) throw new DOMException("Request already sent", "InvalidStateError");
             const verdict = decide(meta.method, meta.url);
             if (verdict) { answer(this, verdict); return; }
+            const responding = meta.async && this.readyState === 1 ? responderFor(meta.method, meta.url) : null;
+            if (responding) {
+                meta.pending = true;
+                void Promise.resolve(responding).catch(() => null).then(result => {
+                    if (meta.cancelled || this.__lowcord !== meta || this.readyState !== 1) return;
+                    if (result == null) { meta.sent = true; send.call(this, body); return; }
+                    answerJSON(this, result);
+                });
+                return;
+            }
             const replacement = rewrite(meta.method, meta.url, body);
             if (replacement !== undefined) body = replacement;
             if (meta.async && enabled("socialEmbeds") && window.__LOWCORD_NATIVE__?.resolveSocialLink
@@ -1288,6 +1329,17 @@
             for (const type of ["readystatechange", ok ? "load" : "error", "loadend"]) request.dispatchEvent(new ProgressEvent(type));
         });
     }
+    function answerJSON(request, result) {
+        const text = JSON.stringify(result);
+        const response = request.responseType === "json" ? result : text;
+        const values = { readyState: 4, status: 200, statusText: "OK", responseText: text, response, responseURL: request.__lowcord.url };
+        for (const [key, value] of Object.entries(values)) Object.defineProperty(request, key, { configurable: true, get: () => value });
+        request.getAllResponseHeaders = () => "content-type: application/json\r\n";
+        request.getResponseHeader = name => /^content-type$/i.test(name) ? "application/json" : null;
+        setTimeout(() => {
+            for (const type of ["readystatechange", "load", "loadend"]) request.dispatchEvent(new ProgressEvent(type));
+        });
+    }
     const nativeFetch = window.fetch;
     window.fetch = async function (input, init) {
         const url = input instanceof Request ? input.url : String(input);
@@ -1295,6 +1347,11 @@
         const verdict = decide(method, url);
         if (verdict === "ok") return Promise.resolve(new Response(null, { status: 204 }));
         if (verdict === "fail") return Promise.reject(new TypeError("Failed to fetch"));
+        const responding = responderFor(method, url);
+        if (responding) {
+            const result = await Promise.resolve(responding).catch(() => null);
+            if (result != null) return new Response(JSON.stringify(result), { status: 200, headers: { "content-type": "application/json" } });
+        }
         let body = init?.body;
         const requestBody = body === undefined && input instanceof Request && messageRequest(method, url);
         if (requestBody) {
@@ -1848,7 +1905,7 @@
     window.addEventListener(changeEvent, fixMusicFrames);
     window.Lowcord.extensions = { catalog, enabled, set, setOption, changeEvent,
         get state() { const { compressVideosWithNitro, ...shown } = state; return { ...shown, compressVideos: enabled("compressVideos") }; }, get options() { return { ...options }; },
-        cleanContent, socialContent, anonymous, openRecorder, toast, toastBadge, progress, ui, mountComposerPopup, addComposerAction };
+        cleanContent, socialContent, anonymous, openRecorder, toast, toastBadge, progress, ui, mountComposerPopup, addComposerAction, addResponder };
     window.Lowcord.waitForStore("UserStore", store => {
         let compressing;
         const update = () => {

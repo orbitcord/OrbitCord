@@ -200,3 +200,11 @@ network/audio-process assertions and closing the context in finally. Three local
 repetitions pass. Application audio behavior is unchanged; a stalled audio clock
 still fails. The social attachment fix passed 106 Chromium, six Electron, and
 17 updater/release checks before the release build.
+
+# Release verification — 0.1.31, 2026-11-06
+
+- Built the native/preload bundle. Unit suite passed 121/122 initially; the GIF efficiency fixture still matched the old single-method export and lacked EventTarget for the new decoder. Updated only its instrumentation/environment; all five efficiency cases then passed, retaining the original byte hash and allocation assertions.
+- Chromium passed 403/407 on the full parallel run. Avatar recycling, click-to-reply text selection, RedGIFs niche pagination and theme preference cases all passed in an isolated one-worker rerun. No application or assertion changes were made for those timing-sensitive cases.
+- Real Electron passed 30/32 initially. Both failures were stale explicit bridge-export lists; added the three new fetch/Touch ID APIs to those expectations. Both affected cases then passed. Node/process isolation assertions remain.
+- GitHub release checks now include the remote-fetch allowlist/size-limit and ZIP preview parser unit tests. Generated design screenshots remain local. Rust sources are unchanged.
+- Risks: the four interaction fixtures remain timing-sensitive under parallel load. Native Touch ID requires supported Mac hardware; its actual biometric prompt was not invoked by these checks.

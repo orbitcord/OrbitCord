@@ -33,16 +33,16 @@ function pickerFixture(directory, provider, overrides = {}) {
 }
 
 // Expose only the byte writer and compressor in this test context. The shipped
-// module retains its single public fromVideo method.
+// module retains its normal public exports.
 function gifFixture(source, extras = {}) {
     const window = { Lowcord: {} };
-    const needle = 'window.Lowcord.gif = { fromVideo };';
+    const needle = 'window.Lowcord.gif = {';
     if (!source.includes(needle)) throw new Error('GIF instrumentation needs updating');
-    source = source.replace(needle, `window.Lowcord.gif = { fromVideo, encodeFrames(frames) {
+    source = source.replace(needle, `window.Lowcord.gif = { encodeFrames(frames) {
         const encode = typeof createLzw === 'function' ? createLzw() : lzw;
         return frames.map(pixels => { const out = new Bytes(); encode(pixels, out); return out.result(); });
-    } };`);
-    runInNewContext(source, { window, ...extras });
+    },`);
+    runInNewContext(source, { window, EventTarget, ...extras });
     return window;
 }
 
