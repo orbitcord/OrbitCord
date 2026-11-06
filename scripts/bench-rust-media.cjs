@@ -32,7 +32,7 @@ async function main(){
  const jsMux=require(join(baseline,'electron/mp4-mux.cjs')).muxToFile;
  let serial=0;
  const storage=async impl=>{
-  const io=impl==='rust'?require('../electron/media-fs.cjs'):fs;
+  const io=fs;
   const dir=await io.mkdtemp(join(directory,'storage-'));try{const file=await io.open(join(dir,'clip'),'wx');const chunk=Buffer.alloc(1024*1024,42);try{for(let i=0;i<32;i++)await file.write(chunk);}finally{await file.close();}
    const input=await io.open(join(dir,'clip'),'r');try{for(let offset=0;offset<32*1024*1024;offset+=chunk.length){const r=await input.read(chunk,0,chunk.length,offset);assert.equal(r.bytesRead,chunk.length);}}finally{await input.close();}
   }finally{await io.rm(dir,{recursive:true,force:true});}
@@ -41,9 +41,9 @@ async function main(){
  const tasks={
   image:async impl=>{const r=await(impl==='rust'?sanitizeNativeImage(executable,image):jsImage(image));assert.equal(r.status,'processed');},
   gif:async impl=>{const bytes=await gif[impl].encode({size:240});assert.equal(Buffer.from(bytes).toString('ascii',0,6),'GIF89a');},
-  mp4:async impl=>{const output=join(directory,`mux-${serial++}`);try{await(impl==='rust'?native.mux(video,audio,output):jsMux(video,audio,output));}finally{await fs.rm(output,{force:true});}},
-  attachmentZip:async impl=>{const r=impl==='rust'?(await native.service().call('inspect',{path:zipPath,name:'archive.zip'})).value:await require(join(baseline,'electron/privacy-files.cjs')).inspectPath(zipPath,'archive.zip');assert.equal(r.status,'checked');},
-  zipPreview:async impl=>{const r=impl==='rust'?(await native.service().call('zip_directory',{count:found.count},central)).value:zip.parseEntries(central,found.count);assert.equal(r.entries.length,5000);},
+  mp4:async impl=>{const output=join(directory,`mux-${serial++}`);try{await jsMux(video,audio,output);}finally{await fs.rm(output,{force:true});}},
+  attachmentZip:async impl=>{const r=await require(join(baseline,'electron/privacy-files.cjs')).inspectPath(zipPath,'archive.zip');assert.equal(r.status,'checked');},
+  zipPreview:async impl=>{const r=zip.parseEntries(central,found.count);assert.equal(r.entries.length,5000);},
   storage,
  };
  const rows=[];
@@ -54,9 +54,9 @@ async function main(){
   }
   const combined={javascript:[],rust:[]};for(let i=0;i<7;i++)for(const impl of i%2?['javascript','rust']:['rust','javascript']){const start=performance.now();for(const run of Object.values(tasks))await run(impl);combined[impl].push(performance.now()-start);}
   const result={at:new Date().toISOString(),cpu:cpus()[0].model,platform:process.platform,arch:process.arch,node:process.version,iterations:11,warmups:2,baseline,
-    workload:'8 MiB valid PNG; 30 GIF frames at 240x135; 64 MiB MP4 remux; 5000-entry ZIP inspection and preview; 32 MiB write/read/delete in 1 MiB chunks. Alternating implementations, release Rust, IPC included. Microbenchmark GIF frames are synthetic RGBA with identical output; browser decoding excluded. Shared Rust service warmed; MP4 and image job launches included.',rows,
+    workload:'8 MiB valid PNG; 30 GIF frames at 240x135; 64 MiB MP4 remux; 5000-entry ZIP inspection and preview; 32 MiB write/read/delete in 1 MiB chunks. Alternating implementations, release Rust, IPC included. Microbenchmark GIF frames are synthetic RGBA with identical output; browser decoding excluded. Selective variant keeps MP4/archive/storage in JavaScript. Shared Rust GIF service warmed; MP4 and image job launches included.',retainedNativeOperations:['image','gif'],rows,
     combined:{jsMs:median(combined.javascript),rustMs:median(combined.rust),speedup:median(combined.javascript)/median(combined.rust),samples:combined}};
-  await fs.writeFile('output/rust-media-benchmark.json',JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result.combined));
+  await fs.writeFile('output/rust-selective-media-benchmark.json',JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result.combined));
  }finally{native.close();await fs.rm(directory,{recursive:true,force:true});}
 }
 main().catch(e=>{native.close();console.error(e);process.exitCode=1;});

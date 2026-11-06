@@ -58,10 +58,4 @@ function configure(binary){executable=binary;}
 function enabled(){return !!executable;}
 function service(){if(!shared||shared.error)shared=new MediaService();return shared;}
 function close(){for(const s of services)s.close();shared=null;}
-async function mux(video,audio,path,{signal}={}) {
-    signal?.throwIfAborted();const job=new MediaService();
-    const abort=()=>job.child.kill();signal?.addEventListener('abort',abort,{once:true});
-    try{return (await job.call('mp4',{video,audio,path},undefined,300_000)).value;}
-    finally{signal?.removeEventListener('abort',abort);job.close();}
-}
-module.exports={MediaService,configure,enabled,service,close,mux};
+module.exports={MediaService,configure,enabled,service,close};

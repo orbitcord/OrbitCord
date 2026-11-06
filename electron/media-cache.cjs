@@ -1,5 +1,5 @@
-const { mkdtemp, mkdir, readdir, rm } = require('./media-fs.cjs');
-const { createReadStream } = require('./media-fs.cjs');
+const { mkdtemp, mkdir, readdir, rm } = require('node:fs/promises');
+const { createReadStream } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { Readable } = require('node:stream');

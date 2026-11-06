@@ -83,7 +83,7 @@ test('privacy image processing crosses the sandbox and retains real JPEG orienta
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
-test('Rust GIF encoder and ZIP preview cross the real sandbox with identical GIF pixels', async () => {
+test('Rust GIF encoder crosses the real sandbox with identical GIF pixels', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'orbitcord-rust-media-'));
     const app = await launch(dir);
     try {
@@ -109,14 +109,13 @@ test('Rust GIF encoder and ZIP preview cross the real sandbox with identical GIF
             const limited = await Lowcord.gif.fromVideo(bytes,64);
             const parallel = await Promise.all([1,2,3].map(()=>Lowcord.gif.encode(compose)));
             const concurrentIdentical = parallel.every(output=>output.length===actualCaption.length&&output.every((v,i)=>v===actualCaption[i]));
-            const zip = await __LOWCORD_NATIVE__.mediaProcess('zip_directory' ,{count:0},new Uint8Array());
             let rejected=false;
             try {await __LOWCORD_NATIVE__.mediaProcess('open',{path:'/tmp/untrusted'});}catch{rejected=true;}
-            return {identical:expected.length===actual.length&&expected.every((v,i)=>v===actual[i]),count,dimensions,zip,rejected,captionedIdentical,concurrentIdentical,limited};
+            return {identical:expected.length===actual.length&&expected.every((v,i)=>v===actual[i]),count,dimensions,rejected,captionedIdentical,concurrentIdentical,limited};
         },source);
         expect(result.identical).toBe(true); expect(result.captionedIdentical).toBe(true); expect(result.concurrentIdentical).toBe(true); expect(result.limited).toBeNull(); expect(result.count).toBeGreaterThan(1);
         expect(result.dimensions.every(n=>n>0)).toBe(true);
-        expect(result.zip).toEqual({entries:[],truncated:false}); expect(result.rejected).toBe(true);
+        expect(result.rejected).toBe(true);
     } finally { await app.close(); await rm(dir,{recursive:true,force:true}); }
 });
 

@@ -1,4 +1,4 @@
-const { mkdtemp, open, rm } = require('./media-fs.cjs');
+const { mkdtemp, open, rm } = require('node:fs/promises');
 const { join } = require('node:path');
 const { createMediaCache } = require('./media-cache.cjs');
 

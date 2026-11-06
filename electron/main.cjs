@@ -580,14 +580,6 @@ function registerIpc() {
         const media = require('./native-media.cjs').service();
         if (!args || typeof args !== 'object') throw new Error('Invalid media arguments');
         if (bytes !== undefined && (!(bytes instanceof Uint8Array || bytes instanceof Uint8ClampedArray) || bytes.byteLength > 16 * 1024 * 1024)) throw new Error('Invalid media bytes');
-        if (op === 'zip_directory') {
-            if (!Number.isSafeInteger(args.count) || args.count < 0 || args.count > 1_000_000 || !bytes || bytes.length > 8 * 1024 * 1024) throw new Error('Invalid ZIP directory');
-            return (await media.call(op, {count:args.count}, bytes)).value;
-        }
-        if (op === 'zip_inflate') {
-            if (!bytes || bytes.length > 2 * 1024 * 1024) throw new Error('Invalid ZIP entry');
-            return (await media.call(op, {}, bytes)).bytes;
-        }
         if (op === 'gif_new') {
             if ([...gifOwners.values()].some(entry => entry.owner === event.sender.id)) throw new Error('GIF encoder busy');
             const result = await media.call(op, {width:args.width,height:args.height,fps:args.fps});

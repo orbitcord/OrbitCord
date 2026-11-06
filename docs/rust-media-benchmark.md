@@ -1,5 +1,7 @@
 # Rust media migration — 6 November 2026
 
+**Current main:** only image sanitization and GIF encoding use Rust. Native MP4 assembly, storage and attachment/ZIP parsing have been removed following the measurements below. Node filesystem operations and browser ZIP preview are restored. The tables below document the earlier full-migration experiment, not the selective version.
+
 Branch: `codex/rust-media-processing`. Baseline: `d2af058348d0ffd8dcdc2909292016ea5c649632`.
 
 All five proposed areas now have Rust-backed production paths. The complete migration is an experiment: the measurements favor selective adoption over shipping every part.
@@ -80,3 +82,8 @@ pnpm exec playwright test --config playwright.electron.config.mjs -g 'privacy im
 ```
 
 The standalone `scripts/bench-native-image.cjs` can also compare image sizes and cold-job RSS on macOS. It labels the JS host+worker and Rust-child measurements separately; those are not whole-app memory totals.
+
+
+## Selective rollback follow-up
+
+The retained-MP4 variant was measured separately in `output/rust-selective-playback-benchmark.json`: playback preparation medians were 136.2 ms for baseline and 144.5 ms for the variant. Machine load changed during this run, so this is not a controlled comparison with the earlier absolute timings. It establishes no clear end-to-end MP4 latency benefit. MP4 was therefore rolled back too. Only image sanitization and GIF encoding remain native. The removed Rust modules, filesystem adapter, ZIP bridge and their added Cargo dependencies have been deleted; the historical full-experiment results above remain for reference.

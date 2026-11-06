@@ -32,5 +32,5 @@ function gifWorkload(bridge) {
  new Function('window','document',bridge?made.source:source)(made.window,made.document);
  return made;
 }
-async function bridge(op,args,bytes){const result=await native.service().call(op,args,bytes);return op==='gif_new'||op==='zip_directory'?result.value:result.bytes;}
+async function bridge(op,args,bytes){const result=await native.service().call(op,args,bytes);return op==='gif_new'?result.value:result.bytes;}
 module.exports={zipBuilder,gifWorkload,bridge};

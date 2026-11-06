@@ -1,0 +1,237 @@
+{
+  "environment": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M4 Max",
+    "ramGiB": 64,
+    "node": "v22.23.2",
+    "recordedAt": "2026-11-06T04:07:21.456Z"
+  },
+  "scenario": "media",
+  "iterations": 5,
+  "rows": [
+    50,
+    200,
+    500
+  ],
+  "variants": [
+    {
+      "name": "baseline",
+      "directory": "/tmp/lowcord-rust-baseline"
+    },
+    {
+      "name": "current",
+      "directory": "/Users/yashsirmour/Documents/Vibe project/lowcord/"
+    }
+  ],
+  "results": [
+    {
+      "scenario": "media",
+      "variant": "baseline",
+      "repeat": 0,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 191.82820800000002,
+      "cpuMs": 260.815,
+      "firstByteMs": [
+        47.722792000000005,
+        52.232208,
+        72.916458
+      ],
+      "retainedArrayBuffersMiB": 0.06460094451904297,
+      "peakRssDeltaMiB": 156.078125,
+      "endingRssDeltaMiB": 156.078125
+    },
+    {
+      "scenario": "media",
+      "variant": "current",
+      "repeat": 0,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 256.155125,
+      "cpuMs": 229.504,
+      "firstByteMs": [
+        81.28341599999999,
+        81.008875,
+        76.32120899999998
+      ],
+      "retainedArrayBuffersMiB": 0.04897594451904297,
+      "peakRssDeltaMiB": 156.375,
+      "endingRssDeltaMiB": 156.375
+    },
+    {
+      "scenario": "media",
+      "variant": "current",
+      "repeat": 1,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 302.491209,
+      "cpuMs": 223.981,
+      "firstByteMs": [
+        109.32679200000001,
+        76.31354100000001,
+        99.59133300000002
+      ],
+      "retainedArrayBuffersMiB": 0.04897594451904297,
+      "peakRssDeltaMiB": 159.015625,
+      "endingRssDeltaMiB": 159.015625
+    },
+    {
+      "scenario": "media",
+      "variant": "baseline",
+      "repeat": 1,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 136.184125,
+      "cpuMs": 252.905,
+      "firstByteMs": [
+        47.910833000000004,
+        37.74929200000001,
+        32.018000000000015
+      ],
+      "retainedArrayBuffersMiB": 0.06460094451904297,
+      "peakRssDeltaMiB": 145.875,
+      "endingRssDeltaMiB": 145.875
+    },
+    {
+      "scenario": "media",
+      "variant": "baseline",
+      "repeat": 2,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 142.29416700000002,
+      "cpuMs": 254.627,
+      "firstByteMs": [
+        53.225084,
+        36.289541000000014,
+        32.808707999999996
+      ],
+      "retainedArrayBuffersMiB": 0.06460094451904297,
+      "peakRssDeltaMiB": 137.34375,
+      "endingRssDeltaMiB": 137.34375
+    },
+    {
+      "scenario": "media",
+      "variant": "current",
+      "repeat": 2,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 144.536292,
+      "cpuMs": 229.301,
+      "firstByteMs": [
+        51.87675,
+        35.30550000000001,
+        38.92462499999999
+      ],
+      "retainedArrayBuffersMiB": 0.04897594451904297,
+      "peakRssDeltaMiB": 133.140625,
+      "endingRssDeltaMiB": 133.140625
+    },
+    {
+      "scenario": "media",
+      "variant": "current",
+      "repeat": 3,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 141.06016599999998,
+      "cpuMs": 225.089,
+      "firstByteMs": [
+        49.748625,
+        37.408542,
+        35.72079199999999
+      ],
+      "retainedArrayBuffersMiB": 0.04897594451904297,
+      "peakRssDeltaMiB": 159.09375,
+      "endingRssDeltaMiB": 159.09375
+    },
+    {
+      "scenario": "media",
+      "variant": "baseline",
+      "repeat": 3,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 134.810167,
+      "cpuMs": 240.992,
+      "firstByteMs": [
+        48.985083,
+        34.137541999999996,
+        32.95808299999999
+      ],
+      "retainedArrayBuffersMiB": 0.06460094451904297,
+      "peakRssDeltaMiB": 123.75,
+      "endingRssDeltaMiB": 123.75
+    },
+    {
+      "scenario": "media",
+      "variant": "baseline",
+      "repeat": 4,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 131.66145799999998,
+      "cpuMs": 238.965,
+      "firstByteMs": [
+        49.17491700000001,
+        33.753208,
+        30.136250000000004
+      ],
+      "retainedArrayBuffersMiB": 0.06460094451904297,
+      "peakRssDeltaMiB": 162.59375,
+      "endingRssDeltaMiB": 162.59375
+    },
+    {
+      "scenario": "media",
+      "variant": "current",
+      "repeat": 4,
+      "clips": 3,
+      "clipMiB": 64,
+      "elapsedMs": 134.836,
+      "cpuMs": 219.559,
+      "firstByteMs": [
+        50.962334000000006,
+        33.05200000000001,
+        31.975708000000026
+      ],
+      "retainedArrayBuffersMiB": 0.04897594451904297,
+      "peakRssDeltaMiB": 175.171875,
+      "endingRssDeltaMiB": 175.171875
+    }
+  ],
+  "sources": {
+    "baseline": {
+      "src-tauri/injection/chat-appearance.js": "67ff41ab1eb525fdf4a084c76054403c32ebce76618c324f8eaff5fe1df99514",
+      "src-tauri/injection/discord.js": "96725fbba2e48449a7dddf1c569a187622ef11f850aeb8d4bdf5609a87b57599",
+      "src-tauri/injection/music-embeds.js": "34fda7b24b3fd2389eaa964d02ebda67cbc5fb64290e7071d10b4fb2111d9c88",
+      "src-tauri/injection/social-embeds.js": "e092d6fdd5511bf61bde21d465f8b652f17a277b34379eacc1de9b21ac8a10e8",
+      "scripts/build.mjs": "a76846fe058aa2276632b3318a12de0ebf56ce0ff00432731e504cd0baa58cd7",
+      "electron/social-posts.cjs": "6f2efd9aa9f1db9b3c21889356317e2c29a437eb86eaa10334f37f05b4c6f8dd",
+      "electron/main.cjs": "51108a0dfa49c86262e00ade210bdebbaa0037c55ca29ba012256830b9b87b80"
+    },
+    "current": {
+      "src-tauri/injection/chat-appearance.js": "67ff41ab1eb525fdf4a084c76054403c32ebce76618c324f8eaff5fe1df99514",
+      "src-tauri/injection/discord.js": "96725fbba2e48449a7dddf1c569a187622ef11f850aeb8d4bdf5609a87b57599",
+      "src-tauri/injection/music-embeds.js": "34fda7b24b3fd2389eaa964d02ebda67cbc5fb64290e7071d10b4fb2111d9c88",
+      "src-tauri/injection/social-embeds.js": "e092d6fdd5511bf61bde21d465f8b652f17a277b34379eacc1de9b21ac8a10e8",
+      "scripts/build.mjs": "a38a2acd13a2e6c0248158ba8a29f57ba782d5bfaf50d26014882bf66358b23f",
+      "electron/social-posts.cjs": "4fdffb5ba6b47e4fdfbaaa8f78853db0f407431a667c4da12ded0af66127a67e",
+      "electron/main.cjs": "763aaaec831e6439a67795ea78b2d611543871a6dc059f494a076913da294649"
+    }
+  },
+  "summary": [
+    {
+      "scenario": "media",
+      "variant": "baseline",
+      "peakRssDeltaMiB": 145.875,
+      "retainedArrayBuffersMiB": 0.06460094451904297,
+      "elapsedMs": 136.184125,
+      "cpuMs": 252.905
+    },
+    {
+      "scenario": "media",
+      "variant": "current",
+      "peakRssDeltaMiB": 159.015625,
+      "retainedArrayBuffersMiB": 0.04897594451904297,
+      "elapsedMs": 144.536292,
+      "cpuMs": 225.089
+    }
+  ]
+}

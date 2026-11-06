@@ -283,8 +283,6 @@ async function inspectAttachment({ name, size, read }) {
         reasons, entries, kind, complete, note: 'Local format and ZIP directory checks only. Not an antivirus scan.' };
 }
 async function inspectPath(path, name) {
-    const native = require('./native-media.cjs');
-    if (native.enabled()) return (await native.service().call('inspect', {path,name})).value;
     const file = await open(path, 'r');
     try {
         const { size } = await file.stat();

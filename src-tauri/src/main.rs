@@ -1,11 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod archive;
 mod backend;
 mod gif;
 mod image;
 mod media;
-mod mp4;
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
