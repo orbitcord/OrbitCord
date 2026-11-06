@@ -1,13 +1,25 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod archive;
 mod backend;
+mod gif;
+mod image;
+mod media;
+mod mp4;
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    if args.next().as_deref() != Some("--data-dir") {
+    let mode = args.next();
+    if mode.as_deref() == Some("--media-service") {
+        return media::run();
+    }
+    if mode.as_deref() == Some("--sanitize-image") {
+        return image::run();
+    }
+    if mode.as_deref() != Some("--data-dir") {
         return Err("expected --data-dir PATH".into());
     }
     let data_dir = PathBuf::from(args.next().ok_or("missing data directory")?);

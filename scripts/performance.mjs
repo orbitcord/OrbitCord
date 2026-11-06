@@ -405,6 +405,9 @@ function mediaChild(directory) {
     return `
         const {createRedditFixture} = require(${JSON.stringify(join(root, 'tests/fixtures/reddit-playback.cjs'))});
         const {createSocialPosts} = require(${JSON.stringify(join(directory, 'electron/social-posts.cjs'))});
+        const mediaPath=${JSON.stringify(join(directory,'electron/native-media.cjs'))};
+        const native=require('node:fs').existsSync(mediaPath)?require(mediaPath):null;
+        native?.configure(${JSON.stringify(join(root,'.lowcord/native',process.platform==='win32'?'lowcord-native.exe':'lowcord-native'))});
         const {performance} = require('node:perf_hooks');
         (async () => {
             const fixture=createRedditFixture(${JSON.stringify(root)},{clipMiB:${clipMiB}}), posts=createSocialPosts(fixture.fetchPage);
@@ -417,7 +420,7 @@ function mediaChild(directory) {
             const elapsedMs=performance.now()-t, used=process.cpuUsage(cpu); await new Promise(setImmediate); for(let i=0;i<3;i++)global.gc();
             const end=process.memoryUsage(); const result={elapsedMs,cpuMs:(used.user+used.system)/1000,firstByteMs:readiness,
                 retainedArrayBuffersMiB:(end.arrayBuffers-start.arrayBuffers)/1024**2,peakRssDeltaMiB:(process.resourceUsage().maxRSS-peak)/1024,
-                endingRssDeltaMiB:(end.rss-start.rss)/1024**2}; await posts.close?.(); console.log(JSON.stringify(result));
+                endingRssDeltaMiB:(end.rss-start.rss)/1024**2}; await posts.close?.(); native?.close(); console.log(JSON.stringify(result));
         })().catch(error=>{console.error(error);process.exitCode=1});`;
 }
 function mediaBenchmarks() {
@@ -461,7 +464,7 @@ async function electronBenchmarks() {
             const result = { scenario: 'startup', variant: variant.name, repeat, startupMs, preloadBytes, ...source };
             report.results.push(result); console.log(JSON.stringify({ scenario: 'startup', variant: variant.name, repeat, startupMs, updaterLoaded: source.updaterLoaded,
                 mainModules: source.mainModules, mainHeapMiB: source.mainHeapMiB, mainRssMiB: source.mainRssMiB }));
-            if (wanted('playback')) {
+            if (wanted('playback') || options['exercise-media']) {
                 await app.evaluate(({ BrowserWindow }, { root, directory }) => {
                     const { createRedditFixture } = process.mainModule.require(`${root}/tests/fixtures/reddit-playback.cjs`);
                     const { createSocialPosts } = process.mainModule.require(`${directory}/electron/social-posts.cjs`);

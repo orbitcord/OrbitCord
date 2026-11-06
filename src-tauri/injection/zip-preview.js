@@ -66,7 +66,8 @@
         if (found.size > MAX_DIRECTORY) throw new Error("Zip directory too large");
         if (found.offset + found.size > fileSize) throw new Error("Corrupt zip");
         const bytes = found.size ? await fetchRange(found.offset, found.offset + found.size - 1) : new Uint8Array(0);
-        return parseEntries(bytes, found.count);
+        return window.__LOWCORD_NATIVE__?.mediaProcess
+            ? window.__LOWCORD_NATIVE__.mediaProcess("zip_directory", {count:found.count}, bytes) : parseEntries(bytes, found.count);
     }
     async function readEntry(fetchRange, entry) {
         if (entry.encrypted) throw new Error("Encrypted");
@@ -78,6 +79,7 @@
         if (!entry.compressed) return new Uint8Array(0);
         const data = await fetchRange(start, start + entry.compressed - 1);
         if (entry.method === 0) return data;
+        if (window.__LOWCORD_NATIVE__?.mediaProcess) return window.__LOWCORD_NATIVE__.mediaProcess("zip_inflate", {}, data);
         const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
         const out = new Uint8Array(await new Response(stream).arrayBuffer());
         if (out.length > MAX_FILE) throw new Error("Too large");

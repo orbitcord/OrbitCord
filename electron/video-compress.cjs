@@ -1,5 +1,5 @@
 const { spawn } = require('node:child_process');
-const { stat, open } = require('node:fs/promises');
+const { stat, open } = require('./media-fs.cjs');
 const { join } = require('node:path');
 
 const failure = code => Object.assign(new Error(code), { code });

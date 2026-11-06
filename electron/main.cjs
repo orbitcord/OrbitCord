@@ -574,6 +574,43 @@ async function createDiscordWindow(account) {
 }
 
 function registerIpc() {
+    const gifOwners = new Map();
+    ipcMain.handle('lowcord:media-process', async (event, op, args = {}, bytes) => {
+        assertSender(event);
+        const media = require('./native-media.cjs').service();
+        if (!args || typeof args !== 'object') throw new Error('Invalid media arguments');
+        if (bytes !== undefined && (!(bytes instanceof Uint8Array || bytes instanceof Uint8ClampedArray) || bytes.byteLength > 16 * 1024 * 1024)) throw new Error('Invalid media bytes');
+        if (op === 'zip_directory') {
+            if (!Number.isSafeInteger(args.count) || args.count < 0 || args.count > 1_000_000 || !bytes || bytes.length > 8 * 1024 * 1024) throw new Error('Invalid ZIP directory');
+            return (await media.call(op, {count:args.count}, bytes)).value;
+        }
+        if (op === 'zip_inflate') {
+            if (!bytes || bytes.length > 2 * 1024 * 1024) throw new Error('Invalid ZIP entry');
+            return (await media.call(op, {}, bytes)).bytes;
+        }
+        if (op === 'gif_new') {
+            if ([...gifOwners.values()].some(entry => entry.owner === event.sender.id)) throw new Error('GIF encoder busy');
+            const result = await media.call(op, {width:args.width,height:args.height,fps:args.fps});
+            const nativeHandle = result.value;
+            const handle = require('node:crypto').randomBytes(18).toString('hex');
+            if (event.sender.isDestroyed()) { await media.call('gif_close',{handle:nativeHandle}); throw new Error('Window closed'); }
+            gifOwners.set(handle,{owner:event.sender.id,media,handle:nativeHandle});
+            const cleanup = () => { gifCleanups.delete(handle); if(gifOwners.delete(handle)) void media.call('gif_close',{handle:nativeHandle}).catch(()=>{}); };
+            event.sender.once('destroyed',cleanup);
+            // Remove the lifecycle listener as soon as this conversion ends.
+            gifCleanups.set(handle,()=>event.sender.removeListener('destroyed',cleanup));
+            return handle;
+        }
+        if (!['gif_sample','gif_start','gif_frame','gif_close'].includes(op) || gifOwners.get(args.handle)?.owner !== event.sender.id) throw new Error('Expired GIF encoder');
+        try {
+            const entry = gifOwners.get(args.handle);
+            const result = await entry.media.call(op,{handle:entry.handle,index:args.index},bytes);
+            return op === 'gif_sample' || op === 'gif_close' ? null : result.bytes;
+        } finally {
+            if(op === 'gif_close') {gifOwners.delete(args.handle);gifCleanups.get(args.handle)?.();gifCleanups.delete(args.handle);}
+        }
+    });
+    const gifCleanups = new Map();
     let sanitizing = 0;
     ipcMain.handle('lowcord:sanitize-image', async (event, bytes) => {
         const record = assertSender(event);
@@ -581,18 +618,15 @@ function registerIpc() {
             throw new Error('Invalid image or image larger than 64 MiB');
         if (sanitizing >= 2 || record.sanitizing) throw new Error('Image preparation is busy. Try again.');
         record.sanitizing = true; sanitizing++;
-        const { Worker } = require('node:worker_threads');
-        let worker;
+        const controller = new AbortController();
+        const cancel = () => controller.abort(new Error('Window closed'));
+        event.sender.once('destroyed', cancel);
         try {
-            return await new Promise((resolve, reject) => {
-                worker = new Worker(join(__dirname, 'privacy-worker.cjs'));
-                const timer = setTimeout(() => reject(new Error('Image preparation timed out')), 30_000);
-                const done = callback => value => { clearTimeout(timer); callback(value); };
-                worker.once('message', done(resolve)); worker.once('error', done(reject));
-                worker.once('exit', done(() => reject(new Error('Image preparation ended before returning a result'))));
-                worker.postMessage(bytes);
-            });
-        } finally { await worker?.terminate(); record.sanitizing = false; sanitizing--; }
+            return await require('./native-image.cjs').sanitizeNativeImage(backend.executable, bytes, { signal: controller.signal });
+        } finally {
+            event.sender.removeListener('destroyed', cancel);
+            record.sanitizing = false; sanitizing--;
+        }
     });
     ipcMain.handle('lowcord:privacy-preferences', (event, value) => {
         const record = assertSender(event);
@@ -890,6 +924,7 @@ async function start() {
     backend = new NativeBackend(app.isPackaged ? join(process.resourcesPath, 'native', `lowcord-native${process.platform === 'win32' ? '.exe' : ''}`)
         : join(__dirname, '..', '.lowcord', 'native', `lowcord-native${process.platform === 'win32' ? '.exe' : ''}`), userData);
     if (testing && process.env.LOWCORD_TEST_UPDATER === '1') updates.initialize();
+    require('./native-media.cjs').configure(backend.executable);
     registerIpc();
     const { powerMonitor } = require('electron');
     watchNetwork({ powerMonitor, onChange: () => sendToDiscord('lowcord:network-changed') });
@@ -929,7 +964,7 @@ else {
             for (const value of Object.values(features)) await value.close?.().catch(console.error);
             // An update restart is not the person leaving.
             await traces().onQuit({ keepSignIn: updateRestarting }).catch(console.error);
-            finished = true; backend?.close(); app.quit();
+            finished = true; require('./native-media.cjs').close(); backend?.close(); app.quit();
         });
     });
     app.whenReady().then(start).catch(error => {

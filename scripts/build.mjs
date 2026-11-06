@@ -94,6 +94,7 @@ if (process.isMainFrame && location.protocol !== 'data:') {
         touchId: reason => ipcRenderer.invoke('lowcord:touch-id', reason),
         touchIdAvailable: () => ipcRenderer.invoke('lowcord:touch-id-available'),
         setEmbedPreferences: settings => ipcRenderer.invoke('lowcord:embed-preferences', settings),
+        mediaProcess: (op, args, bytes) => ipcRenderer.invoke('lowcord:media-process', op, args, bytes),
         sanitizeImage: bytes => ipcRenderer.invoke('lowcord:sanitize-image', bytes),
         privacyPreferences: settings => ipcRenderer.invoke('lowcord:privacy-preferences', settings),
         traces: (action, value) => ipcRenderer.invoke('lowcord:traces', action, value),

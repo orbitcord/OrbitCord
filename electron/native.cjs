@@ -3,6 +3,7 @@ const { createInterface } = require('node:readline');
 
 class NativeBackend {
     constructor(executable, dataDir) {
+        this.executable = executable;
         this.pending = new Map();
         this.nextId = 0;
         this.child = spawn(executable, ['--data-dir', dataDir], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });

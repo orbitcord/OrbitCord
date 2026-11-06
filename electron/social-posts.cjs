@@ -648,7 +648,17 @@ function createSocialPosts(fetchPage = fetch, cacheOptions, timings, { compress 
         const [picture, sound] = await Promise.all([download(choice.url, limit),
             streams.audio ? download(streams.audio, limit).catch(() => null) : null]);
         if (!sound) return picture;
-        try { return mux(picture, sound); } catch { return picture; }
+        try {
+            if(require('./native-media.cjs').enabled()) {
+                const fs=require('./media-fs.cjs'),{join}=require('node:path');
+                const directory=await fs.mkdtemp(join(require('node:os').tmpdir(),'lowcord-mux-'));
+                try{const video=join(directory,'video'),audio=join(directory,'audio'),output=join(directory,'output');
+                    await fs.writeFile(video,picture);await fs.writeFile(audio,sound);
+                    await muxToFile(video,audio,output);return await fs.readFile(output);
+                }finally{await fs.rm(directory,{recursive:true,force:true});}
+            }
+            return mux(picture, sound);
+        } catch { return picture; }
     }
     // Picks the best quality whose video plus audio fits in `limit` bytes.
     async function redditVideo(value, limit, { compress: shrink = false } = {}) {
@@ -799,7 +809,7 @@ function createSocialPosts(fetchPage = fetch, cacheOptions, timings, { compress 
     // re-encodes it with FFmpeg to fit. Only that folder's files reach FFmpeg,
     // and the folder is removed either way.
     async function compressed(url, limit, { audio = null, headers } = {}) {
-        const { mkdtemp, readFile, rm } = require('node:fs/promises');
+        const { mkdtemp, readFile, rm } = require('./media-fs.cjs');
         const { join } = require('node:path');
         const { tmpdir } = require('node:os');
         const directory = await mkdtemp(join(tmpdir(), 'lowcord-social-'));
@@ -819,7 +829,7 @@ function createSocialPosts(fetchPage = fetch, cacheOptions, timings, { compress 
 
     // ----- lowcord-media:// handler ------------------------------------------
     async function downloadFile(url, path, limit, signal, headers) {
-        const { createWriteStream } = require('node:fs');
+        const { createWriteStream } = require('./media-fs.cjs');
         const { Readable, Transform } = require('node:stream');
         const { pipeline } = require('node:stream/promises');
         const response = await request(url, { headers,
@@ -843,7 +853,7 @@ function createSocialPosts(fetchPage = fetch, cacheOptions, timings, { compress 
         try {
             return await playbackCache.get(fallback, async (directory, signal) => {
                 const { join } = require('node:path');
-                const { rm } = require('node:fs/promises');
+                const { rm } = require('./media-fs.cjs');
                 const streams = await redditStreams(fallback, signal);
                 const choice = streams.videos.find(item => item.height && item.height <= 480) ?? streams.videos.at(-1);
                 const video = join(directory, 'video.mp4'), audio = join(directory, 'audio.mp4'), output = join(directory, 'playable.mp4');

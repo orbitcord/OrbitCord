@@ -1,5 +1,5 @@
 const { randomBytes } = require('node:crypto');
-const { mkdtemp, open, stat, rm } = require('node:fs/promises');
+const { mkdtemp, open, stat, rm } = require('./media-fs.cjs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { createMediaCache } = require('./media-cache.cjs');

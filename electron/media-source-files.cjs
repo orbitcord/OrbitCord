@@ -1,7 +1,7 @@
 const { randomBytes } = require('node:crypto');
 const { lookup } = require('node:dns/promises');
 const { isIP } = require('node:net');
-const { mkdtemp, open, rm, stat, readdir } = require('node:fs/promises');
+const { mkdtemp, open, rm, stat, readdir } = require('./media-fs.cjs');
 const { join } = require('node:path');
 const { tmpdir } = require('node:os');
 const { compressVideo, compressImage, compressGif } = require('./video-compress.cjs');

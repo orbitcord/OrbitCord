@@ -122,6 +122,7 @@
     // Frame compression is synchronous, so overlapping conversions can keep
     // sharing one dictionary, as before, without retaining it once all finish.
     let activeLzw, activeConversions = 0;
+    let nativeQueue = Promise.resolve();
 
     const imageType = bytes => bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38 ? "image/gif"
         : String.fromCharCode(...bytes.subarray(0, 4)) === "RIFF" && String.fromCharCode(...bytes.subarray(8, 12)) === "WEBP" ? "image/webp" : "";
@@ -226,6 +227,29 @@
             compose?.drawOverlay(context, width, height);
             return context.getImageData(0, 0, width, height).data;
         };
+        const native = window.__LOWCORD_NATIVE__?.mediaProcess;
+        if (native) {
+            const waiting = nativeQueue;
+            let release;
+            nativeQueue = new Promise(resolve => { release = resolve; });
+            await waiting;
+            let handle;
+            try {
+                handle = await native("gif_new", {width,height,fps});
+            } catch(error) { release(); throw error; }
+            try {
+                for (let n = 0, picks = Math.min(8,count); n < picks; n++)
+                    await native("gif_sample", {handle}, await frame(Math.floor(n * count / picks)));
+                const out = new Bytes(); out.bytes(await native("gif_start", {handle}));
+                for (let index = 0; index < count; index++) {
+                    compose?.progress?.(index / count);
+                    out.bytes(await native("gif_frame", {handle,index}, await frame(index)));
+                    if (out.length > limit) return null;
+                }
+                out.byte(0x3b);
+                return out.length <= limit ? out.result() : null;
+            } finally { await native("gif_close", {handle}).catch(()=>{}); release(); }
+        }
         // The palette comes from a handful of frames across the clip.
         const histogram = new Uint32Array(32768);
         for (let n = 0, picks = Math.min(8, count); n < picks; n++) {
@@ -281,7 +305,7 @@
         activeConversions++;
         try {
             if (!video.videoWidth || !Number.isFinite(video.duration)) return null;
-            const lzw = activeLzw ??= createLzw();
+            const lzw = window.__LOWCORD_NATIVE__?.mediaProcess ? null : (activeLzw ??= createLzw());
             // Long clips start smaller, as the largest step could not fit anyway.
             for (const step of steps.slice(video.duration > 20 ? 1 : 0)) {
                 const data = await encode(video, step, limit, lzw);
@@ -300,7 +324,7 @@
         activeConversions++;
         try {
             if (!video.videoWidth || !Number.isFinite(video.duration)) return null;
-            const lzw = activeLzw ??= createLzw();
+            const lzw = window.__LOWCORD_NATIVE__?.mediaProcess ? null : (activeLzw ??= createLzw());
             for (const step of steps.slice(span(video, compose).length > 20 ? 1 : 0)) {
                 compose.step?.(step);
                 const data = await encode(video, step, limit, lzw, compose);

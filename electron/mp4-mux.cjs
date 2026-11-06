@@ -197,6 +197,11 @@ async function diskFile(handle, signal) {
     return { handle, buffer, ftyp: head.find(item => item.type === 'ftyp'), moov: movie, trak: trak[0], trex, timescale, duration, fragments };
 }
 async function muxToFile(videoPath, audioPath, outputPath, { signal } = {}) {
+    const native = require('./native-media.cjs');
+    if (native.enabled()) {
+        try { return await native.mux(videoPath, audioPath, outputPath, { signal }); }
+        catch(error) { if (signal?.aborted) await require('node:fs/promises').rm(outputPath, {force:true}).catch(()=>{}); throw error; }
+    }
     const { open, rm } = require('node:fs/promises');
     const handles = [];
     let output, created = false, size = 0;

@@ -83,6 +83,43 @@ test('privacy image processing crosses the sandbox and retains real JPEG orienta
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('Rust GIF encoder and ZIP preview cross the real sandbox with identical GIF pixels', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-rust-media-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
+        const source = await readFile('src-tauri/injection/gif.js','utf8');
+        const result = await page.evaluate(async source => {
+            const reference = {Lowcord:{}};
+            new Function('window',source)(reference);
+            const bytes = new Uint8Array(await (await fetch('/media/sample.mp4')).arrayBuffer());
+            const expected = await reference.Lowcord.gif.fromVideo(bytes,8*1024*1024);
+            const actual = await Lowcord.gif.fromVideo(bytes,8*1024*1024);
+            const decoder = new ImageDecoder({data:actual,type:'image/gif'});
+            await decoder.tracks.ready;
+            const count = decoder.tracks.selectedTrack.frameCount;
+            const {image} = await decoder.decode({frameIndex:count-1});
+            const dimensions = [image.displayWidth,image.displayHeight]; image.close(); decoder.close();
+            const compose = {bytes,limit:8*1024*1024,start:0,end:.3,
+                layout:(w,h)=>({width:w,height:h+24,x:0,y:24,w,h}),
+                drawOverlay:ctx=>{ctx.fillStyle='red';ctx.fillRect(0,0,64,20);}};
+            const expectedCaption = await reference.Lowcord.gif.encode(compose);
+            const actualCaption = await Lowcord.gif.encode(compose);
+            const captionedIdentical = expectedCaption.length===actualCaption.length&&expectedCaption.every((v,i)=>v===actualCaption[i]);
+            const limited = await Lowcord.gif.fromVideo(bytes,64);
+            const parallel = await Promise.all([1,2,3].map(()=>Lowcord.gif.encode(compose)));
+            const concurrentIdentical = parallel.every(output=>output.length===actualCaption.length&&output.every((v,i)=>v===actualCaption[i]));
+            const zip = await __LOWCORD_NATIVE__.mediaProcess('zip_directory' ,{count:0},new Uint8Array());
+            let rejected=false;
+            try {await __LOWCORD_NATIVE__.mediaProcess('open',{path:'/tmp/untrusted'});}catch{rejected=true;}
+            return {identical:expected.length===actual.length&&expected.every((v,i)=>v===actual[i]),count,dimensions,zip,rejected,captionedIdentical,concurrentIdentical,limited};
+        },source);
+        expect(result.identical).toBe(true); expect(result.captionedIdentical).toBe(true); expect(result.concurrentIdentical).toBe(true); expect(result.limited).toBeNull(); expect(result.count).toBeGreaterThan(1);
+        expect(result.dimensions.every(n=>n>0)).toBe(true);
+        expect(result.zip).toEqual({entries:[],truncated:false}); expect(result.rejected).toBe(true);
+    } finally { await app.close(); await rm(dir,{recursive:true,force:true}); }
+});
+
 test('native attachment download inspection warns about disguised executables without opening them', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'orbitcord-privacy-download-'));
     const app = await launch(dir);
@@ -688,7 +725,7 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true,
             extensions: await page.evaluate(() => window.Lowcord.extensions.catalog.length), fetchHooked: true });
         expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
-            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'fetchRemote', 'touchId', 'touchIdAvailable', 'setEmbedPreferences', 'sanitizeImage', 'privacyPreferences', 'traces', 'onWalkAway', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged'] });
+            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'fetchRemote', 'touchId', 'touchIdAvailable', 'setEmbedPreferences', 'mediaProcess', 'sanitizeImage', 'privacyPreferences', 'traces', 'onWalkAway', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged'] });
         expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsSearch('fixture', -1))).toEqual({ error: 'invalid-search' });
         expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsPrepare('not-a-token', 20_000_000))).toEqual({ error: 'expired' });
         await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsCancel());
@@ -1120,7 +1157,7 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
         await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
         expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
-            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'fetchRemote', 'touchId', 'touchIdAvailable', 'setEmbedPreferences', 'sanitizeImage', 'privacyPreferences', 'traces', 'onWalkAway', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged']);
+            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'fetchRemote', 'touchId', 'touchIdAvailable', 'setEmbedPreferences', 'mediaProcess', 'sanitizeImage', 'privacyPreferences', 'traces', 'onWalkAway', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged']);
         expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
     } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
 });
