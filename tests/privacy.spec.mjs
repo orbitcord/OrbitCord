@@ -63,7 +63,7 @@ test('selected privacy design fills native settings and choices persist after re
     await panel.getByRole('switch', { name: 'Attachment inspector' }).click();
     await expect(row).toHaveAttribute('aria-expanded', 'false');
     await page.reload(); await page.waitForFunction(() => window.fixtureReady);
-    expect(await page.evaluate(() => Lowcord.privacy.state)).toEqual({ metadata: true, inspector: false, walkAway: true, coverAsk: false, appLock: false, lockAfter: 5 });
+    expect(await page.evaluate(() => Lowcord.privacy.state)).toEqual({ metadata: true, inspector: false, walkAway: true, coverAsk: false, appLock: false, lockAfter: 5, lockShortcut: 'Mod+Shift+L' });
 });
 test('privacy controls remain within the native column in a narrow light window', async ({ page }, info) => {
     await setup(page); const panel = await inlineSettings(page);
@@ -380,23 +380,44 @@ test('each new protection pane stays inside the settings column', async ({ page 
     }
 });
 
+test('the lock shortcut is recorded from a key press, rejects bare letters, resets and turns off', async ({ page }) => {
+    await setup(page); const panel = await inlineSettings(page);
+    await panel.getByRole('switch', { name: 'App lock' }).click();
+    await panel.getByLabel('New passcode (4 digits)').fill('2468'); await panel.getByLabel('Confirm passcode').fill('2468');
+    await panel.getByRole('button', { name: 'Turn on app lock' }).click();
+    const keys = panel.getByRole('button', { name: /^Lock shortcut/ });
+    const mod = await page.evaluate(() => /Mac/.test(navigator.platform)) ? 'Meta' : 'Control';
+    await keys.click(); await expect(keys).toHaveText('Press keys…');
+    await page.keyboard.press('KeyJ');
+    await expect(panel.getByRole('alert')).toContainText('with a letter or number');
+    await page.keyboard.press(`${mod}+Alt+KeyJ`);
+    expect(await page.evaluate(() => Lowcord.privacy.state.lockShortcut)).toBe('Mod+Alt+J');
+    await panel.getByRole('button', { name: 'Reset' }).click();
+    expect(await page.evaluate(() => Lowcord.privacy.state.lockShortcut)).toBe('Mod+Shift+L');
+    await keys.click(); await page.keyboard.press('Escape');
+    expect(await page.evaluate(() => Lowcord.privacy.state.lockShortcut)).toBe('Mod+Shift+L');
+    await keys.click(); await page.keyboard.press('Backspace');
+    await expect(keys).toHaveText('Off');
+    await page.reload(); expect(await page.evaluate(() => Lowcord.privacy.state.lockShortcut)).toBe('');
+});
+
 test('app lock sets a hashed passcode, covers the app, throttles guesses and needs the passcode to turn off', async ({ page }) => {
     await setup(page); const panel = await inlineSettings(page);
     await panel.getByRole('switch', { name: 'App lock' }).click();
-    await panel.getByLabel('New passcode (4 to 8 digits)').fill('2468'); await panel.getByLabel('Confirm passcode').fill('2468');
+    await panel.getByLabel('New passcode (4 digits)').fill('2468'); await panel.getByLabel('Confirm passcode').fill('2468');
     await panel.getByRole('button', { name: 'Turn on app lock' }).click();
     await expect(panel.getByRole('switch', { name: 'App lock' })).toBeChecked();
     const stored = await page.evaluate(() => Lowcord.storage.getItem('lowcord.privacy.lock.v1'));
     expect(stored).not.toContain('2468'); expect(JSON.parse(stored).hash.length).toBeGreaterThan(20);
     await page.evaluate(() => Lowcord.privacy.walkAwayChanged('away'));
-    const lock = page.getByRole('dialog', { name: 'Lowcord is locked' }); await expect(lock).toBeVisible();
+    const lock = page.getByRole('dialog', { name: 'OrbitCord is locked' }); await expect(lock).toBeVisible();
     await page.keyboard.press('Escape'); await expect(lock).toBeVisible();
     await lock.getByLabel('Passcode').fill('1111'); await page.keyboard.press('Enter');
     await expect(lock).toContainText('Wrong passcode');
     await lock.getByLabel('Passcode').fill('2468'); await page.keyboard.press('Enter');
     await expect(lock).toHaveCount(0);
     // Reload: covered again before Discord is usable.
-    await page.reload(); await expect(page.getByRole('dialog', { name: 'Lowcord is locked' })).toBeVisible();
+    await page.reload(); await expect(page.getByRole('dialog', { name: 'OrbitCord is locked' })).toBeVisible();
     for (let i = 0; i < 5; i++) { await page.getByLabel('Passcode').fill('0000'); await page.keyboard.press('Enter'); await page.waitForTimeout(150); }
     await expect(page.locator('.lowcord-lock')).toContainText('Too many tries');
     await expect(page.getByLabel('Passcode')).toBeDisabled();
@@ -405,17 +426,80 @@ test('app lock sets a hashed passcode, covers the app, throttles guesses and nee
 test('forgot passcode logs out through Discord and only then removes the lock', async ({ page }) => {
     await setup(page);
     await page.evaluate(async () => { await Lowcord.privacy.setPasscode('2468'); Lowcord.privacy.set({ appLock: true }); window.loggedOut = 0; Lowcord.privacy.lock(); });
-    const lock = page.getByRole('dialog', { name: 'Lowcord is locked' });
+    const lock = page.getByRole('dialog', { name: 'OrbitCord is locked' });
     await lock.getByRole('button', { name: 'Forgot passcode?' }).click();
     await expect(lock).toContainText('Log out of Discord to remove the lock');
     // No logout module: the lock stays.
     await lock.getByRole('button', { name: 'Log out' }).click();
-    await expect(lock).toContainText('quit Lowcord and try again');
+    await expect(lock).toContainText('quit OrbitCord and try again');
     expect(await page.evaluate(() => Lowcord.privacy.state.appLock)).toBe(true);
     await page.evaluate(() => webpackChunkdiscord_app[0][2]({ c: { auth: { exports: { logout: () => { window.loggedOut++; } } } } }));
     await lock.getByRole('button', { name: 'Log out' }).click();
     await expect(lock).toHaveCount(0);
     expect(await page.evaluate(() => [window.loggedOut, Lowcord.privacy.state.appLock, Lowcord.storage.getItem('lowcord.privacy.lock.v1')])).toEqual([1, false, 'null']);
+});
+
+test('a lock that fires in the background waits for the window before asking for Touch ID', async ({ page }) => {
+    await setup(page);
+    await page.evaluate(async () => {
+        window.touchCalls = 0; window.focused = false;
+        window.__LOWCORD_NATIVE__ = { ...window.__LOWCORD_NATIVE__, touchIdAvailable: async () => true, touchId: async () => { window.touchCalls++; return { ok: false }; } };
+        document.hasFocus = () => window.focused;
+        await Lowcord.privacy.setPasscode('2468'); Lowcord.privacy.set({ appLock: true }); Lowcord.privacy.lock();
+    });
+    const lock = page.getByRole('dialog', { name: 'OrbitCord is locked' });
+    await expect(lock.getByRole('button', { name: 'Unlock with Touch ID' })).toBeVisible();
+    expect(await page.evaluate(() => window.touchCalls)).toBe(0);
+    await page.evaluate(() => { window.focused = true; window.dispatchEvent(new Event('focus')); });
+    await expect.poll(() => page.evaluate(() => window.touchCalls)).toBe(1);
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await page.waitForTimeout(100);
+    expect(await page.evaluate(() => window.touchCalls)).toBe(1);
+});
+
+test('lock now covers the app without asking for Touch ID, and the keypad unlocks it', async ({ page }) => {
+    await setup(page);
+    expect(await page.evaluate(() => Lowcord.privacy.lockNow())).toBe(false);
+    await page.evaluate(async () => {
+        window.touchCalls = 0;
+        window.__LOWCORD_NATIVE__ = { ...window.__LOWCORD_NATIVE__, touchIdAvailable: async () => true, touchId: async () => { window.touchCalls++; return { ok: false }; } };
+        document.hasFocus = () => true;
+        await Lowcord.privacy.setPasscode('2468'); Lowcord.privacy.set({ appLock: true });
+    });
+    expect(await page.evaluate(() => Lowcord.privacy.lockNow())).toBe(true);
+    const lock = page.getByRole('dialog', { name: 'OrbitCord is locked' });
+    await expect(lock.getByRole('button', { name: 'Unlock with Touch ID' })).toBeVisible();
+    expect(await page.evaluate(() => window.touchCalls)).toBe(0);
+    for (const digit of '246') await lock.getByRole('button', { name: digit, exact: true }).click();
+    await expect(lock.locator('.lowcord-lock-dot.is-on')).toHaveCount(3);
+    await expect(lock.locator('.lowcord-lock-dot')).toHaveCount(4);
+    await lock.getByRole('button', { name: 'Delete' }).click();
+    await expect(lock.getByLabel('Passcode')).toBeFocused();
+    await page.screenshot({ path: 'test-results/lock-screen.png' });
+    // The fourth digit unlocks without pressing Unlock.
+    await page.keyboard.type('68');
+    await expect(lock).toHaveCount(0);
+});
+
+test('passcodes are exactly 4 digits, and a longer one saved earlier still unlocks', async ({ page }) => {
+    await setup(page);
+    expect(await page.evaluate(() => Lowcord.privacy.setPasscode('24680').then(() => 'saved', error => error.message))).toBe('Use exactly 4 digits.');
+    expect(await page.evaluate(() => Lowcord.privacy.setPasscode('246').then(() => 'saved', error => error.message))).toBe('Use exactly 4 digits.');
+    // An older 6-digit passcode, saved before the 4-digit rule.
+    await page.evaluate(async () => {
+        await Lowcord.privacy.setPasscode('2468');
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        const material = await crypto.subtle.importKey('raw', new TextEncoder().encode('135790'), 'PBKDF2', false, ['deriveBits']);
+        const hash = new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 150000 }, material, 256));
+        const text = bytes => btoa(String.fromCharCode(...bytes));
+        Lowcord.storage.setItem('lowcord.privacy.lock.v1', JSON.stringify({ v: 1, salt: text(salt), hash: text(hash) }));
+        Lowcord.privacy.set({ appLock: true });
+    });
+    await page.reload(); await page.waitForFunction(() => window.fixtureReady);
+    const lock = page.getByRole('dialog', { name: 'OrbitCord is locked' });
+    await lock.getByLabel('Passcode').fill('135790');
+    await lock.getByRole('button', { name: 'Unlock', exact: true }).click();
+    await expect(lock).toHaveCount(0);
 });
 
 test('saved app lock waits for the document root without aborting settings or losing preferences', async ({ page }) => {
@@ -440,7 +524,7 @@ test('saved app lock waits for the document root without aborting settings or lo
     await page.goto('/extensions');
     await page.waitForFunction(() => window.fixtureReady);
     expect(await page.evaluate(() => window.privacyReadyBeforeRoot)).toBe(true);
-    const lock = page.getByRole('dialog', { name: 'Lowcord is locked' });
+    const lock = page.getByRole('dialog', { name: 'OrbitCord is locked' });
     await expect(lock).toBeVisible();
     expect(await page.evaluate(() => document.body.inert)).toBe(true);
     expect(await page.evaluate(() => Lowcord.storage.getItem('lowcord.privacy.lock.v1'))).toBe(JSON.stringify(savedCode));

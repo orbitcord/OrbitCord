@@ -103,7 +103,7 @@ test('provider and volume controls save, reload, and hide when disabled', async 
     await page.getByLabel('Instagram provider').selectOption('eeinstagram.com');
     await page.getByLabel('Embed volume').fill('25');
     await page.reload(); await page.waitForFunction(() => window.fixtureReady);
-    expect(await page.evaluate(() => Lowcord.extensions.options)).toEqual({ musicVolume: 25, translateTarget: 'en', twitterProvider: 'vxtwitter.com', instagramProvider: 'eeinstagram.com',
+    expect(await page.evaluate(() => Lowcord.extensions.options)).toEqual({ musicVolume: 25, translateTarget: 'en', spellcheckLanguage: 'auto', twitterProvider: 'vxtwitter.com', instagramProvider: 'eeinstagram.com',
         blueskyProvider: 'auto', redditProvider: 'auto', tiktokProvider: 'auto', twitchProvider: 'auto', tumblrProvider: 'auto',
         facebookProvider: 'auto', threadsProvider: 'auto', pixivProvider: 'auto',
         captureReview: true, captureNames: true, captureAvatars: true, captureChannels: true });

@@ -6,12 +6,28 @@
     const key = 'lowcord.privacy.v1', eventName = 'lowcord-privacy-change';
     const composerSelector = '[class*="channelTextArea_"]';
     const editorSelector = `${composerSelector} [contenteditable="true"][role="textbox"], ${composerSelector} textarea`;
-    const defaults = { metadata: true, inspector: true, walkAway: true, coverAsk: false, appLock: false, lockAfter: 5 };
+    const defaults = { metadata: true, inspector: true, walkAway: true, coverAsk: false, appLock: false, lockAfter: 5, lockShortcut: 'Mod+Shift+L' };
     const lockDelays = [0, 1, 5, 15];
+    // Lock shortcut: "Mod" is Command on macOS and Ctrl elsewhere; "Ctrl" is
+    // the macOS Control key. A letter or digit needs Mod, Ctrl or Alt; F-keys
+    // may stand alone. An empty string turns it off. The main process matches
+    // it before Discord sees the key.
+    const mac = /Mac/.test(navigator.platform);
+    const shortcutValid = value => value === '' || (/^(Mod\+)?(Ctrl\+)?(Alt\+)?(Shift\+)?([A-Z0-9]|F([1-9]|1[0-2]))$/.test(value)
+        && (/^F\d/.test(value.split('+').pop()) || /^(Mod|Ctrl|Alt)\+/.test(value)) && (mac || !value.includes('Ctrl+')));
+    const shortcutText = value => !value ? 'Off' : value.split('+').map(part => mac
+        ? { Mod: '⌘', Ctrl: '⌃', Alt: '⌥', Shift: '⇧' }[part] ?? part
+        : { Mod: 'Ctrl' }[part] ?? part).join(mac ? '' : '+');
+    // A keydown as a shortcut string, or null for a lone modifier or other key.
+    function shortcutFrom(event) {
+        const code = event.code, name = /^Key([A-Z])$/.exec(code)?.[1] ?? /^Digit(\d)$/.exec(code)?.[1] ?? /^(F(?:[1-9]|1[0-2]))$/.exec(code)?.[1];
+        if (!name) return null;
+        return [(mac ? event.metaKey : event.ctrlKey) && 'Mod', mac && event.ctrlKey && 'Ctrl', event.altKey && 'Alt', event.shiftKey && 'Shift', name].filter(Boolean).join('+');
+    }
     const read = (name, fallback) => { try { return JSON.parse(storage.getItem(name)) ?? fallback; } catch { return fallback; } };
     // Only known boolean preferences; retired keys in old saves are dropped.
     const saved = read(key, {});
-    const valid = (name, value) => name === 'lockAfter' ? lockDelays.includes(value) : typeof defaults[name] === 'boolean' && typeof value === 'boolean';
+    const valid = (name, value) => name === 'lockAfter' ? lockDelays.includes(value) : name === 'lockShortcut' ? typeof value === 'string' && shortcutValid(value) : typeof defaults[name] === 'boolean' && typeof value === 'boolean';
     let state = Object.fromEntries(Object.entries(defaults).map(([name, value]) => [name, valid(name, saved?.[name]) ? saved[name] : value]));
     let queue, queueTimer, account, lastInspection;
     const reportKey = 'lowcord.privacy.report.v1';
@@ -30,8 +46,11 @@
         if (!state.appLock) hideLock(); else armIdleLock();
         syncNative(); changed();
     }
+    // While the settings page records a new shortcut, the old one is paused.
+    let shortcutPaused = false;
+    const pauseShortcut = value => { if (shortcutPaused !== value) { shortcutPaused = value; syncNative(); } };
     function syncNative() {
-        window.__LOWCORD_NATIVE__?.privacyPreferences?.({ inspector: state.inspector })
+        window.__LOWCORD_NATIVE__?.privacyPreferences?.({ inspector: state.inspector, lockShortcut: state.appLock && !shortcutPaused ? state.lockShortcut : '' })
             ?.catch(() => toast('Could not apply native privacy preferences.', true));
     }
     // Readable chat name for rule labels and the expiry picker.
@@ -49,21 +68,24 @@
     let passcode = read(lockKey, null);
     if (!(typeof passcode?.salt === 'string' && typeof passcode?.hash === 'string')) passcode = null;
     const bytesToText = bytes => btoa(String.fromCharCode(...bytes)), textToBytes = text => Uint8Array.from(atob(text), c => c.charCodeAt(0));
-    const passcodeValid = code => /^\d{4,8}$/.test(code);
+    // New passcodes are exactly 4 digits. Ones saved before that (4 to 8
+    // digits, no `digits` field) keep working until they are changed.
+    const passcodeValid = code => /^\d{4}$/.test(code);
+    const passcodeLength = () => passcode?.digits === 4 ? 4 : 8;
     async function derive(code, salt) {
         const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(code), 'PBKDF2', false, ['deriveBits']);
         return new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 150000 }, material, 256));
     }
     async function setPasscode(code) {
-        if (!passcodeValid(code)) throw new Error('Use 4 to 8 digits.');
+        if (!passcodeValid(code)) throw new Error('Use exactly 4 digits.');
         const salt = crypto.getRandomValues(new Uint8Array(16));
-        passcode = { v: 1, salt: bytesToText(salt), hash: bytesToText(await derive(code, salt)) };
+        passcode = { v: 1, digits: 4, salt: bytesToText(salt), hash: bytesToText(await derive(code, salt)) };
         storage.setItem(lockKey, JSON.stringify(passcode));
         changed();
     }
     function clearPasscode() { passcode = null; storage.setItem(lockKey, 'null'); }
     async function checkPasscode(code) {
-        if (!passcode || !passcodeValid(code)) return false;
+        if (!passcode || !(passcode.digits === 4 ? passcodeValid(code) : /^\d{4,8}$/.test(code))) return false;
         const hash = await derive(code, textToBytes(passcode.salt)), expected = textToBytes(passcode.hash);
         let diff = hash.length ^ expected.length;
         for (let i = 0; i < hash.length; i++) diff |= hash[i] ^ expected[i];
@@ -75,7 +97,7 @@
     }
 
     // Wrong-guess throttle: 5 misses, then 30 seconds.
-    let misses = 0, blockedUntil = 0, lockEl = null, lockReturnFocus = null, idleTimer = 0, awaySince = 0, lockBusy = false;
+    let misses = 0, blockedUntil = 0, lockEl = null, lockReturnFocus = null, idleTimer = 0, awaySince = 0, lockBusy = false, clockTimer = 0;
     const svgIcon = (paths, size = 24) => {
         const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg');
         for (const [name, value] of Object.entries({ viewBox: '0 0 24 24', width: size, height: size, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8,
@@ -90,7 +112,7 @@
     function unlock() {
         lockRootObserver?.disconnect(); lockRootObserver = null;
         if (!lockEl) return;
-        lockEl.remove(); lockEl = null; misses = 0; setInert(false);
+        lockEl.remove(); lockEl = null; misses = 0; setInert(false); clearTimeout(clockTimer);
         window.removeEventListener('keydown', trapKeys, true); window.removeEventListener('keyup', trapKeys, true); window.removeEventListener('keypress', trapKeys, true);
         const previous = lockReturnFocus; lockReturnFocus = null;
         if (previous?.isConnected) try { previous.focus({ preventScroll: true }); } catch {}
@@ -123,7 +145,7 @@
         try { actions.logout(); } catch { toast('Couldn\u2019t log out. Try Log out in Discord settings.', true); }
         return true;
     }
-    function lock() {
+    function lock({ manual = false } = {}) {
         if (lockEl || !state.appLock || !passcode) return;
         // Electron can run this before Chromium creates <html>. Mount on its
         // first mutation, before paint, without aborting the rest of the preload.
@@ -142,65 +164,147 @@
         const el = document.createElement('div');
         el.className = 'lowcord-lock'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-labelledby', 'lowcord-lock-title');
         // Inline so the cover holds before the stylesheet has loaded.
-        el.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;background:var(--background-primary,#313338);color:var(--text-normal,#f2f3f5)';
-        const card = document.createElement('form'); card.className = 'lowcord-lock-card'; card.noValidate = true;
-        const mark = document.createElement('span'); mark.className = 'lowcord-lock-mark'; mark.append(svgIcon(lockPaths, 28));
-        const title = document.createElement('h2'); title.id = 'lowcord-lock-title'; title.textContent = 'Lowcord is locked';
-        const hint = document.createElement('p'); hint.className = 'lowcord-lock-hint'; hint.textContent = 'Enter your passcode to continue.';
-        const touch = document.createElement('button'); touch.type = 'button'; touch.className = 'lowcord-lock-touch'; touch.hidden = true;
-        touch.append(svgIcon(fingerPaths, 18), document.createTextNode('Unlock with Touch ID'));
-        const input = document.createElement('input'); input.type = 'password'; input.inputMode = 'numeric'; input.autocomplete = 'off'; input.maxLength = 8;
+        el.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:grid;background:var(--background-tertiary,#1e1f22);color:var(--text-normal,#f2f3f5)';
+        const make = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text) node.textContent = text; return node; };
+        // Clock panel: the time and date over an orrery cropped off the corner.
+        // Decoration for sighted users; the dialog itself is the lock.
+        const side = make('div', 'lowcord-lock-side'); side.setAttribute('aria-hidden', 'true');
+        const orrery = make('div', 'lowcord-lock-orrery');
+        for (const [name, reverse] of [['far'], ['outer'], ['middle', true], ['inner']]) {
+            const orbit = make('div', `lowcord-lock-orbit is-${name}${reverse ? ' is-reverse' : ''}`);
+            if (name !== 'far') orbit.append(make('i'));
+            orrery.append(orbit);
+        }
+        orrery.append(make('div', 'lowcord-lock-sun'));
+        const time = make('div', 'lowcord-lock-time'), weekday = make('span', 'lowcord-lock-weekday'), day = make('span');
+        const date = make('div', 'lowcord-lock-date'); date.append(weekday, day);
+        const status = make('div', 'lowcord-lock-status'); status.append(svgIcon(lockPaths, 14), document.createTextNode('OrbitCord is locked'));
+        side.append(make('div', 'lowcord-lock-stars'), orrery, time, date, status);
+        // Follows the system's 12- or 24-hour setting; wakes once a minute.
+        const tick = () => {
+            if (lockEl !== el) return;
+            const now = new Date(), parts = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).formatToParts(now);
+            const part = type => parts.find(item => item.type === type)?.value;
+            const colon = make('span', 'lowcord-lock-colon', ':'), period = part('dayPeriod');
+            time.replaceChildren(part('hour'), colon, part('minute'), ...(period ? [make('span', 'lowcord-lock-period', period)] : []));
+            weekday.textContent = now.toLocaleDateString(undefined, { weekday: 'long' });
+            day.textContent = now.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+            clockTimer = setTimeout(tick, 60000 - (now.getSeconds() * 1000 + now.getMilliseconds()));
+        };
+        const card = make('form', 'lowcord-lock-card'); card.noValidate = true;
+        const title = make('h2', 'lowcord-lock-brand', 'OrbitCord is locked'); title.id = 'lowcord-lock-title';
+        const hint = make('p', 'lowcord-lock-hint', 'Enter your passcode');
+        const input = document.createElement('input'); input.type = 'password'; input.inputMode = 'numeric'; input.autocomplete = 'off'; const maxDigits = passcodeLength(); input.maxLength = maxDigits;
         input.className = 'lowcord-lock-input'; input.setAttribute('aria-label', 'Passcode'); input.setAttribute('aria-describedby', 'lowcord-lock-message');
-        const submit = document.createElement('button'); submit.type = 'submit'; submit.className = 'lowcord-lock-submit'; submit.textContent = 'Unlock';
-        const message = document.createElement('p'); message.id = 'lowcord-lock-message'; message.className = 'lowcord-lock-message'; message.setAttribute('role', 'alert');
-        const forgot = document.createElement('button'); forgot.type = 'button'; forgot.className = 'lowcord-lock-forgot'; forgot.textContent = 'Forgot passcode?';
-        const main = document.createElement('div'); main.className = 'lowcord-lock-main'; main.append(hint, touch, input, submit, message, forgot);
+        const entry = make('label', 'lowcord-lock-entry'), dots = [];
+        for (let i = 0; i < 4; i++) dots.push(make('span', 'lowcord-lock-dot'));
+        entry.append(...dots, input);
+        // Four dots; an older longer passcode adds one per digit past four.
+        // The fourth digit of a 4-digit passcode checks it straight away.
+        const paint = () => {
+            input.value = input.value.replace(/\D/g, '').slice(0, maxDigits);
+            if (maxDigits === 4 && input.value.length === 4 && !checking) queueMicrotask(() => card.requestSubmit());
+            const want = Math.max(4, input.value.length);
+            while (dots.length < want) { const dot = make('span', 'lowcord-lock-dot'); dots.push(dot); entry.insertBefore(dot, input); }
+            while (dots.length > want) dots.pop().remove();
+            dots.forEach((dot, i) => dot.classList.toggle('is-on', i < input.value.length));
+        };
+        input.addEventListener('input', paint);
+        const keys = make('div', 'lowcord-lock-keys'), keyFor = {};
+        const key = (label, className, name) => {
+            const button = make('button', `lowcord-lock-key${className ? ` ${className}` : ''}`); button.type = 'button';
+            if (typeof label === 'string') button.textContent = label; else button.append(label);
+            if (name) button.setAttribute('aria-label', name);
+            // Keep focus (and typing) in the passcode field.
+            button.addEventListener('mousedown', event => event.preventDefault());
+            keys.append(button); return button;
+        };
+        for (const digit of '123456789') keyFor[digit] = key(digit);
+        const back = key(svgIcon(['M9 6h11v12H9l-6-6 6-6Z', 'm12 10 4 4M16 10l-4 4'], 22), 'is-quiet', 'Delete');
+        keyFor['0'] = key('0');
+        const submit = key(svgIcon(['M5 12h14', 'm13 6 6 6-6 6'], 22), 'is-go', 'Unlock'); submit.type = 'submit';
+        for (const [digit, button] of Object.entries(keyFor)) button.addEventListener('click', () => { if (input.value.length < maxDigits) { input.value += digit; paint(); } });
+        back.addEventListener('click', () => { input.value = input.value.slice(0, -1); paint(); });
+        // Echo physical key presses on the pad.
+        input.addEventListener('keydown', event => {
+            const button = keyFor[event.key] ?? (event.key === 'Backspace' ? back : event.key === 'Enter' ? submit : null);
+            if (!button) return;
+            button.classList.add('is-pressed'); setTimeout(() => button.classList.remove('is-pressed'), 120);
+        });
+        const touch = make('button', 'lowcord-lock-touch'); touch.type = 'button'; touch.hidden = true;
+        touch.append(svgIcon(fingerPaths, 18), document.createTextNode('Unlock with Touch ID'));
+        const message = make('p', 'lowcord-lock-message'); message.id = 'lowcord-lock-message'; message.setAttribute('role', 'alert');
+        const forgot = make('button', 'lowcord-lock-forgot', 'Forgot passcode?'); forgot.type = 'button';
+        const main = make('div', 'lowcord-lock-main'); main.append(hint, entry, message, keys, touch, forgot);
         // Recovery: removing the lock requires logging out of Discord.
-        const recover = document.createElement('div'); recover.className = 'lowcord-lock-main'; recover.hidden = true;
-        const recoverText = document.createElement('p'); recoverText.className = 'lowcord-lock-hint'; recoverText.textContent = 'Log out of Discord to remove the lock. You\u2019ll sign in again with your Discord account.';
-        const recoverMessage = document.createElement('p'); recoverMessage.className = 'lowcord-lock-message'; recoverMessage.setAttribute('role', 'alert');
-        const logoutButton = document.createElement('button'); logoutButton.type = 'button'; logoutButton.className = 'lowcord-lock-danger'; logoutButton.textContent = 'Log out';
-        const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'lowcord-lock-submit'; cancel.textContent = 'Cancel';
+        const recover = make('div', 'lowcord-lock-main'); recover.hidden = true;
+        const recoverText = make('p', 'lowcord-lock-hint', 'Log out of Discord to remove the lock. You’ll sign in again with your Discord account.');
+        const recoverMessage = make('p', 'lowcord-lock-message'); recoverMessage.setAttribute('role', 'alert');
+        const logoutButton = make('button', 'lowcord-lock-danger', 'Log out'); logoutButton.type = 'button';
+        const cancel = make('button', 'lowcord-lock-submit', 'Cancel'); cancel.type = 'button';
         recover.append(recoverText, logoutButton, cancel, recoverMessage);
         forgot.addEventListener('click', () => { main.hidden = true; recover.hidden = false; recoverMessage.textContent = ''; logoutButton.focus(); });
         cancel.addEventListener('click', () => { recover.hidden = true; main.hidden = false; input.focus(); });
         logoutButton.addEventListener('click', () => {
-            if (!logOut()) { recoverMessage.textContent = 'Couldn\u2019t log out, so quit Lowcord and try again.'; return; }
+            if (!logOut()) { recoverMessage.textContent = 'Couldn’t log out, so quit OrbitCord and try again.'; return; }
         });
-        card.append(mark, title, main, recover); el.append(card);
+        card.append(title, main, recover); el.append(side, card);
         let timer = 0;
         const show = text => { message.textContent = text; };
+        const setDisabled = value => { input.disabled = value; for (const button of keys.children) button.disabled = value; };
         const refreshBlock = () => {
             clearTimeout(timer);
             const left = Math.ceil((blockedUntil - Date.now()) / 1000);
-            if (left > 0) { input.disabled = submit.disabled = true; show(`Too many tries. Try again in ${left}s.`); timer = setTimeout(refreshBlock, 1000); return; }
-            if (input.disabled) { input.disabled = submit.disabled = false; show(''); input.focus(); }
+            if (left > 0) { setDisabled(true); show(`Too many tries. Try again in ${left}s.`); timer = setTimeout(refreshBlock, 1000); return; }
+            if (input.disabled) { setDisabled(false); show(''); input.focus(); }
         };
         const tryTouch = async () => {
             if (lockBusy || !lockEl) return; lockBusy = true; touch.disabled = true;
-            try { if (await touchVerify('Unlock Lowcord')) { clearTimeout(timer); unlock(); } else input.focus(); }
+            try { if (await touchVerify('Unlock OrbitCord')) { clearTimeout(timer); unlock(); } else input.focus(); }
             finally { lockBusy = false; touch.disabled = false; }
         };
         touch.addEventListener('click', tryTouch);
+        let checking = false;
         card.addEventListener('submit', async event => {
             event.preventDefault();
-            if (Date.now() < blockedUntil || !input.value) return;
-            const code = input.value; submit.disabled = true;
-            const ok = await checkPasscode(code); submit.disabled = false;
+            if (checking || Date.now() < blockedUntil || !input.value) return;
+            const code = input.value; submit.disabled = true; checking = true;
+            const ok = await checkPasscode(code); submit.disabled = false; checking = false;
             if (ok) { clearTimeout(timer); unlock(); return; }
-            input.value = ''; misses++;
-            card.classList.remove('is-shaking'); void card.offsetWidth; card.classList.add('is-shaking');
+            input.value = ''; paint(); misses++;
+            main.classList.remove('is-shaking'); void main.offsetWidth; main.classList.add('is-shaking');
             if (misses >= 5) { misses = 0; blockedUntil = Date.now() + 30000; refreshBlock(); }
-            else { show('Wrong passcode'); input.focus(); }
+            else { show(`Wrong passcode. ${5 - misses} ${5 - misses === 1 ? 'try' : 'tries'} left.`); input.focus(); }
         });
-        lockEl = el; document.documentElement.append(el); setInert(true);
+        lockEl = el; document.documentElement.append(el); setInert(true); tick();
         window.addEventListener('keydown', trapKeys, true); window.addEventListener('keyup', trapKeys, true); window.addEventListener('keypress', trapKeys, true);
         if (document.activeElement && document.activeElement !== document.body) try { document.activeElement.blur(); } catch {}
         refreshBlock();
         if (!input.disabled) input.focus();
-        // Auto-prompt once; the button stays for another try.
-        touchAvailable().then(available => { if (available && lockEl === el) { touch.hidden = false; if (!input.disabled) tryTouch(); } });
+        // Auto-prompt once, but only while the window is in front: a lock that
+        // fires in the background (idle timer, computer lock) must not pop the
+        // system Touch ID sheet over other apps. It waits for the next return.
+        // The button stays for another try.
+        touchAvailable().then(available => {
+            if (!available || lockEl !== el) return;
+            touch.hidden = false;
+            const inFront = () => !document.hidden && document.hasFocus();
+            const prompt = () => {
+                if (lockEl !== el || !inFront()) return;
+                window.removeEventListener('focus', prompt); document.removeEventListener('visibilitychange', prompt);
+                if (!input.disabled) tryTouch();
+            };
+            // A lock you asked for waits until you leave and come back.
+            if (inFront() && !manual) prompt();
+            else { window.addEventListener('focus', prompt); document.addEventListener('visibilitychange', prompt); }
+        });
         changed();
+    }
+    // Lock now, from the menu, tray or keyboard shortcut.
+    function lockNow(focused = true) {
+        if (state.appLock && passcode) { lock({ manual: true }); return true; }
+        if (focused) toast('Turn on App lock in OrbitCord Settings to lock OrbitCord.');
+        return false;
     }
     // Lock again after being away from the window (blurred or hidden) for the chosen time.
     function armIdleLock() {
@@ -466,7 +570,7 @@
         const R = window.Lowcord.React, h = R.createElement;
         const current = window.Lowcord.store('ChannelStore')?.getChannel?.(channelId());
         const [, rerender] = R.useState(0), [open, setOpen] = R.useState(null), [showReport, setShowReport] = R.useState(false), [error, setError] = R.useState('');
-        const [lockMode, setLockMode] = R.useState(null), [codes, setCodes] = R.useState({ current: '', next: '', confirm: '' }), [touchOk, setTouchOk] = R.useState(false), [touchHere, setTouchHere] = R.useState(false);
+        const [lockMode, setLockMode] = R.useState(null), [codes, setCodes] = R.useState({ current: '', next: '', confirm: '' }), [touchOk, setTouchOk] = R.useState(false), [touchHere, setTouchHere] = R.useState(false), [recording, setRecording] = R.useState(false);
         const [kind, setKind] = R.useState(current && !current.guild_id ? 'dm' : 'server');
         const [target, setTarget] = R.useState(current ? current.guild_id ?? current.id : '');
         const [ruleChannel, setRuleChannel] = R.useState(current?.guild_id ? current.id : '');
@@ -600,7 +704,7 @@
             appLock: () => {
                 const enabled = state.appLock, mode = enabled ? lockMode : lockMode ?? 'setup';
                 const field = (name, label, autoComplete) => h('label', { key: name, className: 'lowcord-privacy-field' }, h('span', null, label),
-                    h('input', { type: 'password', inputMode: 'numeric', maxLength: 8, autoComplete: autoComplete ?? 'off', className: 'lowcord-privacy-input', 'aria-label': label, value: codes[name],
+                    h('input', { type: 'password', inputMode: 'numeric', maxLength: name === 'current' ? passcodeLength() : 4, autoComplete: autoComplete ?? 'off', className: 'lowcord-privacy-input', 'aria-label': label, value: codes[name],
                         onChange: e => setCodes({ ...codes, [name]: e.target.value.replace(/\D/g, '') }) }));
                 const reset = () => { setLockMode(null); setCodes({ current: '', next: '', confirm: '' }); setTouchOk(false); };
                 const submit = async () => {
@@ -608,28 +712,45 @@
                         if (mode !== 'setup' && !touchOk && !await checkPasscode(codes.current)) throw new Error('Wrong passcode.');
                         if (mode === 'disable') { set({ appLock: false }); clearPasscode(); }
                         else {
-                            if (!passcodeValid(codes.next)) throw new Error('Use 4 to 8 digits.');
+                            if (!passcodeValid(codes.next)) throw new Error('Use exactly 4 digits.');
                             if (codes.next !== codes.confirm) throw new Error('Passcodes do not match.');
                             await setPasscode(codes.next); set({ appLock: true });
                         }
                         reset(); setError('');
                     } catch (e) { setError(e.message); }
                 };
-                const verify = async () => { if (await touchVerify(mode === 'disable' ? 'Turn off app lock' : 'Change the Lowcord passcode')) { setTouchOk(true); setError(''); } else setError('Touch ID did not confirm. Enter your passcode instead.'); };
+                const verify = async () => { if (await touchVerify(mode === 'disable' ? 'Turn off app lock' : 'Change the OrbitCord passcode')) { setTouchOk(true); setError(''); } else setError('Touch ID did not confirm. Enter your passcode instead.'); };
                 const form = mode ? section(mode === 'setup' ? 'Set a passcode' : mode === 'change' ? 'Change passcode' : 'Turn off app lock',
                     mode !== 'setup' && !touchOk ? field('current', 'Current passcode', 'current-password') : null,
                     mode !== 'setup' && !touchOk && touchHere ? button('Use Touch ID instead', verify) : null,
                     mode !== 'setup' && touchOk ? note('Confirmed with Touch ID.') : null,
-                    mode !== 'disable' ? field('next', 'New passcode (4 to 8 digits)') : null,
+                    mode !== 'disable' ? field('next', 'New passcode (4 digits)') : null,
                     mode !== 'disable' ? field('confirm', 'Confirm passcode') : null,
                     actions(enabled ? button('Cancel', reset) : null, button(mode === 'disable' ? 'Turn off' : mode === 'change' ? 'Save passcode' : 'Turn on app lock', () => void submit(), true))) : null;
-                return [header('appLock', 'Covers Lowcord with a lock screen when it starts, when your computer locks and after you have been away. Voice calls are not interrupted; walk-away protection handles those.'),
-                    enabled ? section('When it locks', facts([['On start', 'Always'], ['Computer locks', 'Always'],
+                const record = value => { setRecording(value); pauseShortcut(value); if (value) setError(''); };
+                const recorder = h('span', { className: 'lowcord-privacy-shortcut' },
+                    h('button', { type: 'button', className: `lowcord-privacy-keys${recording ? ' is-recording' : ''}`, 'aria-label': `Lock shortcut: ${recording ? 'press the new shortcut' : shortcutText(state.lockShortcut)}`,
+                        onClick: () => record(!recording), onBlur: () => recording && record(false),
+                        onKeyDown: e => {
+                            if (!recording) return;
+                            if (e.key === 'Tab') return;
+                            e.preventDefault(); e.stopPropagation();
+                            if (e.key === 'Escape') { record(false); return; }
+                            if (e.key === 'Backspace' || e.key === 'Delete') { set({ lockShortcut: '' }); record(false); return; }
+                            const next = shortcutFrom(e.nativeEvent);
+                            if (!next) return;
+                            if (!shortcutValid(next)) { setError(`Hold ${mac ? '\u2318, \u2303 or \u2325' : 'Ctrl or Alt'} with a letter or number, or use an F-key.`); return; }
+                            set({ lockShortcut: next }); record(false);
+                        } }, recording ? 'Press keys\u2026' : shortcutText(state.lockShortcut)),
+                    state.lockShortcut !== defaults.lockShortcut && !recording ? button('Reset', () => set({ lockShortcut: defaults.lockShortcut })) : null);
+                return [header('appLock', 'Covers OrbitCord with a lock screen when it starts, when your computer locks and after you have been away. Voice calls are not interrupted; walk-away protection handles those.'),
+                    enabled ? section('When it locks', facts([['On start', 'Always'], ['Computer locks', 'Always'], ['Lock now', recorder],
                         ['Away from the window', h('span', { className: 'lowcord-privacy-select' }, h('select', { 'aria-label': 'Lock after being away', value: String(state.lockAfter), onChange: e => act(() => set({ lockAfter: Number(e.target.value) })) },
                             ...lockDelays.map(value => h('option', { key: value, value: String(value) }, value ? `After ${value} minute${value === 1 ? '' : 's'}` : 'Never'))))],
                         ['Unlock with', touchHere ? 'Touch ID or passcode' : 'Passcode']])) : null,
                     form,
                     enabled && !mode ? actions(button('Change passcode', () => setLockMode('change')), button('Turn off', () => setLockMode('disable'))) : null,
+                    enabled ? note(`Click the shortcut to change it. Press Delete to turn it off, or Escape to keep the current one.`) : null,
                     note('Your passcode is stored only as a salted hash on this device and cannot be recovered. If you forget it, “Forgot passcode?” on the lock screen removes the lock by logging you out of Discord. Closing the lock screen with a keyboard shortcut is blocked; the lock does not encrypt Discord’s data on disk.')];
             },
             expiry: expiryPane,
@@ -648,7 +769,7 @@
             inspector: !state.inspector ? 'Check downloads for disguised or risky files' : lastInspection?.status === 'warning' ? 'Last download needs care' : 'Check downloads for disguised or risky files',
             cover: state.coverAsk ? 'Asks before each image is attached' : 'Hide names and faces in an image before it is attached',
             expiry: queue?.state.rules.length ? `${queued} queued · deletes your new messages after a set time` : 'Delete your new messages after a set time',
-            appLock: state.appLock ? `Locks on start and when your computer locks${state.lockAfter ? `, and after ${state.lockAfter} min away` : ''}` : 'Require a passcode to open Lowcord',
+            appLock: state.appLock ? `Locks on start and when your computer locks${state.lockAfter ? `, and after ${state.lockAfter} min away` : ''}` : 'Require a passcode to open OrbitCord',
             walkAway: 'Mute and stop sharing when your computer locks',
             traces: traces?.clearOnQuit ? 'Clears cached media when OrbitCord quits' : 'Clear cached media when OrbitCord quits',
         };
@@ -686,7 +807,7 @@
     }
     window.Lowcord.privacy = { get state() { return { ...state }; }, set, eventName, SettingsPanel,
         get queue() { return queue; }, attachAccount, attach, report, count: (name, amount) => report.add(name, amount), walkAwayChanged,
-        lock, logOut, get locked() { return Boolean(lockEl); }, setPasscode, checkPasscode };
+        lock, lockNow, logOut, shortcutText, shortcutFrom, get locked() { return Boolean(lockEl); }, setPasscode, checkPasscode };
     const ready = () => {
         syncNative();
         window.Lowcord.waitForStore('UserStore', store => { attachAccount(); store.addChangeListener?.(attachAccount); });

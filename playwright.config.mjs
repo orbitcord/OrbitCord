@@ -5,7 +5,7 @@ import { join } from "node:path";
 export default defineConfig({
     testDir: "./tests",
     testMatch: "**/*.spec.mjs",
-    testIgnore: "**/electron.spec.mjs",
+    testIgnore: "**/electron*.spec.mjs",
     outputDir: join(tmpdir(), "lowcord-playwright-results"),
     fullyParallel: true,
     workers: 4,

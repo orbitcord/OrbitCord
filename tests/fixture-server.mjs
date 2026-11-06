@@ -39,7 +39,7 @@ const routes = {
 for (const file of ["discord.js", "extensions.js", "privacy-core.js", "privacy-media.js", "privacy.js", "privacy.css", "chat-capture.js", "image-cover.js", "mass-delete.js", "media-gallery.js", "dm-quick-reply.js", "redgifs.js", "redgifs.css", "background.js", "gif.js", "music-embeds.js", "social-embeds.js", "settings.js", "themes.js", "themes.css", "lowcord-ui.css"]) {
     routes[`/injection/${file}`] = [file.endsWith(".css") ? "text/css" : "text/javascript", await readFile(`src-tauri/injection/${file}`)];
 }
-for (const file of ['image-drop.js', 'picture-in-picture.js', 'picture-in-picture.css', 'video-compression.js', 'video-compression.css','media-sources.js','media-sources.css', 'reddit.js', 'reddit.css', 'split-messages.js', 'read-all.js', 'call-timer.js', 'online-friends.js', 'translate.js', 'embed-images.js', 'zip-preview.js', 'gif-captioner.js', 'tenor.js', 'ui-extras.css', 'media-extras.css', 'gif-captioner.css', 'animations.css']) {
+for (const file of ['image-drop.js', 'picture-in-picture.js', 'picture-in-picture.css', 'video-compression.js', 'video-compression.css','media-sources.js','media-sources.css', 'reddit.js', 'reddit.css', 'split-messages.js', 'read-all.js', 'call-timer.js', 'online-friends.js', 'translate.js', 'spellcheck.js', 'smooth-animations.js', 'embed-images.js', 'zip-preview.js', 'gif-captioner.js', 'tenor.js', 'ui-extras.css', 'media-extras.css', 'gif-captioner.css', 'animations.css']) {
     routes[`/injection/${file}`] = [file.endsWith('.css') ? 'text/css' : 'text/javascript', await readFile(`src-tauri/injection/${file}`)];
 }
 // A stand-in Discord API that records exactly what reached the network.

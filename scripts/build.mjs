@@ -65,7 +65,7 @@ export async function buildPreload({ sourceRoot = root, output = join(sourceRoot
     const [videoCompression, videoCompressionCSS] = await Promise.all(['video-compression.js', 'video-compression.css'].map(read));
     const [mediaSources,mediaSourcesCSS]=await Promise.all(['media-sources.js','media-sources.css'].map(read));
     const imageDrop = await read('image-drop.js');
-    const extraScripts = await Promise.all(['split-messages.js', 'read-all.js', 'call-timer.js', 'online-friends.js', 'translate.js', 'embed-images.js', 'zip-preview.js', 'gif-captioner.js', 'tenor.js'].map(read));
+    const extraScripts = await Promise.all(['split-messages.js', 'read-all.js', 'call-timer.js', 'online-friends.js', 'translate.js', 'spellcheck.js', 'smooth-animations.js', 'embed-images.js', 'zip-preview.js', 'gif-captioner.js', 'tenor.js'].map(read));
     const extraStyles = await Promise.all(['ui-extras.css', 'media-extras.css', 'gif-captioner.css', 'animations.css'].map(read));
     const [privacyCore, privacyMedia, privacy, privacyCSS, imageCover] = await Promise.all(['privacy-core.js', 'privacy-media.js', 'privacy.js', 'privacy.css', 'image-cover.js'].map(read));
     const contents = `const { contextBridge, ipcRenderer, webFrame } = require('electron');
@@ -94,6 +94,10 @@ if (process.isMainFrame && location.protocol !== 'data:') {
         touchId: reason => ipcRenderer.invoke('lowcord:touch-id', reason),
         touchIdAvailable: () => ipcRenderer.invoke('lowcord:touch-id-available'),
         setEmbedPreferences: settings => ipcRenderer.invoke('lowcord:embed-preferences', settings),
+        spellcheck: settings => ipcRenderer.invoke('lowcord:spellcheck', settings),
+        // Synchronous, trusted text input over the current selection, so an
+        // editor's own beforeinput handling sees it like typing.
+        insertText: text => { if (typeof text !== 'string' || text.length > 64) return false; webFrame.insertText(text); return true; },
         mediaProcess: (op, args, bytes) => ipcRenderer.invoke('lowcord:media-process', op, args, bytes),
         sanitizeImage: bytes => ipcRenderer.invoke('lowcord:sanitize-image', bytes),
         privacyPreferences: settings => ipcRenderer.invoke('lowcord:privacy-preferences', settings),

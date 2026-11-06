@@ -189,10 +189,30 @@ async function removeAccount(account, parent) {
     await Promise.all([ses.clearStorageData(), ses.clearCache()]).catch(error => console.error('[lowcord]', error.message));
     return true;
 }
+// The App lock shortcut, as privacy.js stores it ("Mod+Shift+L"; Mod is
+// Command on macOS, Ctrl elsewhere). Matched in before-input-event, which runs
+// before Discord's own key handling could swallow it, and shown in the menu.
+function lockShortcutMatcher(value) {
+    const match = typeof value === 'string' && /^(Mod\+)?(Ctrl\+)?(Alt\+)?(Shift\+)?([A-Z0-9]|F(?:[1-9]|1[0-2]))$/.exec(value);
+    if (!match) return null;
+    const [, mod, ctrl, alt, shift, key] = match, mac = process.platform === 'darwin';
+    if ((ctrl && !mac) || (!mod && !ctrl && !alt && !key.startsWith('F'))) return null;
+    const code = /^[A-Z]$/.test(key) ? `Key${key}` : /^\d$/.test(key) ? `Digit${key}` : key;
+    return input => input.type === 'keyDown' && input.code === code && Boolean(input.shift) === Boolean(shift) && Boolean(input.alt) === Boolean(alt)
+        && (mac ? Boolean(input.meta) === Boolean(mod) && Boolean(input.control) === Boolean(ctrl) : Boolean(input.control) === Boolean(mod) && !input.meta);
+}
+const lockAccelerator = value => value ? value.replace('Mod', 'CmdOrCtrl') : undefined;
+// Locks every account window that has App lock on; only the window in front
+// explains how to turn it on.
+const lockAll = () => {
+    const focused = (BrowserWindow.getFocusedWindow() ?? mainWindow)?.webContents;
+    eachTrustedWindow(contents => void contents.executeJavaScript(`window.Lowcord?.privacy?.lockNow?.(${contents === focused})`).catch(() => {}));
+};
 const trayMenu = () => Menu.buildFromTemplate([
     ...(accounts.length > 1 ? accounts.map(account => ({ label: accountName(account), click: () => void openAccount(account) }))
         : [{ label: 'Show OrbitCord', click: show }]),
     { label: 'New account window', click: () => void newAccount() },
+    { label: 'Lock OrbitCord', click: lockAll },
     { type: 'separator' },
     { label: 'OrbitCord Settings', click: () => { show(); void mainWindow?.webContents.executeJavaScript('window.__lowcordOpenSettings?.()'); } },
     { type: 'separator' }, { label: 'Quit', click: () => app.quit() },
@@ -201,6 +221,8 @@ const appMenu = () => Menu.buildFromTemplate([
     ...(process.platform === 'darwin' ? [{ label: 'OrbitCord', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] }] : []),
     { label: 'File', submenu: [
         { label: 'New account window', accelerator: 'CmdOrCtrl+Shift+A', click: () => void newAccount() },
+        // The key itself is matched in before-input-event; the menu only shows it.
+        { label: 'Lock OrbitCord', accelerator: lockAccelerator(mainWindow && recordFor(mainWindow.webContents)?.privacy?.lockShortcut), registerAccelerator: false, click: lockAll },
         ...(accounts.length > 1 ? [{ type: 'separator' }, ...accounts.map(account => ({ label: accountName(account), click: () => void openAccount(account) }))] : []),
     ] },
     { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' },
@@ -446,6 +468,9 @@ async function createDiscordWindow(account) {
         if (details.isMainFrame && !details.isInPlace) cancelFeatures(id);
     });
     contents.on('render-process-gone', () => cancelFeatures(id));
+    contents.on('before-input-event', (event, input) => {
+        if (discordWindows.get(id)?.lockMatch?.(input)) { event.preventDefault(); lockAll(); }
+    });
     const record = { account, window, badge: 0, stateTimer: undefined,
         embedPlugins: setupEmbedPlugins(contents),
         // LOWCORD_FAST_SLEEP counts sleep delays in seconds for manual testing.
@@ -623,7 +648,14 @@ function registerIpc() {
     ipcMain.handle('lowcord:privacy-preferences', (event, value) => {
         const record = assertSender(event);
         if (!value || typeof value.inspector !== 'boolean') throw new Error('Invalid privacy preferences');
-        record.privacy = { inspector: value.inspector }; return record.privacy;
+        const lockShortcut = value.lockShortcut === undefined ? '' : value.lockShortcut;
+        const lockMatch = lockShortcut === '' ? null : lockShortcutMatcher(lockShortcut);
+        if (lockShortcut !== '' && !lockMatch) throw new Error('Invalid lock shortcut');
+        record.lockMatch = lockMatch;
+        const menuChanged = record.privacy?.lockShortcut !== lockShortcut && record.window === mainWindow;
+        record.privacy = { inspector: value.inspector, lockShortcut };
+        if (menuChanged) Menu.setApplicationMenu(appMenu());
+        return record.privacy;
     });
     ipcMain.handle('lowcord:traces', async (event, action, value) => {
         const { window } = assertSender(event);
@@ -674,6 +706,10 @@ function registerIpc() {
         event.sender.downloadURL(url);
     });
     ipcMain.handle('lowcord:embed-preferences', (event, settings) => { assertSender(event).embedPlugins.set(settings); });
+    ipcMain.handle('lowcord:spellcheck', (event, settings) => {
+        assertSender(event);
+        return require('./spellcheck.cjs').applySpellcheck(event.sender.session, settings, { preferred: app.getPreferredSystemLanguages() });
+    });
     ipcMain.handle('lowcord:fetch-remote', (event, url, options) => { assertSender(event); return fetchRemote(url, options, (target, init) => net.fetch(target, init)); });
     ipcMain.handle('lowcord:touch-id-available', event => {
         assertSender(event);

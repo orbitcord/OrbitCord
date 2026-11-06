@@ -724,7 +724,7 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true,
             extensions: await page.evaluate(() => window.Lowcord.extensions.catalog.length), fetchHooked: true });
         expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
-            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'fetchRemote', 'touchId', 'touchIdAvailable', 'setEmbedPreferences', 'mediaProcess', 'sanitizeImage', 'privacyPreferences', 'traces', 'onWalkAway', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged'] });
+            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'fetchRemote', 'touchId', 'touchIdAvailable', 'setEmbedPreferences', 'spellcheck', 'insertText', 'mediaProcess', 'sanitizeImage', 'privacyPreferences', 'traces', 'onWalkAway', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged'] });
         expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsSearch('fixture', -1))).toEqual({ error: 'invalid-search' });
         expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsPrepare('not-a-token', 20_000_000))).toEqual({ error: 'expired' });
         await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsCancel());
@@ -1156,7 +1156,7 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
         await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
         expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
-            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'fetchRemote', 'touchId', 'touchIdAvailable', 'setEmbedPreferences', 'mediaProcess', 'sanitizeImage', 'privacyPreferences', 'traces', 'onWalkAway', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged']);
+            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'fetchRemote', 'touchId', 'touchIdAvailable', 'setEmbedPreferences', 'spellcheck', 'insertText', 'mediaProcess', 'sanitizeImage', 'privacyPreferences', 'traces', 'onWalkAway', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged']);
         expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
     } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
 });
@@ -1422,15 +1422,53 @@ test('saved App Lock preserves settings and completes the preload before streame
             BrowserWindow.getAllWindows()[0].webContents.on('preload-error', (_event, _path, error) => global.lockPreloadErrors.push(error.message));
         });
         await page.goto('http://127.0.0.1:4319/electron-slow-start');
-        const lock = page.getByRole('dialog', { name: 'Lowcord is locked' });
+        const lock = page.getByRole('dialog', { name: 'OrbitCord is locked' });
         await expect(lock).toBeVisible();
         expect(await page.evaluate(() => ({ settings: typeof __lowcordOpenSettings,
             metadata: Lowcord.privacy.state.metadata, typing: Lowcord.extensions.enabled('silentTyping'), inert: document.body.inert })))
             .toEqual({ settings: 'function', metadata: false, typing: false, inert: true });
         expect(await app.evaluate(() => global.lockPreloadErrors)).toEqual([]);
+        // The fourth digit unlocks on its own.
         await lock.getByLabel('Passcode').fill('2468');
-        await lock.getByRole('button', { name: 'Unlock', exact: true }).click();
         await expect(lock).toHaveCount(0);
         expect(await page.evaluate(() => document.body.inert)).toBe(false);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('the App Lock shortcut locks before Discord sees the key, and a changed shortcut replaces it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-lock-shortcut-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForURL('http://127.0.0.1:4319/electron', { waitUntil: 'load' });
+        await page.evaluate(async () => {
+            await Lowcord.privacy.setPasscode('2468'); Lowcord.privacy.set({ appLock: true });
+            // Discord can swallow keys; the shortcut must not depend on the page.
+            window.addEventListener('keydown', event => { event.preventDefault(); event.stopImmediatePropagation(); }, true);
+        });
+        const mod = process.platform === 'darwin' ? 'meta' : 'control';
+        const press = (keyCode, modifiers) => app.evaluate(({ BrowserWindow }, [keyCode, modifiers]) =>
+            BrowserWindow.getAllWindows()[0].webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers }), [keyCode, modifiers]);
+        const menu = () => app.evaluate(({ Menu }) => Menu.getApplicationMenu().items.flatMap(item => item.submenu?.items ?? []).find(item => item.label === 'Lock OrbitCord')?.accelerator);
+        const unlock = async () => {
+            const lock = page.getByRole('dialog', { name: 'OrbitCord is locked' });
+            await lock.getByLabel('Passcode').fill('2468');
+            await expect(lock).toHaveCount(0);
+        };
+        await expect.poll(menu).toBe('CmdOrCtrl+Shift+L');
+        await press('L', [mod, 'shift']);
+        await expect.poll(() => page.evaluate(() => Lowcord.privacy.locked)).toBe(true);
+        await unlock();
+        await page.evaluate(() => Lowcord.privacy.set({ lockShortcut: 'Mod+Alt+K' }));
+        await expect.poll(menu).toBe('CmdOrCtrl+Alt+K');
+        await press('L', [mod, 'shift']); await page.waitForTimeout(200);
+        expect(await page.evaluate(() => Lowcord.privacy.locked)).toBe(false);
+        await press('K', [mod, 'alt']);
+        await expect.poll(() => page.evaluate(() => Lowcord.privacy.locked)).toBe(true);
+        await unlock();
+        await page.evaluate(() => Lowcord.privacy.set({ lockShortcut: '' }));
+        await expect.poll(menu).toBe(null);
+        await press('K', [mod, 'alt']); await page.waitForTimeout(200);
+        expect(await page.evaluate(() => Lowcord.privacy.locked)).toBe(false);
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });

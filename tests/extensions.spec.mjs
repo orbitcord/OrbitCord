@@ -57,7 +57,7 @@ test("photo uploads require opt-in and extension choices persist", async ({ page
         anonymiseFileNames: true, voiceMessages: true, quickReply: true, clickReply: true, cleanUrls: true, silentTyping: true, noTracking: true,
         youtubeAdblock: true, musicEmbeds: true, socialEmbeds: true, socialCards: true, redditVideoUpload: true, instagramVideoUpload: true, twitterVideoUpload: true,
         socialPhotoUpload: false });
-    expect(Object.entries(state).every(([id, value]) => value === !["socialPhotoUpload", "fullQualityImages", "readAll", "onlineFriendCount"].includes(id))).toBe(true);
+    expect(Object.entries(state).every(([id, value]) => value === !["socialPhotoUpload", "fullQualityImages", "readAll", "onlineFriendCount", "autocorrect"].includes(id))).toBe(true);
     await page.evaluate(() => window.__lowcordOpenSettings("extensions"));
     const photos = page.getByRole("switch", { name: /Photos and carousels as files/ });
     await expect(photos).not.toBeChecked();
@@ -699,7 +699,7 @@ test("OrbitCord section in Discord's settings opens both pages, and toggles save
     const toggles = dialog.locator(".lowcord-extension-card").getByRole("switch");
     await expect(toggles).toHaveCount(Object.keys(await page.evaluate(() => Lowcord.extensions.state)).length);
     await expect(dialog.getByRole("switch", { name: /Photos and carousels as files/ })).not.toBeChecked();
-    expect(await toggles.evaluateAll(inputs => inputs.filter(input => input.checked).length)).toBe((await toggles.count()) - 4);
+    expect(await toggles.evaluateAll(inputs => inputs.filter(input => input.checked).length)).toBe((await toggles.count()) - 5);
     await dialog.getByRole("switch", { name: /Silent typing/ }).uncheck();
     expect(await page.evaluate(() => JSON.parse(Lowcord.storage.getItem("lowcord.extensions")).silentTyping)).toBe(false);
     await dialog.getByRole("button", { name: "Chat Appearance" }).click();

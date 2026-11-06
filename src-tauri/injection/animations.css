@@ -1,31 +1,83 @@
 /* Smooth animations. Gated on <html data-lowcord-animations> (the Smooth
-   animations extension) and on the system's motion setting. Only opacity and
-   transform are animated, once, on insertion; nothing is promoted permanently
-   and no rule matches broadly. */
+   animations extension), on the system's motion setting and on Discord's own
+   Reduced motion (html.reduce-motion). Only opacity and transform animate,
+   once, on insertion or press; transitions on idle elements cost nothing, and
+   selectors stay scoped to the element that's styled.
+   One curve throughout: a strong ease-out, so motion starts immediately and
+   settles softly. Entrances stay under ~220ms; presses respond in ~100ms. */
+:root[data-lowcord-animations] {
+    --lowcord-ease-out: cubic-bezier(.23, 1, .32, 1);
+    --lowcord-ease-spring: cubic-bezier(.34, 1.4, .64, 1);
+}
 @media (prefers-reduced-motion: no-preference) {
-    @keyframes lowcord-anim-fade-in { from { opacity: 0 } to { opacity: 1 } }
-    @keyframes lowcord-anim-slide-in { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
-    @keyframes lowcord-anim-pop-in { from { opacity: 0; transform: scale(.96) } to { opacity: 1; transform: none } }
+    @keyframes lowcord-anim-fade-in { from { opacity: 0 } }
+    @keyframes lowcord-anim-rise-in { from { opacity: 0; transform: translateY(4px) } }
+    @keyframes lowcord-anim-drop-in { from { opacity: 0; transform: translateY(-4px) } }
+    @keyframes lowcord-anim-pop-in { from { opacity: 0; transform: scale(.96) } }
 
     /* The message list, when a channel opens. */
-    :root[data-lowcord-animations] [class*="chatContent_"] [class*="messagesWrapper_"] {
-        animation: lowcord-anim-slide-in 160ms ease-out;
+    :root[data-lowcord-animations]:not(.reduce-motion) [class*="chatContent_"] [class*="messagesWrapper_"] {
+        animation: lowcord-anim-rise-in 200ms var(--lowcord-ease-out);
     }
 
-    /* Menus, context menus and popouts grow slightly from their corner. */
-    :root[data-lowcord-animations] [class*="layerContainer_"] [role="menu"],
-    :root[data-lowcord-animations] [class*="layerContainer_"] [class*="popout_"] {
-        animation: lowcord-anim-pop-in 120ms ease-out;
+    /* Menus, context menus and popouts. */
+    :root[data-lowcord-animations]:not(.reduce-motion) [class*="layerContainer_"] [role="menu"],
+    :root[data-lowcord-animations]:not(.reduce-motion) [class*="layerContainer_"] [class*="popout_"] {
+        animation: lowcord-anim-pop-in 150ms var(--lowcord-ease-out);
         transform-origin: top left;
     }
 
     /* Modals fade in; Discord positions and scales them itself. */
-    :root[data-lowcord-animations] [class*="layerContainer_"] [role="dialog"][aria-modal="true"] {
-        animation: lowcord-anim-fade-in 140ms ease-out;
+    :root[data-lowcord-animations]:not(.reduce-motion) [class*="layerContainer_"] [role="dialog"][aria-modal="true"] {
+        animation: lowcord-anim-fade-in 150ms var(--lowcord-ease-out);
+    }
+
+    /* Bars that open above the message box: autocomplete, replying to,
+       new messages and jump to present. */
+    :root[data-lowcord-animations]:not(.reduce-motion) [class*="channelTextArea_"] [class*="autocomplete_"],
+    :root[data-lowcord-animations]:not(.reduce-motion) [class*="attachedBars_"] > *,
+    :root[data-lowcord-animations]:not(.reduce-motion) [class*="jumpToPresentBar_"] {
+        animation: lowcord-anim-rise-in 160ms var(--lowcord-ease-out);
+    }
+    :root[data-lowcord-animations]:not(.reduce-motion) [class*="newMessagesBar_"] {
+        animation: lowcord-anim-drop-in 160ms var(--lowcord-ease-out);
+    }
+
+    /* A message's hover toolbar. Bubble layouts pin its transform, so it fades. */
+    :root[data-lowcord-animations]:not(.reduce-motion) [id^="chat-messages-"] [class*="buttonsInner_"] {
+        animation: lowcord-anim-fade-in 110ms var(--lowcord-ease-out);
+    }
+
+    /* Hover backgrounds ease instead of snapping: channels, DMs, members and
+       messages. Short enough that moving down a list never lags. */
+    :root[data-lowcord-animations]:not(.reduce-motion) [class*="sidebarList_"] :is([class*="link_"], [class*="interactive_"]),
+    :root[data-lowcord-animations]:not(.reduce-motion) [class*="privateChannels_"] [class*="interactive_"],
+    :root[data-lowcord-animations]:not(.reduce-motion) [data-list-item-id^="members-"] {
+        transition: background-color 120ms var(--lowcord-ease-out), color 120ms var(--lowcord-ease-out);
+    }
+    :root[data-lowcord-animations]:not(.reduce-motion) [id^="chat-messages-"] > [class*="message_"] {
+        transition: background-color 100ms var(--lowcord-ease-out);
+    }
+
+    /* Presses: buttons and server icons give a little on click. Discord's
+       color transitions are kept alongside. */
+    :root[data-lowcord-animations]:not(.reduce-motion) button[class*="button_"] {
+        transition: transform 160ms var(--lowcord-ease-out), background-color 170ms ease, color 170ms ease, border-color 170ms ease, box-shadow 170ms ease;
+    }
+    :root[data-lowcord-animations]:not(.reduce-motion) button[class*="button_"]:not(:disabled):active {
+        transform: scale(.97);
+        transition-duration: 90ms, 170ms, 170ms, 170ms, 170ms;
+    }
+    :root[data-lowcord-animations]:not(.reduce-motion) [data-list-item-id^="guildsnav___"] {
+        transition: transform 180ms var(--lowcord-ease-out);
+    }
+    :root[data-lowcord-animations]:not(.reduce-motion) [data-list-item-id^="guildsnav___"]:active {
+        transform: scale(.94);
+        transition-duration: 90ms;
     }
 
     /* Server icons ease the way they already change shape. */
-    :root[data-lowcord-animations] [data-list-item-id^="guildsnav___"] [class*="icon_"] {
-        transition-timing-function: cubic-bezier(.2, .8, .2, 1);
+    :root[data-lowcord-animations]:not(.reduce-motion) [data-list-item-id^="guildsnav___"] [class*="icon_"] {
+        transition-timing-function: var(--lowcord-ease-out);
     }
 }

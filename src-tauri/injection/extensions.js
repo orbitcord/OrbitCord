@@ -39,6 +39,8 @@
         { id: "readAll", defaultEnabled: false, title: "Mark all as read", description: "Adds a button to the server list that clears every unread badge." },
         { id: "callTimer", title: "Call timer", description: "Shows how long you've been in a voice call." },
         { id: "onlineFriendCount", defaultEnabled: false, title: "Online friend count", description: "Shows how many friends are online under the Home button." },
+        { id: "spellcheck", title: "Spellcheck", description: "Underline misspelled words in the message box. Right-click one for suggestions." },
+        { id: "autocorrect", defaultEnabled: false, title: "Autocorrect", description: "Fix common English typos as you type, like teh to the. Leaves code, links, mentions and emoji alone." },
         { id: "translate", title: "Translate", description: "Right-click a message to translate it. Text is sent to Google Translate only when you ask." },
         { id: "fullQualityImages", defaultEnabled: false, title: "Full-quality images", description: "Load original images instead of Discord's compressed previews. Uses more memory and data." },
         { id: "embedMoreImages", title: "Embed more images", description: "Preview BMP, ICO, AVIF, APNG and JFIF attachments in chat." },
@@ -46,7 +48,7 @@
         { id: "gifCaptioner", title: "GIF captions", description: "Caption a GIF from the GIF picker, or right-click one in chat. Trim it and pick a style before sending." },
         { id: "miniChat", title: "Mini chat", description: "Pin a DM or channel as a small floating chat that stays open while you browse." },
         { id: "bringBackTenor", title: "Bring back Tenor", description: "Search Tenor instead of Klipy in the GIF picker." },
-        { id: "smoothAnimations", title: "Smooth animations", description: "Gentle transitions when switching channels and opening menus." },
+        { id: "smoothAnimations", title: "Smooth animations", description: "Quick, smooth motion for channels, new messages, reactions, menus, buttons and lists." },
     ];
     const storage = window.Lowcord.storage;
     const changeEvent = "lowcord-extensions-change";
@@ -63,6 +65,8 @@
     // Chat screenshot review: on/off, and what it covers by default.
     const captureOptions = ["captureReview", "captureNames", "captureAvatars", "captureChannels"];
     const translateTargetPattern = /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/;
+    // "auto" follows the system; otherwise one of Chromium's dictionary codes.
+    const spellcheckLanguagePattern = /^(?:auto|[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*)$/;
     function defaultTranslateTarget() {
         const language = (navigator.language || "en").split("-")[0].toLowerCase();
         return translateTargetPattern.test(language) ? language : "en";
@@ -76,6 +80,7 @@
         return {
             musicVolume: Number.isFinite(saved.musicVolume) ? Math.max(0, Math.min(100, saved.musicVolume)) : 50,
             translateTarget: translateTargetPattern.test(saved.translateTarget) ? saved.translateTarget : defaultTranslateTarget(),
+            spellcheckLanguage: spellcheckLanguagePattern.test(saved.spellcheckLanguage) ? saved.spellcheckLanguage : "auto",
             ...Object.fromEntries(captureOptions.map(id => [id, typeof saved[id] === "boolean" ? saved[id] : typeof legacy[id] === "boolean" ? legacy[id] : true])),
             ...Object.fromEntries(Object.entries(links.providers).map(([site, hosts]) =>
                 [`${site}Provider`, hosts.includes(saved[`${site}Provider`]) ? saved[`${site}Provider`] : "auto"])),
@@ -87,6 +92,8 @@
             if (!Number.isFinite(value) || value < 0 || value > 100) throw new Error("Invalid volume");
         } else if (id === "translateTarget") {
             if (typeof value !== "string" || !translateTargetPattern.test(value)) throw new Error("Invalid language");
+        } else if (id === "spellcheckLanguage") {
+            if (typeof value !== "string" || !spellcheckLanguagePattern.test(value)) throw new Error("Invalid language");
         } else if (captureOptions.includes(id)) {
             if (typeof value !== "boolean") throw new Error("Invalid screenshot setting");
         } else {

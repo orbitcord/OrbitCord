@@ -321,6 +321,8 @@ function setupLowcordSettings() {
             error ? h("p", { role: "alert" }, error) : null);
     }
 
+    const languageNames = (() => { try { return new Intl.DisplayNames([navigator.language || "en"], { type: "language" }); } catch { return null; } })();
+    const languageName = code => { try { return languageNames?.of(code) ?? code; } catch { return code; } };
     // Settings-only copy: extension behavior and defaults stay in the catalog.
     const extensionCategories = ["All", "Uploads", "Media", "Messaging", "Utilities"];
     const extensionDetails = {
@@ -356,6 +358,8 @@ function setupLowcordSettings() {
         readAll: ["Utilities", "Use the button in the server list to clear every unread badge at once."],
         callTimer: ["Utilities", "See how long you have been in a voice call, beside the call controls."],
         onlineFriendCount: ["Utilities", "See how many friends are online under the Home button."],
+        spellcheck: ["Messaging", "Misspelled words in the message box are underlined. Right-click one to pick a suggestion or add it to your dictionary. Use Spellcheck language below the extension list to choose a dictionary.", "Uses your system's spellchecker. Each account keeps its own choice."],
+        autocorrect: ["Messaging", "Common typos like teh, recieve and dont are fixed when you press Space. Press Backspace right after a fix to undo it.", "Off by default. Code, links, mentions and emoji are never changed."],
         translate: ["Messaging", "Right-click a message and choose Translate. Use Translate target language below the extension list to change the language.", "The message text is sent to Google Translate only when you ask."],
         fullQualityImages: ["Media", "Chat images load at their original quality instead of Discord's compressed previews.", "Off by default. Uses more memory and data."],
         embedMoreImages: ["Media", "Attachments in BMP, ICO, AVIF, APNG and JFIF formats show as images in chat."],
@@ -363,7 +367,7 @@ function setupLowcordSettings() {
         gifCaptioner: ["Media", "Hover a GIF in the picker or right-click one in chat. Choose bar, meme, subtitle or bubble text, trim the clip, then press Enter to send or Shift+Enter to add it to your message."],
         bringBackTenor: ["Media", "Searches, trending and suggestions in the GIF picker come from Tenor again. Turn it off to use Discord's Klipy results."],
         miniChat: ["Messaging", "Pin a DM or channel as a small floating chat that stays open while you browse."],
-        smoothAnimations: ["Utilities", "Adds gentle transitions when you switch channels and open menus."],
+        smoothAnimations: ["Utilities", "Channels slide in when you switch, new messages and reactions pop in, the user profile panel slides in from the right and back out, menus and bars open with a short ease, list hovers fade, and buttons give a little when pressed.", "Follows your system's and Discord's Reduce motion settings."],
     };
 
     function ExtensionsPanel() {
@@ -446,6 +450,13 @@ function setupLowcordSettings() {
                         style: { "--lowcord-fill": `${options.musicVolume}%` },
                         "aria-label": "Embed volume", onChange: event => option("musicVolume", Number(event.target.value)) }),
                     h("output", null, `${options.musicVolume}%`))) : null,
+            state.spellcheck && filtered.some(({ id }) => id === "spellcheck") && window.Lowcord.spellcheck?.languages.length ? h("div", { className: "lowcord-embed-options" },
+                h("strong", { className: "lowcord-embed-heading" }, "Spellcheck"),
+                h("label", { className: "lowcord-position-control" },
+                    h("span", null, "Spellcheck language"),
+                    h("select", { value: options.spellcheckLanguage, onChange: event => option("spellcheckLanguage", event.target.value) },
+                        h("option", { value: "auto" }, "Same as system"),
+                        ...window.Lowcord.spellcheck.languages.map(code => h("option", { key: code, value: code }, languageName(code)))))) : null,
             state.chatCapture && filtered.some(({ id }) => id === "chatCapture") ? h("div", { className: "lowcord-capture-options" },
                 h("strong", { className: "lowcord-embed-heading" }, "Chat screenshots"),
                 h("div", { className: "lowcord-sleep-card" },
