@@ -1372,7 +1372,10 @@ test('saved App Lock preserves settings and completes the preload before streame
     const dir = await mkdtemp(join(tmpdir(), 'orbitcord-lock-startup-'));
     const app = await launch(dir);
     try {
-        const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
+        const page = await app.firstWindow();
+        // firstWindow can still be about:blank on hosted Macs. Let the initial
+        // main-process load finish before starting the streamed navigation.
+        await page.waitForURL('http://127.0.0.1:4319/electron', { waitUntil: 'load' });
         await page.evaluate(async () => {
             await Lowcord.privacy.setPasscode('2468');
             Lowcord.privacy.set({ appLock: true, metadata: false });
