@@ -75,3 +75,30 @@ test('translating through the native bridge parses the reply and keeps protected
     expect(result.query).toBe('hola ⟦0⟧ ⟦1⟧ ⟦2⟧');
     expect(result.out).toEqual({ text: 'hello world', language: 'es' });
 });
+
+test('Translate is opt-in and composer translation replaces the editor model through paste', async ({ page }) => {
+    expect(await page.evaluate(() => Lowcord.extensions.enabled('translate'))).toBe(false);
+    await install(page, zipBytes());
+    await page.evaluate(() => {
+        const editor = document.createElement('div');
+        editor.contentEditable = 'true'; editor.setAttribute('role', 'textbox');
+        editor.textContent = 'hola mundo';
+        document.querySelector('.channelTextArea_test').prepend(editor);
+        const model = { children: [{ children: [{ text: 'hola ' }, { text: 'mundo' }] }], selection: null,
+            apply(operation) { window.translationSelection = operation.newProperties; this.selection = operation.newProperties; } };
+        editor.__reactFiber$fixture = { return: { memoizedProps: { editor: model } } };
+        window.translationModel = model;
+        editor.addEventListener('paste', event => {
+            event.preventDefault();
+            const text = event.clipboardData.getData('text/plain');
+            model.children = [{ children: [{ text }] }]; editor.textContent = text;
+        });
+    });
+    await page.locator('.buttons_test .lowcord-actions-button').click();
+    await page.getByRole('menuitem', { name: 'Translate before sending', exact: true }).click();
+    const picker = page.getByRole('dialog', { name: 'Translate your message to' });
+    await picker.getByRole('button', { name: 'Translate', exact: true }).click();
+    await expect(page.locator('.channelTextArea_test [role="textbox"]')).toHaveText('hello world');
+    expect(await page.evaluate(() => ({ selection: translationSelection, text: translationModel.children[0].children[0].text })))
+        .toEqual({ selection: { anchor: { path: [0, 0], offset: 0 }, focus: { path: [0, 1], offset: 5 } }, text: 'hello world' });
+});

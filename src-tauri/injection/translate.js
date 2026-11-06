@@ -213,8 +213,38 @@
             editor.dispatchEvent(new Event("input", { bubbles: true }));
             return;
         }
+        // Discord's composer is a Slate editor that repaints from its own model:
+        // a DOM edit (even execCommand) shows the translation while the model
+        // keeps the original, so Backspace edits text that isn't on screen.
+        // Select everything in the model, then paste through Discord's handler.
+        const slate = slateEditor(editor);
+        if (slate?.children.length) {
+            const edge = (nodes, path, last) => {
+                const index = last ? nodes.length - 1 : 0, node = nodes[index];
+                if (typeof node?.text === "string") return { path: [...path, index], offset: last ? node.text.length : 0 };
+                return Array.isArray(node?.children) && node.children.length ? edge(node.children, [...path, index], last) : null;
+            };
+            const anchor = edge(slate.children, [], false), focus = edge(slate.children, [], true);
+            if (anchor && focus) {
+                slate.apply({ type: "set_selection", properties: slate.selection, newProperties: { anchor, focus } });
+                const data = new DataTransfer();
+                data.setData("text/plain", text);
+                const paste = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data });
+                editor.dispatchEvent(paste);
+                if (paste.defaultPrevented) return;
+            }
+        }
         document.execCommand("selectAll");
         document.execCommand("insertText", false, text);
+    }
+    function slateEditor(element) {
+        const key = Object.keys(element).find(name => name.startsWith("__reactFiber$"));
+        let fiber = key && element[key];
+        for (let depth = 0; fiber && depth < 30; depth++, fiber = fiber.return) {
+            const editor = fiber.memoizedProps?.editor;
+            if (typeof editor?.apply === "function" && Array.isArray(editor.children)) return editor;
+        }
+        return null;
     }
     function outgoing() { try { return window.Lowcord.storage?.getItem(outgoingKey) || "en"; } catch { return "en"; } }
     function composerTranslate() {

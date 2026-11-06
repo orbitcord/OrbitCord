@@ -41,7 +41,7 @@
         { id: "onlineFriendCount", defaultEnabled: false, title: "Online friend count", description: "Shows how many friends are online under the Home button." },
         { id: "spellcheck", title: "Spellcheck", description: "Underline misspelled words in the message box. Right-click one for suggestions." },
         { id: "autocorrect", defaultEnabled: false, title: "Autocorrect", description: "Fix common English typos as you type, like teh to the. Leaves code, links, mentions and emoji alone." },
-        { id: "translate", title: "Translate", description: "Right-click a message to translate it. Text is sent to Google Translate only when you ask." },
+        { id: "translate", defaultEnabled: false, title: "Translate", description: "Right-click a message to translate it. Text is sent to Google Translate only when you ask." },
         { id: "fullQualityImages", defaultEnabled: false, title: "Full-quality images", description: "Load original images instead of Discord's compressed previews. Uses more memory and data." },
         { id: "embedMoreImages", title: "Embed more images", description: "Preview BMP, ICO, AVIF, APNG and JFIF attachments in chat." },
         { id: "zipPreview", title: "Zip preview", description: "Browse the files inside zip attachments without downloading them." },
