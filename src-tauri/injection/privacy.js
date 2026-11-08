@@ -194,7 +194,11 @@
         const card = make('form', 'lowcord-lock-card'); card.noValidate = true;
         const title = make('h2', 'lowcord-lock-brand', 'OrbitCord is locked'); title.id = 'lowcord-lock-title';
         const hint = make('p', 'lowcord-lock-hint', 'Enter your passcode');
-        const input = document.createElement('input'); input.type = 'password'; input.inputMode = 'numeric'; input.autocomplete = 'off'; const maxDigits = passcodeLength(); input.maxLength = maxDigits;
+        // A text field, not type=password: a focused password field turns on macOS
+        // Secure Input, which blocks other apps' keyboard and mouse tools for as
+        // long as the lock sits focused in a background or minimised window.
+        // The field is invisible; the dots show progress.
+        const input = document.createElement('input'); input.type = 'text'; input.inputMode = 'numeric'; input.autocomplete = 'off'; input.spellcheck = false; input.setAttribute('autocapitalize', 'off'); const maxDigits = passcodeLength(); input.maxLength = maxDigits;
         input.className = 'lowcord-lock-input'; input.setAttribute('aria-label', 'Passcode'); input.setAttribute('aria-describedby', 'lowcord-lock-message');
         const entry = make('label', 'lowcord-lock-entry'), dots = [];
         for (let i = 0; i < 4; i++) dots.push(make('span', 'lowcord-lock-dot'));
@@ -704,7 +708,7 @@
             appLock: () => {
                 const enabled = state.appLock, mode = enabled ? lockMode : lockMode ?? 'setup';
                 const field = (name, label, autoComplete) => h('label', { key: name, className: 'lowcord-privacy-field' }, h('span', null, label),
-                    h('input', { type: 'password', inputMode: 'numeric', maxLength: name === 'current' ? passcodeLength() : 4, autoComplete: autoComplete ?? 'off', className: 'lowcord-privacy-input', 'aria-label': label, value: codes[name],
+                    h('input', { type: 'text', spellCheck: false, inputMode: 'numeric', maxLength: name === 'current' ? passcodeLength() : 4, autoComplete: autoComplete ?? 'off', className: 'lowcord-privacy-input', 'aria-label': label, value: codes[name],
                         onChange: e => setCodes({ ...codes, [name]: e.target.value.replace(/\D/g, '') }) }));
                 const reset = () => { setLockMode(null); setCodes({ current: '', next: '', confirm: '' }); setTouchOk(false); };
                 const submit = async () => {

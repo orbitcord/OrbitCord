@@ -404,6 +404,8 @@ test('the lock shortcut is recorded from a key press, rejects bare letters, rese
 test('app lock sets a hashed passcode, covers the app, throttles guesses and needs the passcode to turn off', async ({ page }) => {
     await setup(page); const panel = await inlineSettings(page);
     await panel.getByRole('switch', { name: 'App lock' }).click();
+    // A focused password field turns on macOS Secure Input; passcodes are masked text instead.
+    await expect(panel.locator('input[type="password"]')).toHaveCount(0);
     await panel.getByLabel('New passcode (4 digits)').fill('2468'); await panel.getByLabel('Confirm passcode').fill('2468');
     await panel.getByRole('button', { name: 'Turn on app lock' }).click();
     await expect(panel.getByRole('switch', { name: 'App lock' })).toBeChecked();
@@ -411,6 +413,7 @@ test('app lock sets a hashed passcode, covers the app, throttles guesses and nee
     expect(stored).not.toContain('2468'); expect(JSON.parse(stored).hash.length).toBeGreaterThan(20);
     await page.evaluate(() => Lowcord.privacy.walkAwayChanged('away'));
     const lock = page.getByRole('dialog', { name: 'OrbitCord is locked' }); await expect(lock).toBeVisible();
+    await expect(lock.locator('input[type="password"]')).toHaveCount(0);
     await page.keyboard.press('Escape'); await expect(lock).toBeVisible();
     await lock.getByLabel('Passcode').fill('1111'); await page.keyboard.press('Enter');
     await expect(lock).toContainText('Wrong passcode');

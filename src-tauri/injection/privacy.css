@@ -40,7 +40,8 @@
 .lowcord-privacy-item-text span { font-size: 12px; line-height: 16px; color: var(--text-muted, #b5bac1); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .lowcord-privacy-item-text .is-warn { color: var(--status-warning, #f0b232); }
 
-.lowcord-privacy-input { box-sizing: border-box; width: 100%; max-width: 280px; height: 40px; padding: 0 12px; border: 1px solid var(--border-subtle, rgb(148 155 164 / .2)); border-radius: 6px; background: var(--background-secondary, #2b2d31); color: var(--text-normal, #f2f3f5); font: inherit; letter-spacing: .2em; }
+/* Masked text, not type=password, so these fields never turn on macOS Secure Input. */
+.lowcord-privacy-input { -webkit-text-security: disc; box-sizing: border-box; width: 100%; max-width: 280px; height: 40px; padding: 0 12px; border: 1px solid var(--border-subtle, rgb(148 155 164 / .2)); border-radius: 6px; background: var(--background-secondary, #2b2d31); color: var(--text-normal, #f2f3f5); font: inherit; letter-spacing: .2em; }
 
 .lowcord-privacy-section { display: grid; gap: 8px; }
 .lowcord-privacy-section h3 { font-size: 12px; line-height: 16px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; color: var(--text-muted, #b5bac1); }
