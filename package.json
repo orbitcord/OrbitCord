@@ -1,6 +1,6 @@
 {
   "name": "orbitcord",
-  "version": "0.1.35",
+  "version": "0.1.36",
   "private": true,
   "license": "GPL-3.0-or-later",
   "description": "Lightweight Discord desktop client",
