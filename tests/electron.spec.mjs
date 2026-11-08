@@ -1172,7 +1172,9 @@ test('settings checks updates through native IPC and shows network errors and re
             global.updateChecks = 0;
             net.fetch = async () => {
                 global.updateChecks++;
-                await new Promise(resolve => setTimeout(resolve, 200));
+                // Hold the first reply until the renderer has asserted its
+                // pending state; a 200 ms delay can expire on a busy CI Mac.
+                if (global.updateChecks === 1) await new Promise(resolve => { global.finishUpdateCheck = resolve; });
                 return global.updateChecks === 1 ? new Response('', { status: 503 }) : Response.json({
                     tag_name: `v${version}`, html_url: `https://github.com/orbitcord/OrbitCord/releases/tag/v${version}`, assets: [],
                 });
@@ -1186,6 +1188,7 @@ test('settings checks updates through native IPC and shows network errors and re
         await expect(panel).toContainText(`Current version: ${currentVersion}`);
         await panel.locator('section').getByRole('button', { name: 'Check for updates', exact: true }).click();
         await expect(panel.getByRole('button', { name: 'Checking…' })).toBeDisabled();
+        await app.evaluate(() => { global.finishUpdateCheck(); });
         await expect(panel.getByRole('alert')).toContainText('HTTP 503');
         await panel.locator('section').getByRole('button', { name: 'Check for updates', exact: true }).click();
         await expect(panel.getByRole('status')).toHaveText("You're up to date.");
