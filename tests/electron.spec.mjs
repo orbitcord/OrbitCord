@@ -1167,7 +1167,7 @@ test('settings checks updates through native IPC and shows network errors and re
     const app = await launch(dir);
     try {
         const page = await app.firstWindow();
-        await page.waitForLoadState('load');
+        await page.waitForURL('http://127.0.0.1:4319/electron', { waitUntil: 'load' });
         await app.evaluate(({ net }, version) => {
             global.updateChecks = 0;
             net.fetch = async () => {
