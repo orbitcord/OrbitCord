@@ -1,13 +1,14 @@
 // More quick reactions: Discord's message right-click menu shows at most four
-// frequently used reactions. This fills that row up to `total`, wrapping onto
-// a second line, from the same frequency list and with the same checks for
+// frequently used reactions and the hover toolbar three. This fills the menu
+// up to `total` (wrapping onto a second line) and the toolbar up to
+// `toolbarTotal`, from the same frequency list and with the same checks for
 // emojis the account can't react with. Discord's code is not changed: the
 // extra buttons are copies of Discord's own and react through its own action.
-// Nothing runs until a message menu opens.
+// Nothing runs until a message menu opens or a message is hovered.
 (() => {
     const { extensions } = window.Lowcord;
     const { enabled, changeEvent } = extensions;
-    const ID = "moreQuickReactions", total = 8, extraClass = "lowcord-quick-reaction";
+    const ID = "moreQuickReactions", total = 8, toolbarTotal = 5, extraClass = "lowcord-quick-reaction";
     const store = name => window.Lowcord.store(name);
     const { find, filters } = window.Lowcord;
     let helpers, addReaction, reactionIntention;
@@ -84,6 +85,78 @@
         row.setAttribute("data-lowcord-quick-reactions", "");
     }
 
+    // The hover toolbar: each of Discord's buttons sits in its own <span>
+    // (a hidden tooltip span follows it). Reaction buttons hold an emoji
+    // element (data-type="emoji", drawn as an <img> or a background image);
+    // the rest (add reaction, reply, more) are icons.
+    const emojiIn = node => node.querySelector('[data-type="emoji"], img');
+    function toolbarReactions(toolbar) {
+        return [...toolbar.querySelectorAll('[role="button"], button')].filter(node =>
+            !node.closest(`.${extraClass}`) && emojiIn(node) && !node.querySelector("svg"));
+    }
+    function fillToolbar(toolbar, channelId, messageId) {
+        if (toolbar.querySelector(`.${extraClass}`)) return;
+        const shown = toolbarReactions(toolbar);
+        if (!shown.length || shown.length >= toolbarTotal) return;
+        const channel = store("ChannelStore")?.getChannel?.(channelId);
+        const react = reactionAction();
+        if (!channel || typeof react !== "function") return;
+        const extra = frequentEmojis(channel).slice(shown.length, toolbarTotal);
+        const last = shown.at(-1);
+        // Copy the button's wrapper when it has one of its own.
+        const wrapped = last.parentElement?.childElementCount === 1 && last.parentElement !== toolbar;
+        const model = wrapped ? last.parentElement : last;
+        // After the last reaction and its tooltip, ahead of the separator.
+        let after = model.nextElementSibling && !model.nextElementSibling.querySelector('[role="button"]')
+            && !/separator/.test(model.nextElementSibling.className) ? model.nextElementSibling : model;
+        for (const emoji of extra) {
+            const src = urlOf(emoji);
+            if (!src) continue;
+            const item = model.cloneNode(true);
+            item.classList.add(extraClass);
+            const button = wrapped ? item.firstElementChild : item;
+            item.querySelectorAll("[id]").forEach(node => node.removeAttribute("id"));
+            if (!wrapped) item.removeAttribute("id");
+            item.querySelectorAll("[aria-describedby], [aria-labelledby]").forEach(node => {
+                node.removeAttribute("aria-describedby"); node.removeAttribute("aria-labelledby"); });
+            button.setAttribute("aria-label", `Click to react with ${emoji.name}`);
+            button.title = `:${emoji.name}:`;
+            const face = emojiIn(button);
+            if (face instanceof HTMLImageElement) { face.src = src; face.srcset = ""; face.alt = `:${emoji.name}:`; }
+            else face.style.backgroundImage = `url("${src}")`;
+            face.removeAttribute("data-id");
+            face.setAttribute("data-name", emoji.id == null ? reactionOf(emoji).name : emoji.name);
+            const choose = event => {
+                event.preventDefault(); event.stopPropagation();
+                try { void Promise.resolve(react(channelId, messageId, reactionOf(emoji), "Message Hover Bar")).catch(error => console.warn("[lowcord] quick reaction:", error)); }
+                catch (error) { console.warn("[lowcord] quick reaction:", error); }
+            };
+            button.addEventListener("click", choose);
+            button.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") choose(event); });
+            after.after(item);
+            after = item;
+        }
+    }
+    let hovered = null, hoverFrame;
+    function onPointerOver(event) {
+        if (!(event.target instanceof Element)) return;
+        const row = event.target.closest('[id^="chat-messages-"]');
+        if (!row) return;
+        hovered = row;
+        const [, channelId, messageId] = /^chat-messages-(\d+)-(\d+)$/.exec(row.id) ?? [];
+        if (!messageId) return;
+        if (hoverFrame !== undefined) cancelAnimationFrame(hoverFrame);
+        let frames = 0;
+        const look = () => {
+            hoverFrame = undefined;
+            if (hovered !== row || !enabled(ID)) return;
+            const toolbar = row.querySelector('[class*="buttonContainer_"]');
+            if (!toolbar || !toolbarReactions(toolbar).length) { if (++frames < 20) hoverFrame = requestAnimationFrame(look); return; }
+            fillToolbar(toolbar, channelId, messageId);
+        };
+        hoverFrame = requestAnimationFrame(look);
+    }
+
     let menuRequest = 0;
     function onContextMenu(event) {
         const request = ++menuRequest;
@@ -106,9 +179,13 @@
         const on = enabled(ID);
         if (on === active) return;
         active = on;
-        if (on) window.addEventListener("contextmenu", onContextMenu, true);
-        else {
+        if (on) {
+            window.addEventListener("contextmenu", onContextMenu, true);
+            document.addEventListener("pointerover", onPointerOver, true);
+        } else {
             window.removeEventListener("contextmenu", onContextMenu, true);
+            document.removeEventListener("pointerover", onPointerOver, true);
+            hovered = null;
             document.querySelectorAll(`.${extraClass}`).forEach(item => item.remove());
         }
     }

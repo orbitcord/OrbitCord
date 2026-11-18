@@ -103,37 +103,58 @@
         sync();
     });
 
-    // A source menu beside the picker's search bar.
+    // A Tenor/Klipy toggle at the end of the picker's search bar, placed
+    // right after the input inside the bar's own row.
     const label = { tenor: "Tenor", klipy: "Klipy" };
+    function choose(source) {
+        if ((source === "tenor") === extensions.enabled(id)) return;
+        try { extensions.set(id, source === "tenor"); }
+        catch (error) { extensions.toast?.(error.message, true); }
+    }
     function sync() {
         const panel = document.getElementById("gif-picker-tab-panel");
         const input = panel?.querySelector('input[type="text"], input:not([type])');
-        if (!input) return;
+        if (!input?.parentElement) return;
         const source = extensions.enabled(id) ? "tenor" : "klipy";
         // Discord's placeholder names Klipy; say which service is searched.
         input.dataset.lowcordPlaceholder ??= input.placeholder;
         const placeholder = source === "tenor" ? "Search Tenor" : input.dataset.lowcordPlaceholder;
         if (input.placeholder !== placeholder) input.placeholder = placeholder;
-        let menu = panel.querySelector(".lowcord-gif-source");
-        if (!menu) {
-            const bar = input.closest('[class*="searchBar_"]') ?? input.parentElement;
-            const row = bar?.parentElement;
-            if (!row) return;
-            menu = document.createElement("select");
-            menu.className = "lowcord-gif-source";
-            menu.setAttribute("aria-label", "GIF source");
-            menu.title = "GIF source";
-            for (const value of ["klipy", "tenor"]) menu.append(new Option(label[value], value));
-            menu.addEventListener("change", () => {
-                try { extensions.set(id, menu.value === "tenor"); }
-                catch (error) { extensions.toast?.(error.message, true); sync(); }
+        let toggle = panel.querySelector(".lowcord-gif-source");
+        if (!toggle) {
+            toggle = document.createElement("div");
+            toggle.className = "lowcord-gif-source";
+            toggle.setAttribute("role", "radiogroup");
+            toggle.setAttribute("aria-label", "GIF source");
+            for (const value of ["tenor", "klipy"]) {
+                const option = document.createElement("button");
+                option.type = "button";
+                option.setAttribute("role", "radio");
+                option.dataset.source = value;
+                option.textContent = label[value];
+                option.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); choose(value); });
+                toggle.append(option);
+            }
+            // Arrow keys move between the two, like a radio group; keys stay
+            // here instead of reaching Discord's picker navigation.
+            toggle.addEventListener("keydown", event => {
+                event.stopPropagation();
+                if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+                event.preventDefault();
+                const next = extensions.enabled(id) ? "klipy" : "tenor";
+                choose(next);
+                toggle.querySelector(`[data-source="${next}"]`)?.focus();
             });
-            // Discord's picker reacts to keys inside it; keep them on the menu.
-            menu.addEventListener("keydown", event => event.stopPropagation());
-            row.setAttribute("data-lowcord-gif-source-row", "");
-            bar.after(menu);
+            // Clicks on the toggle shouldn't move focus into the search field.
+            toggle.addEventListener("mousedown", event => event.stopPropagation());
+            input.parentElement.setAttribute("data-lowcord-gif-source-row", "");
+            input.after(toggle);
         }
-        if (menu.value !== source) menu.value = source;
+        for (const option of toggle.children) {
+            const on = option.dataset.source === source;
+            if (option.getAttribute("aria-checked") !== String(on)) option.setAttribute("aria-checked", String(on));
+            option.tabIndex = on ? 0 : -1;
+        }
     }
     window.Lowcord.onDomChange?.(sync);
     window.Lowcord.tenor = { search, trending, suggest, gif, tenorLocale };

@@ -34,15 +34,22 @@
 }
 #message[role="menu"] [data-lowcord-quick-reactions] > [role="menuitem"] { min-width: 0; margin-inline: 0; justify-self: stretch; }
 
-/* GIF picker source menu (Bring back Tenor), beside the search bar. */
-#gif-picker-tab-panel [data-lowcord-gif-source-row] { display: flex; align-items: center; gap: 8px; }
-#gif-picker-tab-panel [data-lowcord-gif-source-row] > :not(.lowcord-gif-source) { flex: 1 1 auto; min-width: 0; }
+/* GIF picker source toggle (Bring back Tenor), at the end of the search bar. */
+#gif-picker-tab-panel [data-lowcord-gif-source-row] { display: flex; align-items: center; }
+#gif-picker-tab-panel [data-lowcord-gif-source-row] > input { flex: 1 1 auto; min-width: 0; }
 #gif-picker-tab-panel .lowcord-gif-source {
-    flex: none; height: 30px; padding: 0 26px 0 10px; margin: 0;
-    border: 1px solid var(--border-subtle, #ffffff14); border-radius: 8px;
-    background: var(--background-secondary, #2b2d31) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%23949ba4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 8px center / 12px;
-    color: var(--text-normal, #dbdee1); font: inherit; font-size: 13px; font-weight: 500;
-    appearance: none; cursor: pointer;
+    display: inline-flex; flex: none; gap: 2px; padding: 2px; margin-inline: 6px 2px;
+    border-radius: 6px; background: var(--background-modifier-accent, #ffffff14);
 }
-#gif-picker-tab-panel .lowcord-gif-source:hover { border-color: var(--border-strong, #ffffff29); }
-#gif-picker-tab-panel .lowcord-gif-source:focus-visible { outline: 2px solid var(--text-link, #82b7ff); outline-offset: 1px; }
+#gif-picker-tab-panel .lowcord-gif-source > button {
+    height: 22px; padding: 0 9px; margin: 0; border: 0; border-radius: 4px;
+    background: none; color: var(--text-muted, #949ba4);
+    font: inherit; font-size: 12px; font-weight: 500; line-height: 22px; cursor: pointer;
+    transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+#gif-picker-tab-panel .lowcord-gif-source > button:hover { color: var(--text-normal, #dbdee1); }
+#gif-picker-tab-panel .lowcord-gif-source > button[aria-checked="true"] {
+    background: var(--background-base-lowest, var(--background-primary, #313338)); color: var(--header-primary, #f2f3f5);
+}
+#gif-picker-tab-panel .lowcord-gif-source > button:focus-visible { outline: 2px solid var(--text-link, #82b7ff); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { #gif-picker-tab-panel .lowcord-gif-source > button { transition: none; } }

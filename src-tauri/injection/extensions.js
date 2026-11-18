@@ -47,7 +47,7 @@
         { id: "zipPreview", title: "Zip preview", description: "Browse the files inside zip attachments without downloading them." },
         { id: "gifCaptioner", title: "GIF captions", description: "Caption a GIF from the GIF picker, or right-click one in chat. Trim it and pick a style before sending." },
         { id: "miniChat", title: "Mini chat", description: "Pin a DM or channel as a small floating chat that stays open while you browse." },
-        { id: "moreQuickReactions", title: "More quick reactions", description: "Show eight of your frequently used reactions when you right-click a message, instead of four." },
+        { id: "moreQuickReactions", title: "More quick reactions", description: "Show more of your frequently used reactions: five in the hover toolbar and eight when you right-click a message." },
         { id: "bringBackTenor", title: "Bring back Tenor", description: "Search Tenor instead of Klipy in the GIF picker." },
     ];
     const storage = window.Lowcord.storage;

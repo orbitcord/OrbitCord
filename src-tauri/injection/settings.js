@@ -366,7 +366,7 @@ function setupLowcordSettings() {
         zipPreview: ["Media", "Select a zip attachment to browse the files inside it without downloading the whole archive."],
         gifCaptioner: ["Media", "Hover a GIF in the picker or right-click one in chat. Choose bar, meme, subtitle or bubble text, trim the clip, then press Enter to send or Shift+Enter to add it to your message."],
         bringBackTenor: ["Media", "Searches, trending and suggestions in the GIF picker come from Tenor again. Switch between Tenor and Klipy from the menu beside the GIF search bar, or turn this off to use Discord's Klipy results."],
-        moreQuickReactions: ["Messaging", "Right-click a message to see eight of your frequently used reactions on two lines, instead of Discord's four. Hold Shift while you pick to add more than one.", "Emojis you can't react with are left out."],
+        moreQuickReactions: ["Messaging", "Hovering a message shows five of your frequently used reactions instead of three, and right-clicking shows eight on two lines instead of four. In the right-click menu, hold Shift while you pick to add more than one.", "Emojis you can't react with are left out."],
         miniChat: ["Messaging", "Pin a DM or channel as a small floating chat that stays open while you browse."],
     };
 

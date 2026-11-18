@@ -8,10 +8,12 @@ const { createServer } = require('node:http');
 // Only the refresh token is kept, encrypted by the caller's store; access
 // tokens live in memory for their hour.
 //
-// To build with sign-in enabled, register an installed app at
-// https://www.reddit.com/prefs/apps with the redirect URI below and put its
-// client ID in CLIENT_ID (or ORBITCORD_REDDIT_CLIENT_ID for development).
+// Reddit's OAuth needs a registered client ID. A build can ship one in
+// CLIENT_ID (or ORBITCORD_REDDIT_CLIENT_ID); otherwise the person registers
+// their own installed app at https://www.reddit.com/prefs/apps with the
+// redirect URI below, and the picker's setup saves its ID (`setClientId`).
 const CLIENT_ID = '';
+const validClientId = value => typeof value === 'string' && /^[\w-]{10,40}$/.test(value);
 const PORT = 65010;
 const CALLBACK = '/reddit_callback';
 const SCOPES = ['identity', 'read', 'mysubreddits', 'history'];
@@ -25,7 +27,8 @@ body{display:grid;place-items:center;min-height:90vh;margin:0 16px;text-align:ce
 function createRedditAuth({ clientId = process.env.ORBITCORD_REDDIT_CLIENT_ID || CLIENT_ID, port = PORT, host = '127.0.0.1',
     userAgent, openExternal, store, fetch: request = fetch, timeout = 5 * 60_000 } = {}) {
     const redirect = `http://${host}:${port}${CALLBACK}`;
-    const basic = `Basic ${Buffer.from(`${clientId}:`).toString('base64')}`;
+    let id = validClientId(clientId) ? clientId : '';
+    const basic = () => `Basic ${Buffer.from(`${id}:`).toString('base64')}`;
     let refreshToken = null, loaded = false, access = null, refreshing = null, pending = null;
 
     async function load() {
@@ -37,7 +40,7 @@ function createRedditAuth({ clientId = process.env.ORBITCORD_REDDIT_CLIENT_ID ||
     }
     async function tokenRequest(form) {
         const response = await request('https://www.reddit.com/api/v1/access_token', { method: 'POST',
-            headers: { authorization: basic, 'content-type': 'application/x-www-form-urlencoded', 'user-agent': userAgent },
+            headers: { authorization: basic(), 'content-type': 'application/x-www-form-urlencoded', 'user-agent': userAgent },
             body: new URLSearchParams(form).toString(), redirect: 'error', signal: AbortSignal.timeout(15_000) });
         const data = await response.json().catch(() => null);
         if (!response.ok || !data || typeof data.access_token !== 'string' || data.error) {
@@ -63,13 +66,13 @@ function createRedditAuth({ clientId = process.env.ORBITCORD_REDDIT_CLIENT_ID ||
     function expire(value) { if (access?.token === value) access = null; }
 
     function authorizeURL(state) {
-        return `https://www.reddit.com/api/v1/authorize?${new URLSearchParams({ client_id: clientId, response_type: 'code', state,
+        return `https://www.reddit.com/api/v1/authorize?${new URLSearchParams({ client_id: id, response_type: 'code', state,
             redirect_uri: redirect, duration: 'permanent', scope: SCOPES.join(' ') })}`;
     }
     // Resolves true when signed in, false when the person declined. Calling it
     // again while waiting opens the same page again instead of a second listener.
     function login() {
-        if (!clientId) return Promise.reject(fail('not-configured'));
+        if (!id) return Promise.reject(fail('not-configured'));
         if (pending) { void openExternal(pending.url); return pending.done; }
         const state = randomBytes(24).toString('base64url');
         const url = authorizeURL(state);
@@ -131,11 +134,20 @@ function createRedditAuth({ clientId = process.env.ORBITCORD_REDDIT_CLIENT_ID ||
         const old = await forget();
         // Revoking is a courtesy to Reddit; signing out never waits on it failing.
         if (old) await request('https://www.reddit.com/api/v1/revoke_token', { method: 'POST',
-            headers: { authorization: basic, 'content-type': 'application/x-www-form-urlencoded', 'user-agent': userAgent },
+            headers: { authorization: basic(), 'content-type': 'application/x-www-form-urlencoded', 'user-agent': userAgent },
             body: new URLSearchParams({ token: old, token_type_hint: 'refresh_token' }).toString(),
             signal: AbortSignal.timeout(5000) }).then(response => response.body?.cancel(), () => {});
     }
+    // A refresh token belongs to the app that issued it, so a new ID signs out.
+    async function setClientId(value) {
+        const next = String(value ?? '').trim();
+        if (!validClientId(next)) throw fail('invalid-client-id');
+        if (next === id) return false;
+        pending?.done.catch(() => {}); pending?.cancel();
+        await forget(); id = next;
+        return true;
+    }
     async function close() { pending?.done.catch(() => {}); pending?.cancel(); }
-    return { token, expire, login, logout, forget, close, get redirect() { return redirect; } };
+    return { token, expire, login, logout, forget, setClientId, close, get redirect() { return redirect; }, get clientId() { return id; } };
 }
-module.exports = { createRedditAuth, PORT, CALLBACK, SCOPES };
+module.exports = { createRedditAuth, validClientId, PORT, CALLBACK, SCOPES };

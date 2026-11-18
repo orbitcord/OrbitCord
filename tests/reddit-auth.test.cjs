@@ -111,8 +111,23 @@ test('sign-in reports a missing client ID, a busy port and a timeout', async t =
     const blocker = createServer().listen(port, '127.0.0.1');
     t.after(() => blocker.close());
     await new Promise(resolve => blocker.once('listening', resolve));
-    const busy = createRedditAuth({ clientId: 'x', port, store: {}, openExternal() {} });
+    const busy = createRedditAuth({ clientId: 'fixture-client', port, store: {}, openExternal() {} });
     await assert.rejects(busy.login(), { code: 'auth-port-busy' });
-    const slow = createRedditAuth({ clientId: 'x', port: await freePort(), timeout: 50, store: {}, openExternal() {} });
+    const slow = createRedditAuth({ clientId: 'fixture-client', port: await freePort(), timeout: 50, store: {}, openExternal() {} });
     await assert.rejects(slow.login(), { code: 'auth-timeout' });
+});
+
+test('a client ID entered in setup enables sign-in and replaces the old sign-in', async t => {
+    const stored = { value: 'refresh-old' };
+    const auth = createRedditAuth({ clientId: '', port: await freePort(), timeout: 50,
+        store: { read: async () => stored.value, write: async value => { stored.value = value; }, clear: async () => { stored.value = null; } },
+        openExternal() {}, fetch: async () => json({ access_token: 'a', expires_in: 3600 }) });
+    t.after(() => auth.close());
+    await assert.rejects(auth.login(), { code: 'not-configured' });
+    await assert.rejects(auth.setClientId('bad id!'), { code: 'invalid-client-id' });
+    assert.equal(await auth.setClientId('  p-jcoLKBynTLew '), true);
+    assert.equal(auth.clientId, 'p-jcoLKBynTLew');
+    assert.equal(stored.value, null);
+    assert.equal(await auth.setClientId('p-jcoLKBynTLew'), false);
+    await assert.rejects(auth.login(), { code: 'auth-timeout' });
 });

@@ -47,7 +47,6 @@
         'forbidden': 'Reddit blocked this request. The community may be private, banned or require you to sign in.',
         'not-found': 'Reddit could not find this community.',
         'signed-out': 'Log in to Reddit to see your saved posts.',
-        'not-configured': 'Reddit sign-in is not set up in this build of OrbitCord.',
         'auth-port-busy': 'Another app is using the port Reddit sign-in needs. Close it and try again.',
         'auth-timeout': 'Reddit sign-in timed out. Try again.',
         'auth-failed': 'Reddit did not finish signing you in. Try again.',
@@ -146,6 +145,7 @@
     async function login(state) {
         status(state, 'Finish logging in to Reddit in your browser.');
         const result = await native('login').catch(() => ({ error: 'failed' }));
+        if (result.error === 'not-configured') { status(state, ''); void openSetup(state); return; }
         if (result.error) { status(state, errorText(result.error)); return; }
         account = result.account;
         if (current !== state) return;
@@ -153,6 +153,28 @@
         // Nothing changed when sign-in was cancelled, so the results stay.
         if (!account) { status(state, 'Reddit sign-in was cancelled.'); return; }
         status(state, ''); void search(state, true);
+    }
+    // Reddit's OAuth needs an app the person registers once; this walks them
+    // through it and keeps the client ID in the main process.
+    async function openSetup(state) {
+        const result = await native('setup').catch(() => null);
+        if (!result || result.error || current !== state) { status(state, 'Could not open Reddit setup. Try again.'); return; }
+        state.options.hidden = true;
+        state.setupRedirect.textContent = result.redirect;
+        state.setupInput.value = result.clientId || '';
+        state.setupError.hidden = true;
+        state.setup.hidden = false; state.setupInput.focus();
+    }
+    async function saveSetup(state) {
+        const result = await native('configure', state.setupInput.value).catch(() => ({ error: 'failed' }));
+        if (current !== state) return;
+        if (result.error) {
+            state.setupError.textContent = result.error === 'invalid-client-id'
+                ? 'That is not a client ID. Copy the code shown under your app\'s name.' : 'Could not save the client ID. Try again.';
+            state.setupError.hidden = false; state.setupInput.focus(); return;
+        }
+        state.setup.hidden = true;
+        void login(state);
     }
     async function logout(state) {
         state.options.hidden = true;
@@ -681,7 +703,29 @@
         spoilers.checked = saved.spoilerNsfw;
         state.accountNote = ui('p', {});
         state.logout = ui('button', { type: 'button', className: 'lowcord-reddit-link', onClick: () => void logout(state) }, 'Log out of Reddit');
+        state.setupRedirect = ui('code', {});
+        state.setupInput = ui('input', { type: 'text', id: 'lowcord-reddit-client-id', autocomplete: 'off', spellcheck: 'false', placeholder: 'e.g. p-jcoLKBynTLew' });
+        state.setupError = ui('p', { className: 'lowcord-reddit-setup-error', role: 'alert', hidden: true });
+        state.setup = ui('form', { className: 'lowcord-reddit-options lowcord-reddit-setup', role: 'group', 'aria-label': 'Connect Reddit', hidden: true,
+            onSubmit: event => { event.preventDefault(); void saveSetup(state); } },
+            ui('h3', {}, 'Connect Reddit'),
+            ui('p', {}, 'Reddit lets apps sign in only with an app you register. It takes a minute and you only do it once.'),
+            ui('ol', {},
+                ui('li', {}, 'Open ', ui('a', { href: 'https://www.reddit.com/prefs/apps', target: '_blank', rel: 'noreferrer' }, 'reddit.com/prefs/apps'),
+                    ' and choose Create another app.'),
+                ui('li', {}, 'Choose installed app, enter any name, and use this redirect URI:',
+                    ui('span', { className: 'lowcord-reddit-setup-uri' }, state.setupRedirect,
+                        ui('button', { type: 'button', className: 'lowcord-reddit-link', onClick: () => {
+                            navigator.clipboard.writeText(state.setupRedirect.textContent)
+                                .then(() => extensions.toast('Copied the redirect URI.'), () => extensions.toast('Could not copy. Select the text instead.', true));
+                        } }, 'Copy'))),
+                ui('li', {}, 'Choose Create app, then copy the ID shown under the app\'s name.')),
+            ui('label', { for: 'lowcord-reddit-client-id' }, 'Client ID'), state.setupInput, state.setupError,
+            ui('div', { className: 'lowcord-reddit-setup-actions' },
+                ui('button', { type: 'button', className: 'lowcord-reddit-link', onClick: () => { state.setup.hidden = true; } }, 'Cancel'),
+                ui('button', { type: 'submit', className: 'lowcord-reddit-more' }, 'Save and log in')));
         state.options = ui('div', { className: 'lowcord-reddit-options', id: 'lowcord-reddit-options', hidden: true }, state.accountNote, state.logout,
+            ui('button', { type: 'button', className: 'lowcord-reddit-link', onClick: () => void openSetup(state) }, 'Reddit app setup'),
             ui('label', { className: 'lowcord-reddit-preference' }, spoilers, 'Send NSFW and spoiler posts as spoilers'),
             ui('p', {}, 'Click a post to send it. For albums, select which photos or videos to send. Videos over the upload limit are compressed below 20 MB.'));
         state.accountButton = ui('button', { type: 'button', className: 'lowcord-reddit-account', 'aria-controls': 'lowcord-reddit-options', onClick: () => {
@@ -703,12 +747,12 @@
             if (!state.options.hidden && !state.options.contains(event.target) && !event.target.closest('[aria-controls="lowcord-reddit-options"]')) state.options.hidden = true;
         } }, header, form, ui('div', { className: 'lowcord-reddit-tabs', role: 'tablist', 'aria-label': 'Reddit feeds' }, ...state.tabs),
             ui('div', { className: 'lowcord-reddit-result-heading' }, state.back, state.heading, state.pin), state.pins,
-            state.results, state.signin, state.queue, state.status, state.options, resize);
+            state.results, state.signin, state.queue, state.status, state.options, state.setup, resize);
         state.key = event => {
             if (event.key !== 'Escape') return;
             event.preventDefault(); event.stopImmediatePropagation();
             if (state.menu) { closeMenu(state); state.gallery?.node.focus({ preventScroll: true }); }
-            else if (!state.options.hidden) state.options.hidden = true; else if (state.gallery) closeGallery(state); else close();
+            else if (!state.options.hidden) state.options.hidden = true; else if (!state.setup.hidden) state.setup.hidden = true; else if (state.gallery) closeGallery(state); else close();
         };
         state.channelChanged = () => { if (selectedChannel() !== channelId) close(); };
         state.channelStore = window.Lowcord.store('SelectedChannelStore');

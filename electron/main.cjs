@@ -806,8 +806,16 @@ function registerIpc() {
     ipcMain.handle('lowcord:redgifs-release', (event, handle) => { assertSender(event); return redgifs().release(event.sender.id, handle); });
     ipcMain.handle('lowcord:reddit', async (event, action, ...args) => {
         const record = assertSender(event);
-        if (!['account', 'login', 'logout', 'search', 'prepare', 'resolve', 'cancel', 'release'].includes(action)) return { error: 'invalid-action' };
+        if (!['account', 'login', 'logout', 'setup', 'configure', 'search', 'prepare', 'resolve', 'cancel', 'release'].includes(action)) return { error: 'invalid-action' };
         try {
+            if (action === 'setup') return { clientId: redditAuth().clientId, redirect: redditAuth().redirect };
+            if (action === 'configure') {
+                if (await redditAuth().setClientId(args[0])) {
+                    await writeFile(redditClientFile, JSON.stringify({ clientId: redditAuth().clientId }));
+                    features.reddit?.signedOut();
+                }
+                return { clientId: redditAuth().clientId };
+            }
             if (action === 'login') {
                 await redditAuth().login();
                 const account = await reddit().account(true);
@@ -940,8 +948,13 @@ const redditTokenStore = (() => {
 const redditAuth = feature('redditAuth', () => {
     // Earlier versions signed in inside an app window with its own cookies.
     void require('node:fs/promises').rm(join(app.getPath('sessionData'), 'Partitions', 'orbitcord-reddit'), { recursive: true, force: true }).catch(() => {});
-    return require('./reddit-auth.cjs').createRedditAuth({ userAgent: redditAgent(), store: redditTokenStore, openExternal });
+    let clientId;
+    try { clientId = JSON.parse(readFileSync(redditClientFile, 'utf8')).clientId; } catch {}
+    return require('./reddit-auth.cjs').createRedditAuth({ userAgent: redditAgent(), store: redditTokenStore, openExternal,
+        ...(clientId ? { clientId } : {}) });
 });
+// The client ID of the Reddit app the person registered; not a secret.
+const redditClientFile = join(userData, 'reddit-client.json');
 
 async function start() {
     if (!testing) await migrateProfile(app.getPath('sessionData'));

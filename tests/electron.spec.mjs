@@ -1483,8 +1483,12 @@ test('Reddit sign-in goes through the browser, with no Reddit window or partitio
     try {
         const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
         expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('account'))).toEqual({ account: null });
-        // This build has no client ID, so nothing opens; signing out still works.
+        // This build has no client ID, so nothing opens until setup saves one.
         expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('login'))).toEqual({ error: 'not-configured' });
+        expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('setup'))).toEqual({ clientId: '', redirect: 'http://127.0.0.1:65010/reddit_callback' });
+        expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('configure', 'bad id!'))).toEqual({ error: 'invalid-client-id' });
+        expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('configure', 'p-jcoLKBynTLew'))).toEqual({ clientId: 'p-jcoLKBynTLew' });
+        expect(JSON.parse(await readFile(join(dir, 'reddit-client.json'), 'utf8'))).toEqual({ clientId: 'p-jcoLKBynTLew' });
         expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('logout'))).toEqual({ account: null });
         expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
     } finally {

@@ -66,23 +66,36 @@ test("the GIF picker's source menu switches between Klipy and Tenor and refetche
         webpackChunkdiscord_app[0][2]({ c: { gifPicker: { exports: { view, ...actions } } } });
         const panel = document.createElement("div");
         panel.id = "gif-picker-tab-panel";
-        panel.innerHTML = '<div class="header_1"><div class="searchBar_1"><input type="text" placeholder="Search KLIPY"></div></div>';
+        panel.innerHTML = '<div class="searchBar_1" style="display:flex;align-items:center;gap:8px;height:40px;width:400px;padding:0 8px;border:1px solid #444"><svg width="16" height="16"></svg><input type="text" placeholder="Search KLIPY" style="height:24px;border:0"></div>';
         document.body.append(panel);
     });
     await page.addStyleTag({ url: "/injection/ui-extras.css" });
-    const menu = page.getByRole("combobox", { name: "GIF source" });
-    await expect(menu).toHaveValue("tenor");
+    const tenor = page.getByRole("radio", { name: "Tenor" }), klipy = page.getByRole("radio", { name: "Klipy" });
+    await expect(page.getByRole("radiogroup", { name: "GIF source" })).toBeVisible();
+    await expect(tenor).toHaveAttribute("aria-checked", "true");
     await expect(page.locator("#gif-picker-tab-panel input")).toHaveAttribute("placeholder", "Search Tenor");
-    const row = await page.locator("[data-lowcord-gif-source-row]").evaluate(node => getComputedStyle(node).display);
-    expect(row).toBe("flex");
+    // Inside the search bar, on the input's line.
+    const [box, field] = await Promise.all([page.locator(".lowcord-gif-source").boundingBox(), page.locator("#gif-picker-tab-panel input").boundingBox()]);
+    expect(box.x).toBeGreaterThan(field.x + field.width - 1);
+    expect(Math.abs((box.y + box.height / 2) - (field.y + field.height / 2))).toBeLessThan(2);
 
-    await menu.selectOption("klipy");
+    await klipy.click();
     await expect.poll(() => page.evaluate(() => Lowcord.extensions.enabled("bringBackTenor"))).toBe(false);
+    await expect(klipy).toHaveAttribute("aria-checked", "true");
     await expect(page.locator("#gif-picker-tab-panel input")).toHaveAttribute("placeholder", "Search KLIPY");
     expect(await page.evaluate(() => window.pickerCalls)).toEqual(["trending", "search::false", "search:dog:true"]);
+    // Picking the current source again does nothing.
+    await klipy.click();
+    expect(await page.evaluate(() => window.pickerCalls.length)).toBe(3);
+    // Arrow keys switch, like a radio group.
+    await klipy.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(tenor).toHaveAttribute("aria-checked", "true");
+    await expect(tenor).toBeFocused();
+    await page.evaluate(() => Lowcord.extensions.set("bringBackTenor", false));
 
     // The settings switch moves the menu too.
     await page.evaluate(() => Lowcord.extensions.set("bringBackTenor", true));
-    await expect(menu).toHaveValue("tenor");
-    await expect.poll(() => page.evaluate(() => window.pickerCalls.length)).toBe(6);
+    await expect(tenor).toHaveAttribute("aria-checked", "true");
+    await expect.poll(() => page.evaluate(() => window.pickerCalls.length)).toBe(12);
 });

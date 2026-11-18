@@ -299,7 +299,37 @@ test("more quick reactions fills Discord's menu row to eight frequent reactions 
         { channelId: "700", messageId: "55", emoji: { id: "901", name: "party", animated: true }, location: "Message Context Menu" },
         { channelId: "700", messageId: "55", emoji: { id: null, name: "🔥", animated: false }, location: "Message Context Menu" },
     ]);
+    // The hover toolbar, as Discord renders it: each button in its own span
+    // followed by a hidden tooltip span; emojis are background-image divs.
+    await page.evaluate(() => {
+        let tip = 0;
+        const button = (inner, label) => `<span><div class="hoverBarButton_test button_test" aria-label="${label}" role="button" tabindex="0">${inner}</div></span><span id="_r_${tip++}_" class="hiddenVisually_test">${label}</span>`;
+        const reactions = ["😀", "👍", "❤️"].map((name, index) => button(`<div class="icon_test"><div class="emoji emoji_test" data-type="emoji" data-name="${name}" role="img" aria-label="" style="width:20px;height:20px;background-image:url(&quot;https://discord.test/hover-${index}.svg&quot;)"></div></div>`, `Click to react with ${name}`)).join("");
+        document.querySelector("#chat-messages-700-55").insertAdjacentHTML("beforeend",
+            `<div class="buttonContainer_test"><div class="buttons_test" role="group" aria-label="Message Actions"><div class="buttonsInner_test" style="display:flex">${reactions}<div class="separator_test"></div>${button("<svg></svg>", "Add Reaction")}${button("<svg></svg>", "Reply")}</div></div></div>`);
+    });
+    await page.mouse.move(0, 0);
+    await page.locator("#message-content-55").hover();
+    const toolbar = page.locator('#chat-messages-700-55 [class*="buttonContainer_"]');
+    await expect(toolbar.locator(".lowcord-quick-reaction")).toHaveCount(2);
+    // Discord's three, then the next two usable emojis, ahead of the separator and icon buttons.
+    expect(await toolbar.locator('[role="button"]').evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-label"))))
+        .toEqual(["Click to react with 😀", "Click to react with 👍", "Click to react with ❤️", "Click to react with 😂", "Click to react with 🔥", "Add Reaction", "Reply"]);
+    expect(await toolbar.locator(".buttonsInner_test > *").evaluateAll(nodes => nodes.map(node => node.className || node.tagName)))
+        .toEqual(["SPAN", "hiddenVisually_test", "SPAN", "hiddenVisually_test", "SPAN", "hiddenVisually_test",
+            "lowcord-quick-reaction", "lowcord-quick-reaction", "separator_test", "SPAN", "hiddenVisually_test", "SPAN", "hiddenVisually_test"]);
+    await expect(toolbar.locator('.lowcord-quick-reaction [data-type="emoji"]').last()).toHaveCSS("background-image", `url("https://discord.test/${encodeURIComponent("🔥")}.svg")`);
+    await expect(toolbar.locator(".lowcord-quick-reaction [id]")).toHaveCount(0);
+    await toolbar.locator(".lowcord-quick-reaction [role=\"button\"]").nth(1).click();
+    expect((await page.evaluate(() => window.reactions)).at(-1)).toEqual(
+        { channelId: "700", messageId: "55", emoji: { id: null, name: "🔥", animated: false }, location: "Message Hover Bar" });
+    // Hovering again does not add a second set.
+    await page.mouse.move(0, 0);
+    await page.locator("#message-content-55").hover();
+    await expect(toolbar.locator(".lowcord-quick-reaction")).toHaveCount(2);
+
     await setExtension(page, "moreQuickReactions", false);
+    await expect(toolbar.locator(".lowcord-quick-reaction")).toHaveCount(0);
     await page.locator("#message-content-55").click({ button: "right" });
     await expect(menu.locator('[id^="message-quickreact-"]')).toHaveCount(4);
 });
