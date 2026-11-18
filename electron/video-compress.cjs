@@ -1,5 +1,5 @@
 const { spawn } = require('node:child_process');
-const { stat, open } = require('node:fs/promises');
+const { stat, open, rename, rm } = require('node:fs/promises');
 const { join } = require('node:path');
 
 const failure = code => Object.assign(new Error(code), { code });
@@ -80,21 +80,39 @@ async function compressVideo(input, directory, limit, signal, { general = false,
                 }
             }
         }
-        // Budget includes audio and MP4 overhead. Validate actual bytes after
-        // encoding; an underestimated bitrate retries once at half the rate.
-        let bitrate = Math.floor(limit * 0.90 * 8 / seconds - 64_000);
-        for (let attempt = 0; attempt < 2; attempt++, bitrate = Math.floor(bitrate / 2)) {
+        // Aim for about 91% of the limit (18.2 MB of 20 MB) with average
+        // bitrate encoding, which lands close to its target. A maxrate equal
+        // to the bitrate, and halving it after an overshoot, used to leave
+        // files far under the limit. Check real bytes after each pass:
+        // a file over the limit is retried at a proportionally lower rate,
+        // and one well under it (below 85%, 17 MB) gets up to two passes at a
+        // higher rate, keeping the largest file that fits.
+        const budget = limit * 0.91;
+        let bitrate = Math.floor(budget * 8 / seconds - 64_000), best = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
             if (bitrate < 32_000) break;
+            const pass = join(directory, `pass-${attempt}.mp4`);
             const result = await run(command, ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
                 '-protocol_whitelist', 'file', '-threads', '2', ...inputs, ...maps,
                 '-vf', "scale=w='min(720,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,fps=30,setsar=1",
                 '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-threads', '2', '-filter_threads', '1',
-                '-b:v', String(bitrate), '-maxrate', String(bitrate), '-bufsize', String(bitrate * 2),
-                '-c:a', 'aac', '-b:a', '64000', '-movflags', '+faststart', output], signal, general ? 900_000 : 180_000);
-            if (result.code !== 0) throw failure('encode-failed');
-            const { size } = await stat(output);
-            if (size > 0 && size < limit) return output;
+                '-b:v', String(bitrate), '-maxrate', String(Math.floor(bitrate * 1.5)), '-bufsize', String(bitrate * 3),
+                '-c:a', 'aac', '-b:a', '64000', '-movflags', '+faststart', pass], signal, general ? 900_000 : 180_000);
+            if (result.code !== 0) { if (best) break; throw failure('encode-failed'); }
+            const { size } = await stat(pass);
+            if (size > 0 && size < limit) {
+                if (best && best.size >= size) { await rm(pass, { force: true }); break; }
+                if (best) await rm(best.path, { force: true });
+                best = { path: pass, size };
+                if (size >= limit * 0.85) break;
+                bitrate = Math.floor(bitrate * Math.min(2, budget / size));
+                continue;
+            }
+            await rm(pass, { force: true });
+            if (best) break;
+            bitrate = Math.floor(bitrate * Math.min(0.9, (budget / Math.max(size, 1)) * 0.97));
         }
+        if (best) { await rename(best.path, output); return output; }
         throw failure('too-large');
     } finally { if (waiting.length) waiting.shift().resolve(); else encoding = false; }
 }

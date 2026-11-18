@@ -13,7 +13,7 @@ const removeSignIn = `(() => {
 const cached = { storages: ['cachestorage', 'shadercache'] };
 const signedIn = { storages: ['cookies', 'indexdb', 'serviceworkers', 'filesystem', 'websql'] };
 
-function createTraces({ file, sessions, windows, limit = 8000 }) {
+function createTraces({ file, sessions, windows, signOut = async () => {}, limit = 8000 }) {
     let settings = { clearOnQuit: false, signOut: false };
     try {
         const saved = JSON.parse(readFileSync(file, 'utf8'));
@@ -31,6 +31,7 @@ function createTraces({ file, sessions, windows, limit = 8000 }) {
         }));
         await everySession(ses => kept.has(ses) ? ses.clearStorageData(signedIn) : ses.clearStorageData());
         await everySession(ses => ses.flushStorageData());
+        await signOut();
         // Unload handlers could write the sign-in back, so these windows skip them.
         for (const { window } of open) if (!window.isDestroyed()) window.destroy();
     }

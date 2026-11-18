@@ -26,5 +26,4 @@ test("music theme derives a readable dark palette from art", async ({ page }) =>
     const gradient = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--custom-theme-background").trim());
     expect(gradient).toContain("linear-gradient(135deg");
     expect(gradient).toContain("#5c1a26");
-    expect(await page.evaluate(() => document.documentElement.hasAttribute("data-lowcord-animations"))).toBe(true);
 });

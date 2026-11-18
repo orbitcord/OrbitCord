@@ -68,7 +68,7 @@ test('XHR, fetch Request, edits and multipart use checked fallback; disabling ke
         Lowcord.extensions.set('socialEmbeds', false);
         await fetch('/api/v9/channels/987654/messages', { method: 'POST', body: JSON.stringify({ content }) });
     });
-    expect(JSON.parse(requests[0])).toEqual({ content: 'https://vxtwitter.com/u/status/123', nonce: '1' });
+    expect(JSON.parse(requests[0])).toEqual({ content: 'https://vxtwitter.com/u/status/123', nonce: '1', enforce_nonce: true });
     expect(JSON.parse(requests[1]).content).toBe('https://vxtwitter.com/u/status/123');
     expect(requests[2]).toContain('https://vxtwitter.com/u/status/123');
     expect(JSON.parse(requests[3]).content).toBe('https://x.com/u/status/123');

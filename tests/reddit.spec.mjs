@@ -22,7 +22,8 @@ test.beforeEach(async ({ page }) => {
             items: [{ index: 0, type: 'image', animated: false, src: '/media/sample.png', thumb: '/media/sample.png' },
                 { index: 1, type: 'video', animated: true, src: '/media/sample.mp4', thumb: null }] };
         window.__LOWCORD_NATIVE__ = { reddit: async (action, ...args) => {
-            if (action === 'search') return { items: [image, gallery], after: null, account: null };
+            if (action === 'search') return { items: [image, gallery], after: null, account: fixture.account ?? null };
+            if (action === 'login') return new Promise(resolve => { fixture.finishLogin = resolve; });
             if (action === 'prepare') {
                 const [key, limit, selection] = args;
                 fixture.prepares.push({ key, limit, selection });
@@ -108,4 +109,22 @@ test('right-clicking a gallery item sends just that item and keeps the gallery o
     await expect(page.getByRole('menuitem', { name: 'Send all 2' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('menu')).toBeHidden();
+});
+
+test('logging in waits for the browser and then shows the Reddit account', async ({ page }) => {
+    await page.getByRole('button', { name: 'Log in to Reddit' }).click();
+    await expect(page.getByText('Finish logging in to Reddit in your browser.')).toBeVisible();
+    await page.evaluate(() => {
+        redditFixture.account = { name: 'fixture_user', nsfw: false };
+        redditFixture.finishLogin({ account: redditFixture.account });
+    });
+    await expect(page.getByRole('button', { name: 'Signed in as u/fixture_user. Account options' })).toBeVisible();
+    await expect(page.getByText('Finish logging in to Reddit in your browser.')).toBeHidden();
+});
+
+test('a cancelled browser sign-in leaves the picker signed out', async ({ page }) => {
+    await page.getByRole('button', { name: 'Log in to Reddit' }).click();
+    await page.evaluate(() => redditFixture.finishLogin({ account: null }));
+    await expect(page.getByText('Reddit sign-in was cancelled.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Log in to Reddit' })).toBeVisible();
 });

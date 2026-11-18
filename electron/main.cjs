@@ -97,8 +97,9 @@ const socialPosts = feature('socialPosts', () => {
     return createSocialPosts();
 });
 const redgifs = feature('redgifs', () => require('./redgifs.cjs').createRedgifs());
+const redditAgent = () => `${process.platform}:orbitcord:${app.getVersion()} (desktop app)`;
 const reddit = feature('reddit', () => require('./reddit.cjs').createReddit({
-    fetchAccount: (url, init) => redditSession().fetch(url, { ...init, credentials: 'include' }) }));
+    auth: redditAuth(), userAgent: redditAgent() }));
 const videoAttachments = feature('videoAttachments', () => require('./video-attachments.cjs').createVideoAttachments());
 const mediaSources = feature('mediaSources', () => {
     const { createMediaSources, SOURCES } = require('./media-sources.cjs');
@@ -115,9 +116,11 @@ const mediaSources = feature('mediaSources', () => {
     });
 });
 const traces = feature('traces', () => createTraces({ file: join(userData, 'leave-no-trace.json'),
-    sessions: () => [session.defaultSession, ...accounts.filter(account => account.id !== 'main').map(account => session.fromPartition(`persist:${account.id}`)), redditSession(),
+    sessions: () => [session.defaultSession, ...accounts.filter(account => account.id !== 'main').map(account => session.fromPartition(`persist:${account.id}`)),
         ...accounts.flatMap(account => require('./media-sources.cjs').SOURCES.map(source => session.fromPartition(`persist:orbitcord-source-${account.id}-${source.id}`)))],
-    windows: () => [...discordWindows.values()].map(({ window }) => ({ window, session: window.webContents.session })) }));
+    windows: () => [...discordWindows.values()].map(({ window }) => ({ window, session: window.webContents.session })),
+    // Reddit's sign-in is a token file, not a session.
+    signOut: () => features.redditAuth ? features.redditAuth.forget() : redditTokenStore.clear() }));
 // Work a window started ends with it. Unloaded backends have none.
 const cancelFeatures = id => {
     features.redgifs?.cancel(id); features.reddit?.cancel(id);
@@ -805,8 +808,13 @@ function registerIpc() {
         const record = assertSender(event);
         if (!['account', 'login', 'logout', 'search', 'prepare', 'resolve', 'cancel', 'release'].includes(action)) return { error: 'invalid-action' };
         try {
-            if (action === 'login') return { account: await redditLogin(record.window) };
-            if (action === 'logout') { await redditSession().clearStorageData(); features.reddit?.signedOut(); return { account: null }; }
+            if (action === 'login') {
+                await redditAuth().login();
+                const account = await reddit().account(true);
+                if (account) showWindow(record.window);
+                return { account };
+            }
+            if (action === 'logout') { await redditAuth().logout(); features.reddit?.signedOut(); return { account: null }; }
             if (action === 'account') return { account: await reddit().account() };
             return await reddit()[action](event.sender.id, ...args) ?? null;
         } catch (error) { return { error: error.code ?? 'failed' }; }
@@ -909,43 +917,31 @@ function registerIpc() {
     });
 }
 
-// Reddit has a session of its own: its cookies never mix with Discord's, and
-// signing out clears only this partition. Nothing here loads at startup.
-let redditSessionValue, redditLoginWindow, redditLoginWork;
-function redditSession() {
-    if (redditSessionValue) return redditSessionValue;
-    const ses = redditSessionValue = session.fromPartition('persist:orbitcord-reddit');
-    ses.setUserAgent(ses.getUserAgent().replace(/\s(?:Electron|Lowcord|Datcord|OrbitCord)\/[\w.-]+/gi, ''));
-    ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-    ses.setPermissionCheckHandler(() => false);
-    return ses;
-}
-function redditLogin(parent) {
-    if (redditLoginWindow && !redditLoginWindow.isDestroyed()) { redditLoginWindow.focus(); return redditLoginWork; }
-    const ses = redditSession();
-    const window = redditLoginWindow = new BrowserWindow({ parent, width: 460, height: 720, minWidth: 360, minHeight: 480,
-        title: 'Log in to Reddit', autoHideMenuBar: true, backgroundColor: '#0e1113',
-        webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true } });
-    const https = url => { try { return new URL(url).protocol === 'https:'; } catch { return false; } };
-    // Sign in with Google or Apple opens a popup in this same session.
-    window.webContents.setWindowOpenHandler(({ url }) => https(url)
-        ? { action: 'allow', overrideBrowserWindowOptions: { parent: window, autoHideMenuBar: true } } : { action: 'deny' });
-    window.webContents.on('will-navigate', event => { if (!https(event.url)) event.preventDefault(); });
-    const signedIn = async () => (await ses.cookies.get({ name: 'reddit_session' }).catch(() => []))
-        .some(cookie => /(?:^|\.)reddit\.com$/.test(cookie.domain.replace(/^\./, '')));
-    const changed = (_event, cookie, _cause, removed) => {
-        if (!removed && cookie.name === 'reddit_session' && !window.isDestroyed()) window.close();
+// Reddit sign-in happens in the default browser (see reddit-auth.cjs). The
+// refresh token is the only thing kept, encrypted with the OS keychain; where
+// that is unavailable it lives in memory and sign-in lasts until quit.
+const redditTokenStore = (() => {
+    const file = join(userData, 'reddit-auth.bin');
+    let memory = null;
+    const { readFile, rm } = require('node:fs/promises');
+    const { safeStorage } = require('electron');
+    return {
+        async read() {
+            if (!safeStorage.isEncryptionAvailable()) return memory;
+            return safeStorage.decryptString(await readFile(file));
+        },
+        async write(value) {
+            if (!safeStorage.isEncryptionAvailable()) { memory = value; return; }
+            await writeFile(file, safeStorage.encryptString(value), { mode: 0o600 });
+        },
+        async clear() { memory = null; await rm(file, { force: true }); },
     };
-    ses.cookies.on('changed', changed);
-    window.webContents.on('did-navigate', async () => { if (await signedIn() && !window.isDestroyed()) window.close(); });
-    redditLoginWork = new Promise(resolve => window.once('closed', () => {
-        ses.cookies.removeListener('changed', changed);
-        redditLoginWindow = undefined;
-        resolve(reddit().account(true).catch(() => null));
-    }));
-    void window.loadURL('https://www.reddit.com/login/');
-    return redditLoginWork;
-}
+})();
+const redditAuth = feature('redditAuth', () => {
+    // Earlier versions signed in inside an app window with its own cookies.
+    void require('node:fs/promises').rm(join(app.getPath('sessionData'), 'Partitions', 'orbitcord-reddit'), { recursive: true, force: true }).catch(() => {});
+    return require('./reddit-auth.cjs').createRedditAuth({ userAgent: redditAgent(), store: redditTokenStore, openExternal });
+});
 
 async function start() {
     if (!testing) await migrateProfile(app.getPath('sessionData'));

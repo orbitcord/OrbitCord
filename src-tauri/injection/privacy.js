@@ -358,8 +358,11 @@
         preparing = true;
         const channel = channelId();
         void (async () => {
-            const output = [], off = ' To attach it unchanged, turn off Remove media metadata in Privacy & Security.';
+            // A file metadata removal can't handle still uploads, unchanged;
+            // the toast names it so nobody assumes it was cleaned.
+            const output = [], unchanged = [];
             let images = 0, videos = 0;
+            const keep = file => { output.push(file); unchanged.push(file.name); };
             try {
                 for (let file of files) {
                     if (prepared.has(file)) { output.push(file); continue; }
@@ -372,26 +375,34 @@
                         // Never imply other formats (WebM, documents) were cleaned.
                         let clean;
                         try { clean = await cleanBoxMedia(file); }
-                        catch { throw new Error(`Could not safely remove metadata from ${file.name}. No files were attached.${off}`); }
+                        catch { keep(file); continue; }
                         if (!clean) { output.push(file); continue; }
                         prepared.add(clean); output.push(clean);
                         if (boxImage(file)) images++; else videos++;
                         continue;
                     }
-                    if (file.size > 64 * 1024 * 1024) throw new Error(`${file.name} is larger than 64 MiB, the limit for metadata removal. No files were attached.${off}`);
-                    const result = await window.__LOWCORD_NATIVE__.sanitizeImage(new Uint8Array(await file.arrayBuffer()));
-                    if (result?.status !== 'processed' || !(result.bytes instanceof Uint8Array)) throw new Error(`${file.name}: ${result?.reason || 'Could not remove image metadata.'} No files were attached.${off}`);
+                    if (file.size > 64 * 1024 * 1024) { keep(file); continue; }
+                    let result;
+                    try { result = await window.__LOWCORD_NATIVE__.sanitizeImage(new Uint8Array(await file.arrayBuffer())); }
+                    catch { result = null; }
+                    if (result?.status !== 'processed' || !(result.bytes instanceof Uint8Array)) { keep(file); continue; }
                     const clean = new File([result.bytes], file.name, { type: result.type, lastModified: 0 });
                     prepared.add(clean); output.push(clean); images++;
                 }
                 if (!output.length) return;
                 if (channelId() !== channel) throw new Error('Chat changed. Attach the images again in the intended chat.');
+                // Kept files are passed on as they are, so this hook lets them through.
+                for (const file of output) prepared.add(file);
                 delivering = true;
                 try { if (replay(output) === false) throw new Error('The message box closed. Attach the images again.'); }
                 finally { delivering = false; }
                 if (images) report.add('images', images);
                 if (videos) report.add('videos', videos);
-                if (images || videos) toast(`Metadata removed from ${[images && counted(images, 'image'), videos && counted(videos, 'video')].filter(Boolean).join(' and ')}.`, false, 1800);
+                if (unchanged.length) {
+                    const names = unchanged.length === 1 ? unchanged[0] : counted(unchanged.length, 'file');
+                    const cleaned = images || videos ? ` Removed it from ${[images && counted(images, 'image'), videos && counted(videos, 'video')].filter(Boolean).join(' and ')}.` : '';
+                    toast(`Metadata not removed from ${names}. Attached as is.${cleaned}`, true);
+                } else if (images || videos) toast(`Metadata removed from ${[images && counted(images, 'image'), videos && counted(videos, 'video')].filter(Boolean).join(' and ')}.`, false, 1800);
             } catch (error) { toast(error.message, true); }
             finally { preparing = false; }
         })(); return true;
@@ -703,7 +714,7 @@
                     h('div', null, h('h4', null, 'Removed'), list('removed', ['Location', 'Camera and lens', 'Date taken', 'Author and comments', 'Editing history', 'GPS and sensor tracks in videos'])),
                     h('div', null, h('h4', null, 'Kept'), list('kept', ['Orientation', 'Animation', 'Color profile'])))),
                 section('Supported files', facts([['Images', 'JPEG, PNG, APNG, WebP, GIF, HEIC, HEIF, AVIF'], ['Videos', 'MP4, MOV, 3GP'], ['Size limit', '64 MiB for JPEG, PNG, WebP and GIF'],
-                    ['Other files', 'WebM, MKV and documents upload unchanged.']])),
+                    ['Other files', 'WebM, MKV and documents upload unchanged.'], ['If removal fails', 'The file uploads unchanged and a notice says so.']])),
                 note('Only file metadata is removed. Anything visible in the image itself stays as it is.')],
             appLock: () => {
                 const enabled = state.appLock, mode = enabled ? lockMode : lockMode ?? 'setup';

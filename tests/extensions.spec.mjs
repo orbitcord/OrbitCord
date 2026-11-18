@@ -210,6 +210,100 @@ test("no tracking blocks analytics, metrics, crash reports and the desktop RPC p
     expect(await xhr(page, "POST", `/api/v9/science?c=${channel}`, "{}")).toBe(200);
 });
 
+test("message sends carry enforce_nonce so a retried POST can't post twice", async ({ page }) => {
+    await setExtension(page, "socialEmbeds", false);
+    await xhr(page, "POST", `/api/v9/channels/${channel}/messages`, JSON.stringify({ content: "hi", nonce: "11" }));
+    await page.evaluate(path => fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: "yo", nonce: "12" }) }), `/api/v9/channels/${channel}/messages`);
+    await page.evaluate(path => fetch(new Request(path, { method: "POST", body: JSON.stringify({ content: "req", nonce: "13" }) })), `/api/v9/channels/${channel}/messages`);
+    // Multipart sends keep their files; the flag goes in payload_json.
+    await page.evaluate(path => new Promise(resolve => {
+        const form = new FormData();
+        form.append("payload_json", JSON.stringify({ content: "form", nonce: "14" }));
+        form.append("files[0]", new File(["x"], "a.txt"));
+        const request = new XMLHttpRequest(); request.open("POST", path); request.onloadend = resolve; request.send(form);
+    }), `/api/v9/channels/${channel}/messages`);
+    // No nonce, an explicit choice, edits and other routes are left alone.
+    await xhr(page, "POST", `/api/v9/channels/${channel}/messages`, JSON.stringify({ content: "bare" }));
+    await xhr(page, "POST", `/api/v9/channels/${channel}/messages`, JSON.stringify({ content: "own", nonce: "15", enforce_nonce: false }));
+    await xhr(page, "PATCH", `/api/v9/channels/${channel}/messages/5`, JSON.stringify({ content: "edit", nonce: "16" }));
+    await xhr(page, "POST", `/api/v9/channels/${channel}/messages/5/ack`, JSON.stringify({ nonce: "17" }));
+    const bodies = (await received(page)).map(entry => entry.body);
+    const json = bodies.filter(body => body.startsWith("{")).map(body => JSON.parse(body));
+    expect(json).toEqual([
+        { content: "hi", nonce: "11", enforce_nonce: true },
+        { content: "yo", nonce: "12", enforce_nonce: true },
+        { content: "req", nonce: "13", enforce_nonce: true },
+        { content: "bare" },
+        { content: "own", nonce: "15", enforce_nonce: false },
+        { content: "edit", nonce: "16" },
+        { nonce: "17" },
+    ]);
+    const form = bodies.find(body => body.includes("payload_json"));
+    expect(form).toContain('{"content":"form","nonce":"14","enforce_nonce":true}');
+    expect(form).toMatch(/name="files\[0\]"; filename="[a-z]{7}\.txt"/);
+});
+
+test("more quick reactions fills Discord's menu row to eight frequent reactions and reacts through Discord", async ({ page }) => {
+    await page.addScriptTag({ url: "/injection/quick-reactions.js" });
+    await page.addStyleTag({ url: "/injection/ui-extras.css" });
+    await page.addStyleTag({ content: ".row_test { display: flex; }" });
+    await page.evaluate(() => {
+        const emoji = (name, extra = {}) => ({ name, optionallyDiverseSequence: extra.id ? undefined : name, ...extra });
+        const frequent = [emoji("😀"), emoji("👍"), emoji("❤️"), emoji("😂"), emoji("🔥"), emoji("locked", { id: "900", guildId: "elsewhere" }),
+            emoji("party", { id: "901", guildId: "g1", animated: true }), emoji("🎉"), emoji("😮"), emoji("😢"), emoji("🙏")];
+        class EmojiStore { static displayName = "EmojiStore"; }
+        const emojis = new EmojiStore();
+        emojis.getDisambiguatedEmojiContext = () => ({ getFrequentlyUsedReactionEmojisWithoutFetchingLatest: () => frequent });
+        class ChannelStore { static displayName = "ChannelStore"; }
+        const channels = new ChannelStore();
+        channels.getChannel = id => ({ id, guild_id: "g1" });
+        const helpers = { getEmojiUnavailableReason() {}, getURL: sequence => `https://discord.test/${encodeURIComponent(sequence)}.svg`,
+            isEmojiPremiumLocked: ({ emoji, intention }) => intention === 7 && emoji.id != null && emoji.guildId !== "g1" };
+        const intentions = { isExternalEmojiAllowedForIntention() {}, EmojiIntention: { REACTION: 7, CHAT: 3 } };
+        window.reactions = [];
+        const addReaction = function (channelId, messageId, emoji, location) {
+            // Stands in for Discord's action: userHasReactedWithEmoji, then MESSAGE_REACTION_ADD.
+            window.reactions.push({ channelId, messageId, emoji, location });
+        };
+        webpackChunkdiscord_app[0][2]({ c: { emojis: { exports: emojis }, channels: { exports: channels }, emojiHelpers: { exports: helpers },
+            intentions: { exports: intentions }, react: { exports: { add: addReaction } } } });
+        document.body.insertAdjacentHTML("beforeend", `<ol style="position:fixed;top:0;left:300px;z-index:50;margin:0;list-style:none">
+            <li id="chat-messages-700-55"><div id="message-content-55">hello</div></li></ol>`);
+        window.addEventListener("contextmenu", event => {
+            event.preventDefault();
+            requestAnimationFrame(() => {
+                document.querySelector("#message")?.remove();
+                const quick = frequent.slice(0, 4).map((item, index) => `<div class="item_test focused_test" role="menuitem" id="message-quickreact-${item.id ?? index}" tabindex="-1"><img src="https://discord.test/${index}.svg" alt=":${item.name}:" width="24" height="24"></div>`).join("");
+                document.body.insertAdjacentHTML("beforeend", `<div id="message" role="menu" style="position:fixed;top:200px;left:300px;z-index:60;width:220px;background:#111">
+                    <div role="group" class="row_test">${quick}</div>
+                    <div role="group"><div class="item_test" role="menuitem" id="message-copy-text">Copy Text</div></div></div>`);
+            });
+        });
+        document.addEventListener("keydown", event => { if (event.key === "Escape") document.querySelector("#message")?.remove(); });
+    });
+    const menu = page.locator("#message");
+    const extra = menu.locator(".lowcord-quick-reaction");
+    await page.locator("#message-content-55").click({ button: "right" });
+    await expect(menu.locator('[id^="message-quickreact-"]')).toHaveCount(8);
+    // The locked emoji is skipped; the rest follow Discord's four in order.
+    expect(await extra.locator("img").evaluateAll(images => images.map(image => image.alt))).toEqual([":🔥:", ":party:", ":🎉:", ":😮:"]);
+    await expect(extra.nth(1).locator("img")).toHaveAttribute("src", "https://cdn.discordapp.com/emojis/901.gif?size=48&quality=lossless");
+    await expect(extra.first().locator("img")).toHaveAttribute("src", `https://discord.test/${encodeURIComponent("🔥")}.svg`);
+    await expect(extra.first()).not.toHaveClass(/focused_test/);
+    await expect(menu.locator("[data-lowcord-quick-reactions]")).toHaveCSS("display", "grid");
+    await extra.nth(1).click({ modifiers: ["Shift"] });
+    await expect(menu).toHaveCount(1);
+    await extra.first().click();
+    await expect(menu).toHaveCount(0);
+    expect(await page.evaluate(() => window.reactions)).toEqual([
+        { channelId: "700", messageId: "55", emoji: { id: "901", name: "party", animated: true }, location: "Message Context Menu" },
+        { channelId: "700", messageId: "55", emoji: { id: null, name: "🔥", animated: false }, location: "Message Context Menu" },
+    ]);
+    await setExtension(page, "moreQuickReactions", false);
+    await page.locator("#message-content-55").click({ button: "right" });
+    await expect(menu.locator('[id^="message-quickreact-"]')).toHaveCount(4);
+});
+
 test("clean links strips tracking from sent and edited messages, keeping real parameters", async ({ page }) => {
     await setExtension(page, "socialEmbeds", false);
     const content = "look https://www.youtube.com/watch?v=abc123&si=TRACK&t=42 and (https://shop.example/item?id=7&utm_source=x&fbclid=y). "
@@ -217,7 +311,7 @@ test("clean links strips tracking from sent and edited messages, keeping real pa
     await xhr(page, "POST", `/api/v9/channels/${channel}/messages`, JSON.stringify({ content, nonce: "1" }));
     await xhr(page, "PATCH", `/api/v9/channels/${channel}/messages/5`, JSON.stringify({ content: "https://open.spotify.com/track/1?si=abc" }));
     const [sent, edited] = (await received(page)).map(entry => JSON.parse(entry.body));
-    expect(sent).toEqual({ nonce: "1", content: "look https://www.youtube.com/watch?v=abc123&t=42 and (https://shop.example/item?id=7). "
+    expect(sent).toEqual({ nonce: "1", enforce_nonce: true, content: "look https://www.youtube.com/watch?v=abc123&t=42 and (https://shop.example/item?id=7). "
         + "https://x.com/user/status/1 <https://example.com/> https://example.com/plain?q=1" });
     expect(edited.content).toBe("https://open.spotify.com/track/1");
     await setExtension(page, "cleanUrls", false);
@@ -1399,4 +1493,33 @@ test('compression follows subscription detection and preserves the saved prefere
     });
     await expect(toggle).not.toBeChecked();
     expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lowcord.extensions')).compressVideos)).toBe(false);
+});
+
+test("media that metadata removal can't handle still attaches, with a notice that it wasn't cleaned", async ({ page }) => {
+    await setExtension(page, "anonymiseFileNames", false);
+    const result = await page.evaluate(async () => {
+        window.__LOWCORD_NATIVE__ = { ...(window.__LOWCORD_NATIVE__ ?? {}),
+            sanitizeImage: async bytes => bytes[0] === 1 ? { status: "unsupported", reason: "Bad image." }
+                : { status: "processed", bytes: new Uint8Array([9]), type: "image/png" } };
+        Lowcord.privacy.set({ metadata: true, coverAsk: false });
+        document.body.insertAdjacentHTML("beforeend", '<div class="channelTextArea_meta"><div contenteditable="true" role="textbox" id="meta-editor"></div></div>');
+        const editor = document.getElementById("meta-editor");
+        const attached = [];
+        editor.addEventListener("paste", event => { for (const file of event.clipboardData.files) attached.push({ name: file.name, size: file.size }); });
+        const paste = files => {
+            const data = new DataTransfer(); for (const file of files) data.items.add(file);
+            editor.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+        };
+        const wait = () => new Promise(resolve => setTimeout(resolve, 300));
+        // Over 64 MiB (sparse, so the test stays light), plus one that fails and one that cleans.
+        const large = new File([new Uint8Array(64 * 1024 * 1024 + 1)], "huge.png", { type: "image/png" });
+        paste([large, new File([new Uint8Array([1, 2])], "bad.png", { type: "image/png" }), new File([new Uint8Array([2, 2])], "good.png", { type: "image/png" })]);
+        await wait();
+        const toast = [...document.querySelectorAll(".lowcord-toast")].map(node => node.textContent).join(" | ");
+        return { attached, toast };
+    });
+    expect(result.attached).toEqual([{ name: "huge.png", size: 64 * 1024 * 1024 + 1 }, { name: "bad.png", size: 2 }, { name: "good.png", size: 1 }]);
+    // The toast shows the first sentence as its headline.
+    expect(result.toast).toContain("Metadata not removed from 2 files");
+    expect(result.toast).toContain("Attached as is. Removed it from 1 image.");
 });

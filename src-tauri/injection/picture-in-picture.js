@@ -19,16 +19,38 @@
         if (frame !== undefined) cancelAnimationFrame(frame);
         frame = undefined;
     }
+    // The video's own frame: the video plus the same-size wrappers holding
+    // Discord's controls overlay.
+    function frameOf(video) {
+        const box = video.getBoundingClientRect();
+        let owner = video;
+        for (let node = video.parentElement; node && node !== document.body; node = node.parentElement) {
+            const rect = node.getBoundingClientRect();
+            if (Math.abs(rect.width - box.width) > 2 || Math.abs(rect.height - box.height) > 2) break;
+            owner = node;
+        }
+        return owner;
+    }
+    function uncovered(x, y, owner) {
+        if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return false;
+        const hit = document.elementsFromPoint(x, y).find(node => !button.contains(node));
+        return Boolean(hit) && owner.contains(hit);
+    }
     function position() {
         frame = undefined;
         if (!eligible(target) || !enabled()) { hide(); return; }
         const rect = target.getBoundingClientRect();
-        // A scrolled-away video should not leave a floating button over chat.
-        button.hidden = rect.width < 60 || rect.height < 45 || rect.bottom <= 0 || rect.top >= innerHeight || rect.right <= 0 || rect.left >= innerWidth;
         const size = button.offsetWidth || 28, inset = 8;
         // Keep Discord's download/action toolbar clear in the opposite corner.
-        button.style.left = `${Math.round(Math.max(inset, Math.min(innerWidth - size - inset, rect.left + inset)))}px`;
-        button.style.top = `${Math.round(Math.max(inset, rect.top + inset))}px`;
+        const left = Math.round(rect.left + inset), top = Math.round(rect.top + inset);
+        button.style.left = `${left}px`;
+        button.style.top = `${top}px`;
+        // The button lives on <body>, above everything. Show it only while its
+        // corner of the video is really on screen: a video scrolled under the
+        // channel header, or covered by a menu, popout or modal, hides it.
+        const owner = frameOf(target);
+        button.hidden = rect.width < 60 || rect.height < 45
+            || !uncovered(left + 1, top + 1, owner) || !uncovered(left + size - 1, top + size - 1, owner);
         const active = document.pictureInPictureElement === target;
         const label = active ? 'Exit picture-in-picture' : 'Picture-in-picture';
         button.setAttribute('aria-label', label);

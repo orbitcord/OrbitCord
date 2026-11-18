@@ -331,7 +331,7 @@ function setupLowcordSettings() {
         voiceMessages: ["Messaging", "Use the waveform button beside the message box to record and send a voice message.", "Allow microphone access when prompted."],
         redgifsPicker: ["Media", "Open RedGIFs beside the message box. Search or browse, then select a video to send it as an MP4 file."],
         mediaSources: ["Media", "Open Media sources beside the message box to browse GifReels or XXXTik. Select a photo or video to send it as a file."],
-        redditPicker: ["Media", "Open Reddit to browse posts and send their photos or videos as files. Sign in to access your Reddit account.", "Install FFmpeg to compress large videos below 20 MB."],
+        redditPicker: ["Media", "Open Reddit to browse posts and send their photos or videos as files. Log in through your browser to see your feed, subscriptions and saved posts.", "Install FFmpeg to compress large videos below 20 MB."],
         chatCapture: ["Messaging", "Click the camera button beside the message box. Select the first and last messages to capture them in one image."],
         coverImages: ["Messaging", "Hide names, addresses and faces in an image before you attach it."],
         mediaGallery: ["Media", "Open the gallery in the chat header to browse photos and videos. Select an item to jump to its message."],
@@ -365,9 +365,9 @@ function setupLowcordSettings() {
         embedMoreImages: ["Media", "Attachments in BMP, ICO, AVIF, APNG and JFIF formats show as images in chat."],
         zipPreview: ["Media", "Select a zip attachment to browse the files inside it without downloading the whole archive."],
         gifCaptioner: ["Media", "Hover a GIF in the picker or right-click one in chat. Choose bar, meme, subtitle or bubble text, trim the clip, then press Enter to send or Shift+Enter to add it to your message."],
-        bringBackTenor: ["Media", "Searches, trending and suggestions in the GIF picker come from Tenor again. Turn it off to use Discord's Klipy results."],
+        bringBackTenor: ["Media", "Searches, trending and suggestions in the GIF picker come from Tenor again. Switch between Tenor and Klipy from the menu beside the GIF search bar, or turn this off to use Discord's Klipy results."],
+        moreQuickReactions: ["Messaging", "Right-click a message to see eight of your frequently used reactions on two lines, instead of Discord's four. Hold Shift while you pick to add more than one.", "Emojis you can't react with are left out."],
         miniChat: ["Messaging", "Pin a DM or channel as a small floating chat that stays open while you browse."],
-        smoothAnimations: ["Utilities", "Channels slide in when you switch, new messages and reactions pop in, the user profile panel slides in from the right and back out, menus and bars open with a short ease, list hovers fade, and buttons give a little when pressed.", "Follows your system's and Discord's Reduce motion settings."],
     };
 
     function ExtensionsPanel() {

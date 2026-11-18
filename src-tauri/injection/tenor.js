@@ -78,7 +78,63 @@
         return handle ? handle(url.searchParams).catch(error => { console.warn("[lowcord] Tenor:", error.message); return null; }) : null;
     });
 
-    // Discord keeps trending results in its store; refetch them when the switch flips.
-    window.addEventListener(extensions.changeEvent, () => { cache.clear(); });
+    // Discord keeps the trending categories and the current results in its
+    // store and fetches them once, so a switch would otherwise show the old
+    // source until restart. Its own actions refetch them, through the hook above.
+    const { find, filters } = window.Lowcord;
+    let trendingAction, searchAction;
+    const fetchTrending = () => trendingAction ??= find(filters.byCode("GIF_PICKER_TRENDING_FETCH_SUCCESS", "trendingGIFPreview"));
+    const runSearch = () => searchAction ??= find(filters.byCode('"GIF_PICKER_QUERY"', "arguments.length>2"));
+    function refetch() {
+        cache.clear();
+        try { fetchTrending()?.(); } catch (error) { console.warn("[lowcord] GIF source:", error); }
+        const query = window.Lowcord.store("GIFPickerViewStore")?.getQuery?.();
+        const search = runSearch();
+        if (!query || typeof search !== "function") return;
+        // Discord drops results for a query it already shows; clear it first.
+        try { search("", null); search(query, null, true); } catch (error) { console.warn("[lowcord] GIF source:", error); }
+    }
+    let using = extensions.enabled(id);
+    window.addEventListener(extensions.changeEvent, () => {
+        const now = extensions.enabled(id);
+        if (now === using) return;
+        using = now;
+        refetch();
+        sync();
+    });
+
+    // A source menu beside the picker's search bar.
+    const label = { tenor: "Tenor", klipy: "Klipy" };
+    function sync() {
+        const panel = document.getElementById("gif-picker-tab-panel");
+        const input = panel?.querySelector('input[type="text"], input:not([type])');
+        if (!input) return;
+        const source = extensions.enabled(id) ? "tenor" : "klipy";
+        // Discord's placeholder names Klipy; say which service is searched.
+        input.dataset.lowcordPlaceholder ??= input.placeholder;
+        const placeholder = source === "tenor" ? "Search Tenor" : input.dataset.lowcordPlaceholder;
+        if (input.placeholder !== placeholder) input.placeholder = placeholder;
+        let menu = panel.querySelector(".lowcord-gif-source");
+        if (!menu) {
+            const bar = input.closest('[class*="searchBar_"]') ?? input.parentElement;
+            const row = bar?.parentElement;
+            if (!row) return;
+            menu = document.createElement("select");
+            menu.className = "lowcord-gif-source";
+            menu.setAttribute("aria-label", "GIF source");
+            menu.title = "GIF source";
+            for (const value of ["klipy", "tenor"]) menu.append(new Option(label[value], value));
+            menu.addEventListener("change", () => {
+                try { extensions.set(id, menu.value === "tenor"); }
+                catch (error) { extensions.toast?.(error.message, true); sync(); }
+            });
+            // Discord's picker reacts to keys inside it; keep them on the menu.
+            menu.addEventListener("keydown", event => event.stopPropagation());
+            row.setAttribute("data-lowcord-gif-source-row", "");
+            bar.after(menu);
+        }
+        if (menu.value !== source) menu.value = source;
+    }
+    window.Lowcord.onDomChange?.(sync);
     window.Lowcord.tenor = { search, trending, suggest, gif, tenorLocale };
 })();

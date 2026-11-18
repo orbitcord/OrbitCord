@@ -26,10 +26,13 @@ const posts = {
 async function fixture(t, { signedIn = false, cdn, compress, listings } = {}) {
     const root = await mkdtemp(join(tmpdir(), 'reddit-test-'));
     const calls = [], downloads = [];
-    const service = createReddit({ tempRoot: root, compress,
-        fetchAccount: async (value, options) => {
+    const service = createReddit({ tempRoot: root, compress, userAgent: 'test:orbitcord:1',
+        auth: { token: async () => signedIn ? 'fixture-token' : null, expire() {} },
+        fetchApi: async (value, options) => {
             const url = new URL(value); calls.push({ url, options });
-            if (url.pathname === '/api/me.json') return signedIn ? json({ name: 'fixture_user', over_18: true }) : json({});
+            assert.equal(url.hostname, 'oauth.reddit.com');
+            assert.equal(options.headers.authorization, 'bearer fixture-token');
+            if (url.pathname === '/api/v1/me') return json({ name: 'fixture_user', over_18: true });
             if (listings) return listings(url);
             if (url.pathname.startsWith('/subreddits/')) return json({ data: { after: null, children: [
                 { kind: 't5', data: { display_name: 'pics', title: 'Pictures', subscribers: 1000, over18: false } },
@@ -79,7 +82,7 @@ test('feeds map to Reddit routes; saved posts need a signed-in account', async t
     const anonymous = await fixture(t);
     await anonymous.service.search(1);
     await anonymous.service.search(1, 'cats', 't3_abc', { subreddit: 'aww', sort: 'top', time: 'all' });
-    const routes = anonymous.calls.filter(call => call.url.pathname !== '/api/me.json');
+    const routes = anonymous.calls;
     assert.ok(routes.every(call => call.public && call.options.credentials === 'omit'));
     assert.equal(routes[0].url.pathname, '/r/popular/hot.json');
     assert.equal(routes[1].url.pathname, '/r/aww/search.json');
@@ -96,8 +99,9 @@ test('feeds map to Reddit routes; saved posts need a signed-in account', async t
     await user.service.search(1, '', null, { mode: 'saved' });
     const communities = await user.service.search(1, '', null, { mode: 'subreddits' });
     assert.ok(user.calls.every(call => !call.public));
-    const paths = user.calls.map(call => call.url.pathname).filter(path => path !== '/api/me.json');
-    assert.deepEqual(paths, ['/best.json', '/user/fixture_user/saved.json', '/subreddits/mine/subscriber.json']);
+    assert.ok(user.calls.every(call => call.options.credentials === 'omit' && call.options.headers['user-agent'] === 'test:orbitcord:1'));
+    const paths = user.calls.map(call => call.url.pathname).filter(path => path !== '/api/v1/me');
+    assert.deepEqual(paths, ['/best', '/user/fixture_user/saved', '/subreddits/mine/subscriber']);
     assert.deepEqual(communities.communities.map(item => item.id), ['pics']);
 });
 
@@ -180,4 +184,18 @@ test('the picker script initializes with malformed saved preferences', async () 
         subreddits: [null, 'bad name', 'pics'], spoilers: 'yes' }) } }, addEventListener() {} };
     runInNewContext(source, { window, Intl });
     assert.equal(typeof window.Lowcord.reddit.open, 'function');
+});
+
+test('an access token Reddit rejects is refreshed once', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'reddit-test-'));
+    const tokens = ['stale', 'fresh'], seen = [];
+    const service = createReddit({ tempRoot: root,
+        auth: { token: async () => tokens[0], expire(value) { if (tokens[0] === value) tokens.shift(); } },
+        fetchApi: async (_url, options) => {
+            seen.push(options.headers.authorization);
+            return options.headers.authorization === 'bearer stale' ? new Response('', { status: 401 }) : json({ name: 'fixture_user' });
+        } });
+    t.after(async () => { await service.close(); await rm(root, { recursive: true, force: true }); });
+    assert.deepEqual(await service.account(), { name: 'fixture_user', nsfw: false });
+    assert.deepEqual(seen, ['bearer stale', 'bearer fresh']);
 });

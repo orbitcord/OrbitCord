@@ -1475,3 +1475,20 @@ test('the App Lock shortcut locks before Discord sees the key, and a changed sho
         expect(await page.evaluate(() => Lowcord.privacy.locked)).toBe(false);
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test('Reddit sign-in goes through the browser, with no Reddit window or partition', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-reddit-'));
+    const saved = process.env.ORBITCORD_REDDIT_CLIENT_ID; delete process.env.ORBITCORD_REDDIT_CLIENT_ID;
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
+        expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('account'))).toEqual({ account: null });
+        // This build has no client ID, so nothing opens; signing out still works.
+        expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('login'))).toEqual({ error: 'not-configured' });
+        expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('logout'))).toEqual({ account: null });
+        expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+    } finally {
+        if (saved !== undefined) process.env.ORBITCORD_REDDIT_CLIENT_ID = saved;
+        await app.close(); await rm(dir, { recursive: true, force: true });
+    }
+});

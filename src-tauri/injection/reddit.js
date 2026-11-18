@@ -47,8 +47,14 @@
         'forbidden': 'Reddit blocked this request. The community may be private, banned or require you to sign in.',
         'not-found': 'Reddit could not find this community.',
         'signed-out': 'Log in to Reddit to see your saved posts.',
+        'not-configured': 'Reddit sign-in is not set up in this build of OrbitCord.',
+        'auth-port-busy': 'Another app is using the port Reddit sign-in needs. Close it and try again.',
+        'auth-timeout': 'Reddit sign-in timed out. Try again.',
+        'auth-failed': 'Reddit did not finish signing you in. Try again.',
+        'invalid-grant': 'Reddit did not finish signing you in. Try again.',
+        'cancelled': '',
     };
-    const errorText = code => messages[code] || 'Could not load Reddit. Try again.';
+    const errorText = code => messages[code] ?? 'Could not load Reddit. Try again.';
     function uploadLimit(channelId) {
         const mb = 1024 * 1024;
         const premium = window.Lowcord.store('UserStore')?.getCurrentUser?.()?.premiumType;
@@ -138,13 +144,15 @@
             : 'Not signed in. Log in to see your feed, subscriptions and saved posts.';
     }
     async function login(state) {
-        status(state, 'Finish logging in to Reddit in the new window.');
+        status(state, 'Finish logging in to Reddit in your browser.');
         const result = await native('login').catch(() => ({ error: 'failed' }));
         if (result.error) { status(state, errorText(result.error)); return; }
         account = result.account;
         if (current !== state) return;
-        showAccount(state); status(state, account ? '' : 'Reddit login was closed before signing in.');
-        void search(state, true);
+        showAccount(state);
+        // Nothing changed when sign-in was cancelled, so the results stay.
+        if (!account) { status(state, 'Reddit sign-in was cancelled.'); return; }
+        status(state, ''); void search(state, true);
     }
     async function logout(state) {
         state.options.hidden = true;

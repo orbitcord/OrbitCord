@@ -130,3 +130,32 @@ test('viewer videos work; removed sources, GIF loops and RedGIFs picker previews
     await page.mouse.move(900, 700); await page.locator('#viewer').hover();
     await expect(page.locator('.lowcord-pip-button')).toHaveCount(0);
 });
+
+test('the control hides when its corner of the video is under a header, menu or off screen', async ({ page }) => {
+    const button = page.locator('.lowcord-pip-button');
+    await page.locator('#dm-video').hover();
+    await expect(button).toBeVisible();
+    const cover = (css) => page.evaluate(css => {
+        document.querySelector('#cover')?.remove();
+        if (!css) return;
+        const node = Object.assign(document.createElement('div'), { id: 'cover' });
+        node.style.cssText = `position:fixed;z-index:100;background:#111;${css}`;
+        document.body.append(node);
+        window.dispatchEvent(new Event('resize'));
+    }, css);
+    // A channel header over the top of a video scrolled half out of view.
+    const top = await page.locator('#dm-video').evaluate(video => video.getBoundingClientRect().top);
+    await cover(`left:0;right:0;top:0;height:${top + 20}px`);
+    await expect(button).toBeHidden();
+    await cover(null);
+    await expect(button).toBeVisible();
+    // A menu opened over the corner.
+    const box = await page.locator('#dm-video').boundingBox();
+    await cover(`left:${box.x}px;top:${box.y}px;width:60px;height:60px`);
+    await expect(button).toBeHidden();
+    await cover(null);
+    await expect(button).toBeVisible();
+    // Scrolled above the window: no clamping to the top edge.
+    await page.locator('#dm-video').evaluate(video => { video.style.position = 'relative'; video.style.top = '-1000px'; window.dispatchEvent(new Event('resize')); });
+    await expect(button).toBeHidden();
+});

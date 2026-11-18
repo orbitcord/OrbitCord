@@ -52,3 +52,37 @@ test("turning Bring back Tenor off lets the request reach Discord", async ({ pag
     await get(page, "/gifs/search?q=dog&media_format=webm");
     expect(await page.evaluate(() => window.__tenorCalls.length)).toBe(0);
 });
+
+test("the GIF picker's source menu switches between Klipy and Tenor and refetches what it shows", async ({ page }) => {
+    await setup(page);
+    await page.evaluate(() => {
+        window.pickerCalls = [];
+        const view = { query: "dog", getQuery() { return this.query; } };
+        view.constructor = { displayName: "GIFPickerViewStore" };
+        const actions = {
+            trending() { /* GIF_PICKER_TRENDING_FETCH_SUCCESS trendingGIFPreview */ window.pickerCalls.push("trending"); },
+            search(query, type) { /* type:"GIF_PICKER_QUERY",query: arguments.length>2 */ window.pickerCalls.push(`search:${query}:${arguments.length > 2}`); },
+        };
+        webpackChunkdiscord_app[0][2]({ c: { gifPicker: { exports: { view, ...actions } } } });
+        const panel = document.createElement("div");
+        panel.id = "gif-picker-tab-panel";
+        panel.innerHTML = '<div class="header_1"><div class="searchBar_1"><input type="text" placeholder="Search KLIPY"></div></div>';
+        document.body.append(panel);
+    });
+    await page.addStyleTag({ url: "/injection/ui-extras.css" });
+    const menu = page.getByRole("combobox", { name: "GIF source" });
+    await expect(menu).toHaveValue("tenor");
+    await expect(page.locator("#gif-picker-tab-panel input")).toHaveAttribute("placeholder", "Search Tenor");
+    const row = await page.locator("[data-lowcord-gif-source-row]").evaluate(node => getComputedStyle(node).display);
+    expect(row).toBe("flex");
+
+    await menu.selectOption("klipy");
+    await expect.poll(() => page.evaluate(() => Lowcord.extensions.enabled("bringBackTenor"))).toBe(false);
+    await expect(page.locator("#gif-picker-tab-panel input")).toHaveAttribute("placeholder", "Search KLIPY");
+    expect(await page.evaluate(() => window.pickerCalls)).toEqual(["trending", "search::false", "search:dog:true"]);
+
+    // The settings switch moves the menu too.
+    await page.evaluate(() => Lowcord.extensions.set("bringBackTenor", true));
+    await expect(menu).toHaveValue("tenor");
+    await expect.poll(() => page.evaluate(() => window.pickerCalls.length)).toBe(6);
+});

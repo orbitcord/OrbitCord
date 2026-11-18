@@ -47,8 +47,8 @@
         { id: "zipPreview", title: "Zip preview", description: "Browse the files inside zip attachments without downloading them." },
         { id: "gifCaptioner", title: "GIF captions", description: "Caption a GIF from the GIF picker, or right-click one in chat. Trim it and pick a style before sending." },
         { id: "miniChat", title: "Mini chat", description: "Pin a DM or channel as a small floating chat that stays open while you browse." },
+        { id: "moreQuickReactions", title: "More quick reactions", description: "Show eight of your frequently used reactions when you right-click a message, instead of four." },
         { id: "bringBackTenor", title: "Bring back Tenor", description: "Search Tenor instead of Klipy in the GIF picker." },
-        { id: "smoothAnimations", title: "Smooth animations", description: "Quick, smooth motion for channels, new messages, reactions, menus, buttons and lists." },
     ];
     const storage = window.Lowcord.storage;
     const changeEvent = "lowcord-extensions-change";
@@ -1273,6 +1273,18 @@
         return changed ? next : undefined;
     }
 
+    // Discord retries a message POST (60 s timeout, 3 retries) without
+    // enforce_nonce, so a slow first attempt, like a reply that accepts a
+    // message request, could post twice. With it, the server returns the
+    // message it already made for that nonce instead of a second copy.
+    function withEnforcedNonce(method, url, body) {
+        if (method !== "POST" || !/^\/channels\/\d+\/messages$/.test(route(url)?.path ?? "")) return body;
+        const data = payloadOf(body);
+        if (!data || data.nonce == null || data.nonce === "" || data.enforce_nonce !== undefined) return body;
+        data.enforce_nonce = true;
+        return withPayload(body, data);
+    }
+
     // ----- Request hooks -----------------------------------------------------
     const xhr = XMLHttpRequest.prototype;
     const open = xhr.open, send = xhr.send, abort = xhr.abort;
@@ -1311,6 +1323,7 @@
             }
             const replacement = rewrite(meta.method, meta.url, body);
             if (replacement !== undefined) body = replacement;
+            body = withEnforcedNonce(meta.method, meta.url, body);
             if (meta.async && enabled("socialEmbeds") && window.__LOWCORD_NATIVE__?.resolveSocialLink
                 && messageRequest(meta.method, meta.url) && hasSocialLinks(body)) {
                 if (this.readyState !== 1) return send.call(this, body);
@@ -1365,7 +1378,7 @@
             try { body = await input.clone().text(); } catch { return nativeFetch.call(this, input, init); }
         }
         if (body !== undefined) {
-            body = rewrite(method, url, body) ?? body;
+            body = withEnforcedNonce(method, url, rewrite(method, url, body) ?? body);
             if (messageRequest(method, url)) body = await checkMessageBody(body);
             if (requestBody) input = new Request(input, { body });
             else init = { ...init, body };

@@ -27,3 +27,22 @@
     flex: 1 0 100%; box-sizing: border-box; padding: 0 8px 6px; font: 500 12px/16px var(--font-primary, system-ui);
     font-variant-numeric: tabular-nums; color: var(--text-muted, var(--text-subtle, #949ba4));
 }
+
+/* More quick reactions: Discord's reaction row in the message menu, four per line. */
+#message[role="menu"] [data-lowcord-quick-reactions] {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); row-gap: 4px;
+}
+#message[role="menu"] [data-lowcord-quick-reactions] > [role="menuitem"] { min-width: 0; margin-inline: 0; justify-self: stretch; }
+
+/* GIF picker source menu (Bring back Tenor), beside the search bar. */
+#gif-picker-tab-panel [data-lowcord-gif-source-row] { display: flex; align-items: center; gap: 8px; }
+#gif-picker-tab-panel [data-lowcord-gif-source-row] > :not(.lowcord-gif-source) { flex: 1 1 auto; min-width: 0; }
+#gif-picker-tab-panel .lowcord-gif-source {
+    flex: none; height: 30px; padding: 0 26px 0 10px; margin: 0;
+    border: 1px solid var(--border-subtle, #ffffff14); border-radius: 8px;
+    background: var(--background-secondary, #2b2d31) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%23949ba4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 8px center / 12px;
+    color: var(--text-normal, #dbdee1); font: inherit; font-size: 13px; font-weight: 500;
+    appearance: none; cursor: pointer;
+}
+#gif-picker-tab-panel .lowcord-gif-source:hover { border-color: var(--border-strong, #ffffff29); }
+#gif-picker-tab-panel .lowcord-gif-source:focus-visible { outline: 2px solid var(--text-link, #82b7ff); outline-offset: 1px; }

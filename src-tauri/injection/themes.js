@@ -489,9 +489,7 @@ function setupLowcordThemes() {
         if (boot) boot.textContent = `html,body,#app-mount{background:${theme.palette.frame}!important;color-scheme:${theme.scheme}}`;
     }
     // At document start <html> may not exist yet.
-    const syncAnimations = () => document.documentElement?.toggleAttribute("data-lowcord-animations",
-        window.Lowcord?.extensions?.enabled?.("smoothAnimations") !== false);
-    const start = () => { try { render(); syncAnimations(); syncMusic(); } catch (error) { console.error("[Lowcord] Theme:", error); } };
+    const start = () => { try { render(); syncMusic(); } catch (error) { console.error("[Lowcord] Theme:", error); } };
     if (document.documentElement) start();
     else {
         const waiting = new MutationObserver(() => {
@@ -504,7 +502,6 @@ function setupLowcordThemes() {
 
     // Turning Fake Nitro off or on shows or hides a chosen Nitro theme.
     window.addEventListener("lowcord-extensions-change", () => {
-        syncAnimations();
         if (state.id !== "nitro") return;
         start();
         window.dispatchEvent(new Event(changeEvent));
