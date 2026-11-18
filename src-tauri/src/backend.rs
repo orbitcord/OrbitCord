@@ -108,6 +108,18 @@ impl Backend {
                 open::that_detached(url.as_str()).map_err(|e| e.to_string())?;
                 Ok(Value::Null)
             }
+            "process_priority" => {
+                let pid = args
+                    .get("pid")
+                    .and_then(Value::as_u64)
+                    .filter(|pid| *pid > 1 && *pid <= i32::MAX as u64)
+                    .ok_or("invalid pid")?;
+                let background = args
+                    .get("background")
+                    .and_then(Value::as_bool)
+                    .ok_or("invalid priority")?;
+                Ok(Value::Bool(crate::priority::set_background(pid as u32, background)?))
+            }
             "log" => {
                 eprintln!("[lowcord] {}", text(&args, "message", 4096)?);
                 Ok(Value::Null)

@@ -14,7 +14,7 @@
         { id: "mediaSources", title: "Media sources", description: "Browse GifReels and XXXTik. Send photos and videos as files." },
         { id: "redditPicker", title: "Reddit picker", description: "Browse Reddit and send photos and videos as files. Compress large videos below 20 MB." },
         { id: "chatCapture", title: "Chat screenshots", description: "Use the camera button to capture a range of messages in one image." },
-        { id: "coverImages", title: "Cover image details", description: "Hide names, addresses and faces in an image before you attach it." },
+        { id: "coverImages", title: "Edit photos", description: "Crop, rotate, flip or cover parts of photos before you attach them." },
         { id: "mediaGallery", title: "Media gallery", description: "Browse photos and videos from the chat header. Select an item to jump to its message." },
         { id: "pictureInPicture", title: "Picture-in-picture", description: "Hover a chat video and use the pop-out button, or press Alt+P, to watch in a floating window." },
         { id: "downloadVideos", title: "Download linked videos", description: "Right-click a linked or embedded video to save its media file." },
@@ -36,6 +36,7 @@
         { id: "twitterVideoUpload", title: "X videos as files", description: "Upload linked X videos as files." },
         { id: "socialPhotoUpload", defaultEnabled: false, title: "Photos and carousels as files", description: "Upload linked Instagram, Reddit and X photos or carousels as files." },
         { id: "splitMessages", title: "Split long messages", description: "Send messages over the length limit as several messages." },
+        { id: "commandPalette", title: "Command palette", description: "Press ⌘⇧K or Ctrl+Shift+K to jump to any chat or run any OrbitCord action." },
         { id: "readAll", defaultEnabled: false, title: "Mark all as read", description: "Adds a button to the server list that clears every unread badge." },
         { id: "callTimer", title: "Call timer", description: "Shows how long you've been in a voice call." },
         { id: "onlineFriendCount", defaultEnabled: false, title: "Online friend count", description: "Shows how many friends are online under the Home button." },
@@ -1285,6 +1286,32 @@
         return withPayload(body, data);
     }
 
+    // A sent message showed twice when Discord already held the real copy
+    // (loaded with the chat's history, as when a reply accepts a message
+    // request) beside its "sending" placeholder: the store swaps the
+    // placeholder for the real message without checking, leaving two rows
+    // with one id. Dropping the placeholder first lets the real copy update
+    // in place. This runs before Discord's stores see the message.
+    window.Lowcord.waitFor(window.Lowcord.filters.byProps("dispatch", "subscribe", "addInterceptor"), dispatcher => {
+        window.Lowcord.waitFor(window.Lowcord.filters.byProps("getOrCreate", "commit", "clearCache", "hasPresent"), ChannelMessages => {
+            dispatcher.addInterceptor(action => {
+                if (action?.type !== "MESSAGE_CREATE" || action.isPushNotification) return false;
+                const { channelId, message } = action;
+                const nonce = message?.nonce;
+                if (!channelId || nonce == null || !message.id || message.id === nonce) return false;
+                try {
+                    const messages = ChannelMessages.getOrCreate(channelId);
+                    if (!messages?.has?.(nonce, true) || !messages.has(message.id, true)) return false;
+                    ChannelMessages.commit(messages.remove(nonce));
+                    // Discord skips its own update when it already has the
+                    // message, so the chat is told the placeholder is gone.
+                    setTimeout(() => window.Lowcord.store("MessageStore")?.emitChange?.());
+                } catch (error) { console.warn("[lowcord] duplicate message guard:", error); }
+                return false;
+            });
+        });
+    });
+
     // ----- Request hooks -----------------------------------------------------
     const xhr = XMLHttpRequest.prototype;
     const open = xhr.open, send = xhr.send, abort = xhr.abort;
@@ -1925,7 +1952,8 @@
     window.addEventListener(changeEvent, fixMusicFrames);
     window.Lowcord.extensions = { catalog, enabled, set, setOption, changeEvent,
         get state() { const { compressVideosWithNitro, ...shown } = state; return { ...shown, compressVideos: enabled("compressVideos") }; }, get options() { return { ...options }; },
-        cleanContent, socialContent, anonymous, openRecorder, toast, toastBadge, progress, ui, mountComposerPopup, addComposerAction, addResponder };
+        cleanContent, socialContent, anonymous, openRecorder, toast, toastBadge, progress, ui, mountComposerPopup, addComposerAction, addResponder,
+        get composerActions() { return [...composerActions]; } };
     window.Lowcord.waitForStore("UserStore", store => {
         let compressing;
         const update = () => {

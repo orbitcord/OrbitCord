@@ -255,6 +255,14 @@ function setupLowcordSettings() {
         };
         return h("section", { className: "lowcord-chat-appearance" },
             h("p", { className: "lowcord-chat-intro" }, "OrbitCord clears cached memory after the window has been hidden or minimized for 30 seconds."),
+            settings && navigator.userAgent.includes("Linux") === false ? h("div", { className: "lowcord-sleep-card" },
+                h("label", { className: "lowcord-chat-toggle" },
+                    h("span", null, h("strong", null, "Efficiency mode"),
+                        h("span", { className: "lowcord-chat-description" },
+                            "Run Discord at low priority while the window is hidden, so it uses less CPU and battery. Messages and notifications still arrive.")),
+                    h("input", { type: "checkbox", role: "switch", checked: settings.efficiency !== false,
+                        onChange: event => change({ ...settings, efficiency: event.target.checked }) })),
+                h("p", { className: "lowcord-sleep-note" }, "Calls, uploads and media playback keep full priority.")) : null,
             settings ? h("div", { className: "lowcord-sleep-card" },
                 h("label", { className: "lowcord-chat-toggle" },
                     h("span", null, h("strong", null, "Sleep in the background"),
@@ -331,9 +339,9 @@ function setupLowcordSettings() {
         voiceMessages: ["Messaging", "Use the waveform button beside the message box to record and send a voice message.", "Allow microphone access when prompted."],
         redgifsPicker: ["Media", "Open RedGIFs beside the message box. Search or browse, then select a video to send it as an MP4 file."],
         mediaSources: ["Media", "Open Media sources beside the message box to browse GifReels or XXXTik. Select a photo or video to send it as a file."],
-        redditPicker: ["Media", "Open Reddit to browse posts and send their photos or videos as files. Log in through your browser to see your feed, subscriptions and saved posts.", "Install FFmpeg to compress large videos below 20 MB."],
+        redditPicker: ["Media", "Open Reddit to browse posts and send their photos or videos as files. Log in to see your feed, subscriptions and saved posts.", "Install FFmpeg to compress large videos below 20 MB."],
         chatCapture: ["Messaging", "Click the camera button beside the message box. Select the first and last messages to capture them in one image."],
-        coverImages: ["Messaging", "Hide names, addresses and faces in an image before you attach it."],
+        coverImages: ["Messaging", "Use Edit photos beside the message box to pick one or more images. Crop, rotate, flip or cover names and faces, then attach them.", "Turn on Ask before attaching images in Privacy & Security to edit every image you attach."],
         mediaGallery: ["Media", "Open the gallery in the chat header to browse photos and videos. Select an item to jump to its message."],
         pictureInPicture: ["Media", "Hover over a chat video and use its pop-out button, or press Alt+P, to keep watching in a floating window."],
         downloadVideos: ["Media", "Right-click a linked or embedded video and choose Download video to save it.", "Some video links do not support downloads."],
@@ -355,6 +363,7 @@ function setupLowcordSettings() {
         twitterVideoUpload: ["Uploads", "Send an X video link to upload the video as a file."],
         socialPhotoUpload: ["Uploads", "Send an Instagram, Reddit or X photo post or carousel link to upload its photos as files.", "Off by default. Turn it on with the card switch."],
         splitMessages: ["Messaging", "Send a message longer than Discord's limit and OrbitCord posts it as several messages in order."],
+        commandPalette: ["Utilities", "Press ⌘⇧K on a Mac or Ctrl+Shift+K elsewhere. Type to find a DM, channel or server, run a message bar action, switch theme, open a settings page or turn an extension on or off. Use the arrow keys and Enter.", "Discord's quick switcher stays on ⌘K or Ctrl+K. The palette's last result opens it to search messages and members."],
         readAll: ["Utilities", "Use the button in the server list to clear every unread badge at once."],
         callTimer: ["Utilities", "See how long you have been in a voice call, beside the call controls."],
         onlineFriendCount: ["Utilities", "See how many friends are online under the Home button."],
@@ -700,4 +709,5 @@ function setupLowcordSettings() {
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount, { once: true });
     else mount();
     window.__lowcordOpenSettings = open;
+    open.pages = pages.map(({ id, title }) => ({ id, title }));
 }

@@ -4,6 +4,7 @@ mod backend;
 mod gif;
 mod image;
 mod media;
+mod priority;
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;

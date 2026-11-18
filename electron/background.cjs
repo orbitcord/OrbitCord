@@ -2,20 +2,23 @@ const { join } = require('node:path');
 const { readFileSync, writeFileSync } = require('node:fs');
 
 // Frees memory while OrbitCord's window is hidden or minimized. Caches are
-// trimmed shortly after; with Sleep on, Discord is unloaded after a longer
-// delay and reloaded when the window comes back.
+// trimmed shortly after; with Efficiency on, Discord's page process also drops
+// to background priority (see src-tauri/src/priority.rs) until the window
+// comes back; with Sleep on, Discord is unloaded after a longer delay and
+// reloaded when the window comes back.
 const sleepDelays = [5, 15, 30, 60];
-const defaults = { sleep: false, minutes: 15 };
+const defaults = { sleep: false, minutes: 15, efficiency: true };
 
-function createBackgroundSaver({ window, userData, trusted, minute = 60_000 }) {
+function createBackgroundSaver({ window, userData, trusted, minute = 60_000, setPriority = async () => false }) {
     const file = join(userData, 'background.json');
-    let settings = read(), trimTimer, sleepTimer, asleep = null;
+    let settings = read(), trimTimer, sleepTimer, lowerTimer, asleep = null, lowered = 0;
     const contents = window.webContents;
 
     function read() {
         try {
-            const { sleep, minutes } = JSON.parse(readFileSync(file, 'utf8'));
-            return { sleep: sleep === true, minutes: sleepDelays.includes(minutes) ? minutes : defaults.minutes };
+            const { sleep, minutes, efficiency } = JSON.parse(readFileSync(file, 'utf8'));
+            return { sleep: sleep === true, minutes: sleepDelays.includes(minutes) ? minutes : defaults.minutes,
+                efficiency: typeof efficiency === 'boolean' ? efficiency : defaults.efficiency };
         } catch { return { ...defaults }; }
     }
     const hidden = () => !window.isDestroyed() && (!window.isVisible() || window.isMinimized());
@@ -63,8 +66,32 @@ function createBackgroundSaver({ window, userData, trusted, minute = 60_000 }) {
         void trim();
     }
 
+    // Calls, uploads and playing media need full priority, so they are checked
+    // before lowering and again every minute while lowered.
+    async function lower() {
+        lowerTimer = undefined;
+        if (!settings.efficiency || asleep || !hidden() || contents.isDestroyed()) return;
+        const busyNow = await busy();
+        if (!hidden() || contents.isDestroyed() || !settings.efficiency) return;
+        const pid = contents.getOSProcessId();
+        if (busyNow) await restore();
+        else if (pid > 0 && lowered !== pid) {
+            await restore();
+            if (await setPriority(pid, true).catch(error => { console.error('[lowcord] Background priority:', error.message); return false; })) lowered = pid;
+        }
+        if (hidden()) lowerTimer = setTimeout(lower, minute);
+    }
+    async function restore() {
+        clearTimeout(lowerTimer); lowerTimer = undefined;
+        const pid = lowered;
+        if (!pid) return;
+        lowered = 0;
+        await setPriority(pid, false).catch(error => console.error('[lowcord] Background priority:', error.message));
+    }
+
     function wake() {
         clearTimeout(trimTimer); clearTimeout(sleepTimer);
+        void restore();
         if (!asleep) return;
         const url = asleep;
         asleep = null;
@@ -75,22 +102,29 @@ function createBackgroundSaver({ window, userData, trusted, minute = 60_000 }) {
         clearTimeout(trimTimer); clearTimeout(sleepTimer);
         if (asleep) return;
         trimTimer = setTimeout(() => { if (hidden()) void trim(); }, minute / 2);
+        clearTimeout(lowerTimer);
+        if (settings.efficiency) lowerTimer = setTimeout(lower, minute / 6);
         if (settings.sleep) sleepTimer = setTimeout(() => void sleep(), settings.minutes * minute);
     }
 
     // Closing to the tray, Cmd+H and minimizing all emit hide or minimize.
     for (const event of ['hide', 'minimize']) window.on(event, schedule);
     for (const event of ['show', 'restore', 'focus']) window.on(event, wake);
+    // A new page process starts at normal priority; forget the old one.
+    contents.on('render-process-gone', () => { lowered = 0; });
 
     return {
         get: () => ({ ...settings }),
         set(next) {
-            if (typeof next?.sleep !== 'boolean' || !sleepDelays.includes(next.minutes)) throw new Error('Invalid background settings');
-            settings = { sleep: next.sleep, minutes: next.minutes };
+            if (typeof next?.sleep !== 'boolean' || !sleepDelays.includes(next.minutes)
+                || (next.efficiency !== undefined && typeof next.efficiency !== 'boolean')) throw new Error('Invalid background settings');
+            settings = { sleep: next.sleep, minutes: next.minutes, efficiency: next.efficiency ?? settings.efficiency };
             try { writeFileSync(file, JSON.stringify(settings)); } catch (error) { console.error('[lowcord]', error.message); }
+            if (!settings.efficiency) void restore();
             if (hidden()) schedule();
             return { ...settings };
         },
+        get lowered() { return lowered; },
     };
 }
 

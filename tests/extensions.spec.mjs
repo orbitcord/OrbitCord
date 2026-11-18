@@ -210,6 +210,44 @@ test("no tracking blocks analytics, metrics, crash reports and the desktop RPC p
     expect(await xhr(page, "POST", `/api/v9/science?c=${channel}`, "{}")).toBe(200);
 });
 
+test("a sent message never shows twice when its real copy loaded before the send finished", async ({ page }) => {
+    await page.evaluate(() => {
+        // Discord's dispatcher and ChannelMessages, reduced to what matters:
+        // interceptors run first, and receiving a message by nonce swaps the
+        // placeholder for it without checking that the id is already there.
+        const interceptors = [];
+        const dispatcher = { dispatch(action) { for (const fn of interceptors) if (fn(action)) return; store.handle(action); },
+            subscribe() {}, unsubscribe() {}, addInterceptor: fn => interceptors.push(fn) };
+        class ChannelMessages {
+            static all = {};
+            static getOrCreate(id) { return ChannelMessages.all[id] ??= new ChannelMessages([]); }
+            static commit(messages) { ChannelMessages.all.dm = messages; }
+            static clearCache() {}
+            static hasPresent() { return true; }
+            constructor(array) { this.array = array; }
+            has(id) { return this.array.some(message => message.id === id); }
+            remove(id) { return new ChannelMessages(this.array.filter(message => message.id !== id)); }
+            receive(message) {
+                if (message.nonce && this.has(message.nonce)) return new ChannelMessages(this.array.map(item => item.id === message.nonce ? message : item));
+                return this.has(message.id) ? this : new ChannelMessages([...this.array, message]);
+            }
+        }
+        const store = { handle(action) { ChannelMessages.commit(ChannelMessages.getOrCreate(action.channelId).receive(action.message)); } };
+        webpackChunkdiscord_app[0][2]({ c: { dispatcher: { exports: dispatcher }, channelMessages: { exports: ChannelMessages } } });
+        Object.assign(window, { interceptors, dispatcher, ChannelMessages });
+    });
+    await expect.poll(() => page.evaluate(() => interceptors.length)).toBe(2);
+    const rows = await page.evaluate(() => {
+        ChannelMessages.commit(new ChannelMessages([{ id: "1" }, { id: "nonce-9", state: "SENDING" }, { id: "200", content: "hi" }]));
+        dispatcher.dispatch({ type: "MESSAGE_CREATE", channelId: "dm", message: { id: "200", nonce: "nonce-9", content: "hi" } });
+        // A normal send with no copy loaded early still replaces the placeholder.
+        ChannelMessages.commit(new ChannelMessages([...ChannelMessages.all.dm.array, { id: "nonce-10", state: "SENDING" }]));
+        dispatcher.dispatch({ type: "MESSAGE_CREATE", channelId: "dm", message: { id: "201", nonce: "nonce-10" } });
+        return ChannelMessages.all.dm.array.map(message => message.id);
+    });
+    expect(rows).toEqual(["1", "200", "201"]);
+});
+
 test("message sends carry enforce_nonce so a retried POST can't post twice", async ({ page }) => {
     await setExtension(page, "socialEmbeds", false);
     await xhr(page, "POST", `/api/v9/channels/${channel}/messages`, JSON.stringify({ content: "hi", nonce: "11" }));
@@ -609,7 +647,7 @@ test("message bar actions share one button that opens a menu, or is the only act
     await button.click();
     await expect(button).toHaveAttribute("aria-expanded", "true");
     const menu = page.getByRole("menu", { name: "Extensions" });
-    await expect(menu.getByRole("menuitem")).toHaveText(["Voice message", "Screenshot messages", "Cover image details", "Delete my messages"]);
+    await expect(menu.getByRole("menuitem")).toHaveText(["Voice message", "Screenshot messages", "Edit photos", "Delete my messages"]);
     await expect(menu.getByRole("menuitem").first()).toBeFocused();
     await page.keyboard.press("ArrowUp");
     await expect(menu.getByRole("menuitem", { name: "Delete my messages" })).toBeFocused();

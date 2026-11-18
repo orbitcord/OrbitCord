@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; base-uri 'none'; form-action 'none'">
+<title>Share your screen</title><link rel="stylesheet" href="screen-picker.css"><script src="screen-picker.js" defer></script></head>
+<body>
+<header>
+ <h1>Share your screen</h1>
+ <div class="tabs" role="tablist" aria-label="Source type">
+  <button type="button" role="tab" id="tab-screen" aria-selected="true" data-kind="screen">Screens</button>
+  <button type="button" role="tab" id="tab-window" aria-selected="false" data-kind="window">Windows</button>
+ </div>
+</header>
+<main><ul id="sources" role="listbox" aria-labelledby="tab-screen"></ul><p id="status" role="status" aria-live="polite">Finding screens and windows…</p></main>
+<footer>
+ <label id="sound-row" hidden><input type="checkbox" id="sound" role="switch"><span><strong>Share sound</strong><small>Includes all sound from this computer, including the call.</small></span></label>
+ <div class="actions"><button type="button" id="cancel">Cancel</button><button type="button" id="share" class="primary" disabled>Share</button></div>
+</footer>
+</body></html>

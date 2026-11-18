@@ -1476,23 +1476,34 @@ test('the App Lock shortcut locks before Discord sees the key, and a changed sho
     } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
-test('Reddit sign-in goes through the browser, with no Reddit window or partition', async () => {
+test('Reddit sign-in opens Reddit\'s login page in its own session and closes once signed in', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'orbitcord-reddit-'));
-    const saved = process.env.ORBITCORD_REDDIT_CLIENT_ID; delete process.env.ORBITCORD_REDDIT_CLIENT_ID;
     const app = await launch(dir);
     try {
-        const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded');
-        expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('account'))).toEqual({ account: null });
-        // This build has no client ID, so nothing opens until setup saves one.
-        expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('login'))).toEqual({ error: 'not-configured' });
-        expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('setup'))).toEqual({ clientId: '', redirect: 'http://127.0.0.1:65010/reddit_callback' });
-        expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('configure', 'bad id!'))).toEqual({ error: 'invalid-client-id' });
-        expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('configure', 'p-jcoLKBynTLew'))).toEqual({ clientId: 'p-jcoLKBynTLew' });
-        expect(JSON.parse(await readFile(join(dir, 'reddit-client.json'), 'utf8'))).toEqual({ clientId: 'p-jcoLKBynTLew' });
-        expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('logout'))).toEqual({ account: null });
+        const page = await app.firstWindow(); await page.waitForURL('http://127.0.0.1:4319/electron', { waitUntil: 'load' });
+        expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('setup'))).toEqual({ error: 'invalid-action' });
+        // Reddit, faked inside the login session only.
+        await app.evaluate(({ session }) => {
+            global.redditRequests = [];
+            session.fromPartition('persist:orbitcord-reddit').protocol.handle('https', request => {
+                global.redditRequests.push(request.url);
+                if (new URL(request.url).pathname === '/api/me.json') return Response.json({ data: { name: 'fixture_user', over_18: false } });
+                return new Response('<title>Log in</title><form>Reddit login</form>', { headers: { 'content-type': 'text/html' } });
+            });
+        });
+        // Closing the page without signing in leaves Reddit signed out.
+        const cancelled = page.evaluate(() => __LOWCORD_NATIVE__.reddit('login')); cancelled.catch(() => {});
+        await expect.poll(() => app.evaluate(({ BrowserWindow, session }) => BrowserWindow.getAllWindows()
+            .find(window => window.webContents.getURL().startsWith('https://www.reddit.com/login'))?.webContents.session === session.fromPartition('persist:orbitcord-reddit'))).toBe(true);
+        await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(window => window.webContents.getURL().startsWith('https://www.reddit.com/login')).close());
+        expect(await cancelled).toEqual({ account: null });
+        // Reddit setting its session cookie closes the page and signs in.
+        const login = page.evaluate(() => __LOWCORD_NATIVE__.reddit('login'));
+        await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(2);
+        await app.evaluate(({ session }) => session.fromPartition('persist:orbitcord-reddit').cookies.set({ url: 'https://www.reddit.com', name: 'reddit_session', value: 'fixture', domain: '.reddit.com', secure: true }));
+        expect(await login).toEqual({ account: { name: 'fixture_user', nsfw: false } });
         expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
-    } finally {
-        if (saved !== undefined) process.env.ORBITCORD_REDDIT_CLIENT_ID = saved;
-        await app.close(); await rm(dir, { recursive: true, force: true });
-    }
+        expect(await page.evaluate(() => __LOWCORD_NATIVE__.reddit('logout'))).toEqual({ account: null });
+        expect(await app.evaluate(({ session }) => session.fromPartition('persist:orbitcord-reddit').cookies.get({ name: 'reddit_session' }))).toEqual([]);
+    } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, session, screen, dialog, desktopCapturer, protocol, net, shell, clipboard, ClipboardItem, systemPreferences } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, session, screen, dialog, protocol, net, shell, clipboard, ClipboardItem, systemPreferences } = require('electron');
 const { join } = require('node:path');
 const { readFileSync, writeFileSync } = require('node:fs');
 const { writeFile } = require('node:fs/promises');
@@ -25,6 +25,8 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // One helper fewer on macOS. Network stays out of process because it parses
 // remote data in a sandbox, and in-process video capture hangs getUserMedia.
 if (process.platform === 'darwin') app.commandLine.appendSwitch('disable-features', 'AudioServiceOutOfProcess');
+// System sound for screen share on macOS 14.2+, through a Core Audio tap.
+if (process.platform === 'darwin') app.commandLine.appendSwitch('enable-features', 'MacCatapLoopbackAudioForScreenShare');
 // Chromium sizes its decoded image cache by system RAM, so large Macs keep
 // hundreds of MB after scrolling media. 64 MB cost 0.2s of CPU in a 16s scroll.
 app.commandLine.appendSwitch('force-gpu-mem-discardable-limit-mb', '64');
@@ -97,9 +99,8 @@ const socialPosts = feature('socialPosts', () => {
     return createSocialPosts();
 });
 const redgifs = feature('redgifs', () => require('./redgifs.cjs').createRedgifs());
-const redditAgent = () => `${process.platform}:orbitcord:${app.getVersion()} (desktop app)`;
 const reddit = feature('reddit', () => require('./reddit.cjs').createReddit({
-    auth: redditAuth(), userAgent: redditAgent() }));
+    fetchAccount: (url, init) => redditSession().fetch(url, { ...init, credentials: 'include' }) }));
 const videoAttachments = feature('videoAttachments', () => require('./video-attachments.cjs').createVideoAttachments());
 const mediaSources = feature('mediaSources', () => {
     const { createMediaSources, SOURCES } = require('./media-sources.cjs');
@@ -116,11 +117,9 @@ const mediaSources = feature('mediaSources', () => {
     });
 });
 const traces = feature('traces', () => createTraces({ file: join(userData, 'leave-no-trace.json'),
-    sessions: () => [session.defaultSession, ...accounts.filter(account => account.id !== 'main').map(account => session.fromPartition(`persist:${account.id}`)),
+    sessions: () => [session.defaultSession, ...accounts.filter(account => account.id !== 'main').map(account => session.fromPartition(`persist:${account.id}`)), redditSession(),
         ...accounts.flatMap(account => require('./media-sources.cjs').SOURCES.map(source => session.fromPartition(`persist:orbitcord-source-${account.id}-${source.id}`)))],
-    windows: () => [...discordWindows.values()].map(({ window }) => ({ window, session: window.webContents.session })),
-    // Reddit's sign-in is a token file, not a session.
-    signOut: () => features.redditAuth ? features.redditAuth.forget() : redditTokenStore.clear() }));
+    windows: () => [...discordWindows.values()].map(({ window }) => ({ window, session: window.webContents.session })) }));
 // Work a window started ends with it. Unloaded backends have none.
 const cancelFeatures = id => {
     features.redgifs?.cancel(id); features.reddit?.cancel(id);
@@ -413,22 +412,17 @@ function configureSession(ses) {
         allowsPermission(contents, permission, origin));
     const sessionWindow = () => [...discordWindows.values()].find(record =>
         !record.window.isDestroyed() && record.window.webContents.session === ses)?.window;
-    // Use the OS picker on macOS 15+, and a native source menu elsewhere.
+    // OrbitCord's own picker (electron/screen-picker.cjs): thumbnails, and
+    // system sound on Windows and macOS 14.2+. macOS's system picker can't
+    // share sound, so it is not used.
     ses.setDisplayMediaRequestHandler(async (request, callback) => {
         const window = sessionWindow();
         if (!window || request.frame !== window.webContents.mainFrame || !trusted(request.securityOrigin)) { callback({}); return; }
         try {
-            const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } });
-            let answered = false;
-            const answer = streams => { if (!answered) { answered = true; callback(streams); } };
-            const picker = Menu.buildFromTemplate([
-                ...sources.map(source => ({ label: source.name, click: () => answer({ video: source,
-                    ...(process.platform === 'win32' && request.audioRequested ? { audio: 'loopback' } : {}) }) })),
-                { type: 'separator' }, { label: 'Cancel', click: () => answer({}) },
-            ]);
-            picker.popup({ window, callback: () => answer({}) });
-        } catch { callback({}); }
-    }, { useSystemPicker: true });
+            const choice = await require('./screen-picker.cjs').pick({ parent: window, audioRequested: request.audioRequested });
+            callback(choice ? { video: choice.source, ...(choice.audio ? { audio: 'loopback' } : {}) } : {});
+        } catch (error) { console.error('[lowcord] Screen share:', error.message); callback({}); }
+    });
     // A security key holding several Discord passkeys asks which one to use.
     ses.on('select-webauthn-account', (_event, details, callback) => {
         let answered = false;
@@ -478,7 +472,8 @@ async function createDiscordWindow(account) {
         embedPlugins: setupEmbedPlugins(contents),
         // LOWCORD_FAST_SLEEP counts sleep delays in seconds for manual testing.
         background: createBackgroundSaver({ window, userData, trusted,
-            minute: dev && process.env.LOWCORD_FAST_SLEEP === '1' ? 1000 : 60_000 }) };
+            minute: dev && process.env.LOWCORD_FAST_SLEEP === '1' ? 1000 : 60_000,
+            setPriority: (pid, background) => backend.call('process_priority', { pid, background }) }) };
     discordWindows.set(id, record);
     if (main) mainWindow = window;
     window.setTitle(windowTitle(record));
@@ -806,23 +801,10 @@ function registerIpc() {
     ipcMain.handle('lowcord:redgifs-release', (event, handle) => { assertSender(event); return redgifs().release(event.sender.id, handle); });
     ipcMain.handle('lowcord:reddit', async (event, action, ...args) => {
         const record = assertSender(event);
-        if (!['account', 'login', 'logout', 'setup', 'configure', 'search', 'prepare', 'resolve', 'cancel', 'release'].includes(action)) return { error: 'invalid-action' };
+        if (!['account', 'login', 'logout', 'search', 'prepare', 'resolve', 'cancel', 'release'].includes(action)) return { error: 'invalid-action' };
         try {
-            if (action === 'setup') return { clientId: redditAuth().clientId, redirect: redditAuth().redirect };
-            if (action === 'configure') {
-                if (await redditAuth().setClientId(args[0])) {
-                    await writeFile(redditClientFile, JSON.stringify({ clientId: redditAuth().clientId }));
-                    features.reddit?.signedOut();
-                }
-                return { clientId: redditAuth().clientId };
-            }
-            if (action === 'login') {
-                await redditAuth().login();
-                const account = await reddit().account(true);
-                if (account) showWindow(record.window);
-                return { account };
-            }
-            if (action === 'logout') { await redditAuth().logout(); features.reddit?.signedOut(); return { account: null }; }
+            if (action === 'login') return { account: await redditLogin(record.window) };
+            if (action === 'logout') { await redditSession().clearStorageData(); features.reddit?.signedOut(); return { account: null }; }
             if (action === 'account') return { account: await reddit().account() };
             return await reddit()[action](event.sender.id, ...args) ?? null;
         } catch (error) { return { error: error.code ?? 'failed' }; }
@@ -925,36 +907,54 @@ function registerIpc() {
     });
 }
 
-// Reddit sign-in happens in the default browser (see reddit-auth.cjs). The
-// refresh token is the only thing kept, encrypted with the OS keychain; where
-// that is unavailable it lives in memory and sign-in lasts until quit.
-const redditTokenStore = (() => {
-    const file = join(userData, 'reddit-auth.bin');
-    let memory = null;
-    const { readFile, rm } = require('node:fs/promises');
-    const { safeStorage } = require('electron');
-    return {
-        async read() {
-            if (!safeStorage.isEncryptionAvailable()) return memory;
-            return safeStorage.decryptString(await readFile(file));
-        },
-        async write(value) {
-            if (!safeStorage.isEncryptionAvailable()) { memory = value; return; }
-            await writeFile(file, safeStorage.encryptString(value), { mode: 0o600 });
-        },
-        async clear() { memory = null; await rm(file, { force: true }); },
+// Reddit sign-in is Reddit's own login page in a small window with a session
+// of its own: its cookies never mix with Discord's, and signing out clears
+// only this partition. No Reddit app or client ID is needed. Nothing here
+// loads at startup.
+let redditSessionValue, redditLoginWindow, redditLoginWork;
+function redditSession() {
+    if (redditSessionValue) return redditSessionValue;
+    const ses = redditSessionValue = session.fromPartition('persist:orbitcord-reddit');
+    ses.setUserAgent(ses.getUserAgent().replace(/\s(?:Electron|Lowcord|Datcord|OrbitCord)\/[\w.-]+/gi, ''));
+    ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    ses.setPermissionCheckHandler(() => false);
+    // A build that signed in through the browser left a token and client ID behind.
+    for (const file of ['reddit-auth.bin', 'reddit-client.json']) void require('node:fs/promises').rm(join(userData, file), { force: true }).catch(() => {});
+    return ses;
+}
+const redditSignedIn = async () => (await redditSession().cookies.get({ name: 'reddit_session' }).catch(() => []))
+    .some(cookie => /(?:^|\.)reddit\.com$/.test(cookie.domain.replace(/^\./, '')));
+// Opens Reddit's login page and resolves with the account once it closes:
+// by itself as soon as Reddit sets its session cookie, or when the person
+// closes it. Asking again while it is open brings it to the front.
+function redditLogin(parent) {
+    if (redditLoginWindow && !redditLoginWindow.isDestroyed()) { redditLoginWindow.show(); redditLoginWindow.focus(); return redditLoginWork; }
+    const ses = redditSession();
+    const window = redditLoginWindow = new BrowserWindow({ parent, width: 460, height: 720, minWidth: 360, minHeight: 480,
+        title: 'Log in to Reddit', autoHideMenuBar: true, backgroundColor: '#0e1113', show: false,
+        webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true } });
+    window.once('ready-to-show', () => { if (!window.isDestroyed()) window.show(); });
+    const https = url => { try { return new URL(url).protocol === 'https:'; } catch { return false; } };
+    // Sign in with Google or Apple opens a popup in this same session.
+    window.webContents.setWindowOpenHandler(({ url }) => https(url)
+        ? { action: 'allow', overrideBrowserWindowOptions: { parent: window, autoHideMenuBar: true } } : { action: 'deny' });
+    window.webContents.on('will-navigate', event => { if (!https(event.url)) event.preventDefault(); });
+    const changed = (_event, cookie, _cause, removed) => {
+        if (!removed && cookie.name === 'reddit_session' && !window.isDestroyed()) window.close();
     };
-})();
-const redditAuth = feature('redditAuth', () => {
-    // Earlier versions signed in inside an app window with its own cookies.
-    void require('node:fs/promises').rm(join(app.getPath('sessionData'), 'Partitions', 'orbitcord-reddit'), { recursive: true, force: true }).catch(() => {});
-    let clientId;
-    try { clientId = JSON.parse(readFileSync(redditClientFile, 'utf8')).clientId; } catch {}
-    return require('./reddit-auth.cjs').createRedditAuth({ userAgent: redditAgent(), store: redditTokenStore, openExternal,
-        ...(clientId ? { clientId } : {}) });
-});
-// The client ID of the Reddit app the person registered; not a secret.
-const redditClientFile = join(userData, 'reddit-client.json');
+    ses.cookies.on('changed', changed);
+    window.webContents.on('did-navigate', async () => { if (await redditSignedIn() && !window.isDestroyed()) window.close(); });
+    redditLoginWork = new Promise(resolve => window.once('closed', async () => {
+        ses.cookies.removeListener('changed', changed);
+        redditLoginWindow = undefined;
+        if (!await redditSignedIn()) { resolve(null); return; }
+        const account = await reddit().account(true).catch(() => null);
+        if (account && parent && !parent.isDestroyed()) showWindow(parent);
+        resolve(account);
+    }));
+    void window.loadURL('https://www.reddit.com/login/');
+    return redditLoginWork;
+}
 
 async function start() {
     if (!testing) await migrateProfile(app.getPath('sessionData'));

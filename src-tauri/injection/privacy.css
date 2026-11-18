@@ -144,8 +144,68 @@
     .lowcord-privacy-facts > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
 
-.lowcord-cover-stage { width: fit-content; max-width: 100%; margin: 0 auto; }
-.lowcord-cover-stage canvas { display: block; max-width: 100%; max-height: min(62vh, 720px); height: auto; cursor: crosshair; touch-action: none; }
+/* Edit photos (image-cover.js): image on the left, tools in a side panel. */
+.lowcord-edit-preview {
+    display: grid; grid-template-columns: minmax(0, 1fr) 232px; width: min(1040px, 100%); height: min(680px, calc(100vh - 48px)); overflow: hidden;
+    border-radius: 12px; border: 1px solid var(--border-subtle, rgb(255 255 255 / .06));
+    background: var(--background-base-low, var(--background-primary, #313338)); color: var(--text-normal, #dbdee1);
+    box-shadow: 0 16px 48px rgb(0 0 0 / .4);
+}
+.lowcord-edit-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--background-base-lowest, var(--background-tertiary, #1e1f22)); }
+/* The canvas is placed against the stage box, not a grid row: an auto row grows
+   with a tall (rotated) photo, so max-height had nothing fixed to resolve against. */
+.lowcord-edit-stage { position: relative; flex: 1 1 auto; min-height: 0; }
+.lowcord-edit-stage canvas { position: absolute; inset: 0; margin: auto; display: block; max-width: calc(100% - 48px); max-height: calc(100% - 48px); width: auto; height: auto; touch-action: none; }
+.lowcord-edit-strip { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border-subtle, rgb(255 255 255 / .06)); }
+.lowcord-edit-strip img { width: 44px; height: 32px; object-fit: cover; border-radius: 4px; opacity: .45; }
+.lowcord-edit-strip img.is-done { opacity: .7; }
+.lowcord-edit-strip img.is-current { opacity: 1; outline: 2px solid var(--brand-500, #5865f2); outline-offset: 1px; }
+.lowcord-edit-strip span { margin-left: auto; font-size: 12px; color: var(--text-muted, #949ba4); }
+.lowcord-edit-panel { display: flex; flex-direction: column; gap: 20px; min-height: 0; overflow-y: auto; padding: 16px; border-left: 1px solid var(--border-subtle, rgb(255 255 255 / .06)); }
+.lowcord-edit-panel header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.lowcord-edit-panel h2 { margin: 0; font-size: 16px; line-height: 20px; font-weight: 600; color: var(--header-primary, #f2f3f5); }
+.lowcord-edit-panel .lowcord-settings-close { flex: none; margin: -4px -6px -4px 0; }
+.lowcord-edit-section { display: grid; gap: 8px; }
+.lowcord-edit-section h3 { margin: 0; font-size: 12px; line-height: 16px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--text-muted, #949ba4); }
+.lowcord-edit-section p { margin: 0; font-size: 13px; line-height: 18px; color: var(--text-muted, #949ba4); }
+.lowcord-edit-ratios { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.lowcord-edit-chip, .lowcord-edit-icon, .lowcord-edit-toggle {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; padding: 0 8px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border-subtle, rgb(255 255 255 / .1)); background: transparent; color: var(--text-normal, #dbdee1);
+    font: inherit; font-size: 13px; font-weight: 500; line-height: 1;
+}
+.lowcord-edit-chip:hover, .lowcord-edit-icon:hover, .lowcord-edit-toggle:hover { background: var(--background-modifier-hover, rgb(255 255 255 / .06)); }
+.lowcord-edit-chip[aria-pressed="true"], .lowcord-edit-toggle[aria-pressed="true"] {
+    border-color: var(--brand-500, #5865f2); background: color-mix(in srgb, var(--brand-500, #5865f2) 18%, transparent); color: var(--interactive-active, #fff);
+}
+.lowcord-edit-icons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.lowcord-edit-icon { flex-direction: column; gap: 3px; padding: 0; height: 48px; color: var(--interactive-normal, #b5bac1); font-size: 11px; font-weight: 500; }
+.lowcord-edit-icon:hover { color: var(--interactive-active, #fff); }
+.lowcord-edit-icon svg, .lowcord-edit-toggle svg { flex: none; }
+.lowcord-edit-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; }
+.lowcord-edit-toggle { flex: 1; justify-content: flex-start; padding: 0 10px; }
+.lowcord-edit-link { padding: 4px 6px; border: 0; border-radius: 4px; background: none; color: var(--text-link, #00a8fc); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+.lowcord-edit-link:hover:not(:disabled) { text-decoration: underline; }
+.lowcord-edit-link:disabled { color: var(--text-muted, #949ba4); opacity: .5; cursor: default; }
+.lowcord-edit-link[hidden] { display: none; }
+.lowcord-edit-historybar { display: flex; align-items: center; justify-content: space-between; margin-top: -6px; padding: 2px; border-radius: 8px; background: var(--background-modifier-hover, rgb(255 255 255 / .04)); }
+.lowcord-edit-historybar > span { display: flex; gap: 2px; }
+.lowcord-edit-history-button { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--interactive-normal, #b5bac1); cursor: pointer; }
+.lowcord-edit-history-button:hover:not(:disabled), .lowcord-edit-history-button[aria-pressed="true"] { background: var(--background-modifier-selected, rgb(255 255 255 / .1)); color: var(--interactive-active, #fff); }
+.lowcord-edit-history-button:disabled { opacity: .35; cursor: default; }
+.lowcord-edit-reset { height: 30px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text-feedback-critical, var(--text-danger, #f23f43)); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+.lowcord-edit-reset:hover:not(:disabled) { background: color-mix(in srgb, var(--text-feedback-critical, var(--text-danger, #f23f43)) 14%, transparent); }
+.lowcord-edit-reset:disabled { opacity: .4; cursor: default; }
+.lowcord-edit-footer { display: grid; gap: 8px; margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border-subtle, rgb(255 255 255 / .06)); }
+.lowcord-edit-footer .lowcord-capture-count { font-size: 12px; color: var(--text-muted, #949ba4); font-variant-numeric: tabular-nums; }
+.lowcord-edit-footer .lowcord-button { width: 100%; justify-content: center; }
+.lowcord-edit-skip { background: transparent !important; color: var(--text-muted, #949ba4) !important; }
+.lowcord-edit-skip:hover { color: var(--text-normal, #dbdee1) !important; text-decoration: underline; }
+:is(.lowcord-edit-chip, .lowcord-edit-icon, .lowcord-edit-toggle, .lowcord-edit-link, .lowcord-edit-history-button, .lowcord-edit-reset):focus-visible { outline: 2px solid var(--brand-500, #5865f2); outline-offset: 2px; }
+@media (max-width: 640px) {
+    .lowcord-edit-preview { grid-template-columns: 1fr; grid-template-rows: minmax(200px, 1fr) auto; }
+    .lowcord-edit-panel { border-left: 0; border-top: 1px solid var(--border-subtle, rgb(255 255 255 / .06)); max-height: 50vh; }
+}
 
 .lowcord-privacy-shortcut { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .lowcord-privacy-keys { min-width: 88px; height: 32px; padding: 0 12px; border: 1px solid var(--border-subtle, rgb(148 155 164 / .3)); border-radius: 6px; background: var(--background-secondary, #2b2d31); color: var(--text-normal, #f2f3f5);

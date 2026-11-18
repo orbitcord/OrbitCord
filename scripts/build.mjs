@@ -65,7 +65,7 @@ export async function buildPreload({ sourceRoot = root, output = join(sourceRoot
     const [videoCompression, videoCompressionCSS] = await Promise.all(['video-compression.js', 'video-compression.css'].map(read));
     const [mediaSources,mediaSourcesCSS]=await Promise.all(['media-sources.js','media-sources.css'].map(read));
     const imageDrop = await read('image-drop.js');
-    const extraScripts = await Promise.all(['split-messages.js', 'read-all.js', 'call-timer.js', 'online-friends.js', 'translate.js', 'spellcheck.js', 'quick-reactions.js', 'embed-images.js', 'zip-preview.js', 'gif-captioner.js', 'tenor.js'].map(read));
+    const extraScripts = await Promise.all(['split-messages.js', 'read-all.js', 'call-timer.js', 'online-friends.js', 'translate.js', 'spellcheck.js', 'quick-reactions.js', 'command-palette.js', 'embed-images.js', 'zip-preview.js', 'gif-captioner.js', 'tenor.js'].map(read));
     const extraStyles = await Promise.all(['ui-extras.css', 'media-extras.css', 'gif-captioner.css'].map(read));
     const [privacyCore, privacyMedia, privacy, privacyCSS, imageCover] = await Promise.all(['privacy-core.js', 'privacy-media.js', 'privacy.js', 'privacy.css', 'image-cover.js'].map(read));
     const contents = `const { contextBridge, ipcRenderer, webFrame } = require('electron');

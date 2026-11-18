@@ -23,12 +23,7 @@ test.beforeEach(async ({ page }) => {
                 { index: 1, type: 'video', animated: true, src: '/media/sample.mp4', thumb: null }] };
         window.__LOWCORD_NATIVE__ = { reddit: async (action, ...args) => {
             if (action === 'search') return { items: [image, gallery], after: null, account: fixture.account ?? null };
-            if (action === 'login') return fixture.clientId === null ? { error: 'not-configured' } : new Promise(resolve => { fixture.finishLogin = resolve; });
-            if (action === 'setup') return { clientId: fixture.clientId ?? '', redirect: 'http://127.0.0.1:65010/reddit_callback' };
-            if (action === 'configure') {
-                if (!/^[\w-]{10,40}$/.test(args[0])) return { error: 'invalid-client-id' };
-                fixture.clientId = args[0]; return { clientId: args[0] };
-            }
+            if (action === 'login') return new Promise(resolve => { fixture.finishLogin = resolve; });
             if (action === 'prepare') {
                 const [key, limit, selection] = args;
                 fixture.prepares.push({ key, limit, selection });
@@ -116,40 +111,20 @@ test('right-clicking a gallery item sends just that item and keeps the gallery o
     await expect(page.getByRole('menu')).toBeHidden();
 });
 
-test('logging in waits for the browser and then shows the Reddit account', async ({ page }) => {
+test('logging in waits for the Reddit login window and then shows the account', async ({ page }) => {
     await page.getByRole('button', { name: 'Log in to Reddit' }).click();
-    await expect(page.getByText('Finish logging in to Reddit in your browser.')).toBeVisible();
+    await expect(page.getByText('Finish logging in to Reddit in the new window.')).toBeVisible();
     await page.evaluate(() => {
         redditFixture.account = { name: 'fixture_user', nsfw: false };
         redditFixture.finishLogin({ account: redditFixture.account });
     });
     await expect(page.getByRole('button', { name: 'Signed in as u/fixture_user. Account options' })).toBeVisible();
-    await expect(page.getByText('Finish logging in to Reddit in your browser.')).toBeHidden();
+    await expect(page.getByText('Finish logging in to Reddit in the new window.')).toBeHidden();
 });
 
-test('a cancelled browser sign-in leaves the picker signed out', async ({ page }) => {
+test('closing the login window leaves the picker signed out', async ({ page }) => {
     await page.getByRole('button', { name: 'Log in to Reddit' }).click();
     await page.evaluate(() => redditFixture.finishLogin({ account: null }));
-    await expect(page.getByText('Reddit sign-in was cancelled.')).toBeVisible();
+    await expect(page.getByText('Reddit login was closed before signing in.')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Log in to Reddit' })).toBeVisible();
-});
-
-test('without a Reddit app, logging in walks through setup and then signs in', async ({ page }) => {
-    await page.evaluate(() => { redditFixture.clientId = null; });
-    await page.getByRole('button', { name: 'Log in to Reddit' }).click();
-    const setup = page.getByRole('group', { name: 'Connect Reddit' });
-    await expect(setup).toBeVisible();
-    await expect(setup.getByRole('link', { name: 'reddit.com/prefs/apps' })).toHaveAttribute('href', 'https://www.reddit.com/prefs/apps');
-    await expect(setup.getByText('http://127.0.0.1:65010/reddit_callback')).toBeVisible();
-    await expect(page.getByText(/not set up/)).toHaveCount(0);
-    await setup.getByLabel('Client ID').fill('not valid!');
-    await setup.getByRole('button', { name: 'Save and log in' }).click();
-    await expect(setup.getByRole('alert')).toHaveText(/not a client ID/);
-    await setup.getByLabel('Client ID').fill('p-jcoLKBynTLew');
-    await setup.getByRole('button', { name: 'Save and log in' }).click();
-    await expect(setup).toBeHidden();
-    await expect(page.getByText('Finish logging in to Reddit in your browser.')).toBeVisible();
-    await page.evaluate(() => { redditFixture.account = { name: 'fixture_user' }; redditFixture.finishLogin({ account: redditFixture.account }); });
-    await expect(page.getByRole('button', { name: 'Signed in as u/fixture_user. Account options' })).toBeVisible();
-    expect(await page.evaluate(() => redditFixture.clientId)).toBe('p-jcoLKBynTLew');
 });

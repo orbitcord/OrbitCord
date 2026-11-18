@@ -120,4 +120,5 @@
     }
     window.addEventListener(changeEvent, sync);
     sync();
+    window.Lowcord.readAll = { markAll };
 })();

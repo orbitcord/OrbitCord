@@ -6,10 +6,9 @@ const { createMediaCache } = require('./media-cache.cjs');
 const { muxToFile } = require('./mp4-mux.cjs');
 const { compressVideo } = require('./video-compress.cjs');
 
-// Reddit browsing for the composer picker. Signed in (`auth`, see
-// reddit-auth.cjs), listings come from Reddit's OAuth API, so the person sees
-// their own feed, saved posts and mature-content preference; Discord
-// credentials are never sent.
+// Reddit browsing for the composer picker. Listings are read with the Reddit
+// session (`fetchAccount`), so a signed-in user sees their own feed, saved
+// posts and mature-content preference; Discord credentials are never sent.
 // Media is fetched from Reddit's and Imgur's CDNs without cookies and reaches
 // the page only as opaque `lowcord-media://reddit/<token>` URLs.
 // Signed out, Reddit refuses anonymous listings except on api.reddit.com for
@@ -97,7 +96,7 @@ function mediaOf(post) {
     return null;
 }
 
-function createReddit({ auth = { token: async () => null, expire() {} }, userAgent = 'desktop:orbitcord', fetchApi = fetch, fetchMedia = fetch, compress = compressVideo, mux = muxToFile, tempRoot = tmpdir() } = {}) {
+function createReddit({ fetchAccount = fetch, fetchMedia = fetch, compress = compressVideo, mux = muxToFile, tempRoot = tmpdir() } = {}) {
     const entries = new Map(), jobs = new Map(), browsing = new Map(), assets = new Map(), listings = new Map();
     const lifetime = new AbortController();
     const files = createMediaCache({ directory: tempRoot });
@@ -115,15 +114,11 @@ function createReddit({ auth = { token: async () => null, expire() {} }, userAge
         }
         return Buffer.concat(parts);
     }
-    async function json(path, signal, retry = true) {
-        const token = await auth.token();
-        const response = token ? await fetchApi(`https://oauth.reddit.com${path.replace(/\.json(?=\?|$)/, '')}`, {
-            headers: { accept: 'application/json', authorization: `bearer ${token}`, 'user-agent': userAgent },
-            credentials: 'omit', redirect: 'follow', signal: signalFor(signal, 15_000) })
+    async function json(path, signal, signedIn = Boolean(me)) {
+        const response = signedIn ? await fetchAccount(`https://www.reddit.com${path}`, { headers: { accept: 'application/json' },
+            redirect: 'follow', signal: signalFor(signal, 15_000) })
             : await fetchMedia(`https://api.reddit.com${path.replace(/\.json(?=\?|$)/, '')}`, { headers: { accept: 'application/json', 'user-agent': bot },
                 credentials: 'omit', redirect: 'follow', signal: signalFor(signal, 15_000) });
-        // An access token Reddit stopped accepting: refresh once.
-        if (token && response.status === 401 && retry) { await response.body?.cancel(); auth.expire(token); return json(path, signal, false); }
         if (!response.ok) {
             await response.body?.cancel();
             throw fail(response.status === 429 ? 'rate-limited' : response.status === 403 ? 'forbidden' : response.status === 404 ? 'not-found' : `http-${response.status}`);
@@ -132,14 +127,13 @@ function createReddit({ auth = { token: async () => null, expire() {} }, userAge
         return JSON.parse((await read(response, 4 * 1024 * 1024)).toString('utf8'));
     }
     async function account(refresh = false) {
-        // A refresh token Reddit revoked signs out without asking again.
-        if (me !== undefined && !refresh && (!me || await auth.token())) return me;
-        if (!await auth.token()) me = null;
-        else {
-            const data = await json('/api/v1/me?raw_json=1');
+        if (me !== undefined && !refresh) return me;
+        try {
+            const result = await json('/api/me.json?raw_json=1', undefined, true);
+            const data = result?.data ?? result;
             me = typeof data?.name === 'string' && /^[\w-]{1,30}$/.test(data.name)
                 ? { name: data.name, nsfw: data.over_18 === true } : null;
-        }
+        } catch (error) { if (error.code !== 'forbidden') throw error; me = null; }
         listings.clear();
         return me;
     }

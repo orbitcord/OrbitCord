@@ -364,10 +364,11 @@
             let images = 0, videos = 0;
             const keep = file => { output.push(file); unchanged.push(file.name); };
             try {
+                const reviewing = cover ? files.filter(file => !prepared.has(file) && cover.supports(file)) : [];
                 for (let file of files) {
                     if (prepared.has(file)) { output.push(file); continue; }
                     if (cover?.supports(file)) {
-                        file = await cover.review(file);
+                        file = await cover.review(file, { index: reviewing.indexOf(file), total: reviewing.length, queue: reviewing });
                         if (!file) continue;
                     }
                     if (!cleanable(file)) { output.push(file); continue; }
@@ -685,7 +686,7 @@
         }
         const details = {
             cover: () => [header('cover', 'Hides names, addresses, faces and anything else in an image before it reaches the message box.'),
-                section('How to use it', facts([['Message bar', 'Open the actions button and choose Cover image details'], ['Ask before attaching', 'When on, each image you paste, drop or choose opens the editor first']])),
+                section('How to use it', facts([['Message bar', 'Open the actions button and choose Edit photos'], ['Ask before attaching', 'When on, each image you paste, drop or choose opens the editor first']])),
                 note('Covered areas are replaced with solid pixels, so they cannot be recovered from the attached file. Animated images are not supported.')],
             walkAway: () => [header('walkAway', 'Protects your call if you step away. When your computer locks or sleeps, OrbitCord turns off what others can hear and see.'),
                 section('What happens', list('kept', ['Your microphone is muted', 'Your camera turns off', 'Your screen share stops'])),

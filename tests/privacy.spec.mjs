@@ -315,7 +315,7 @@ test('asking before attaching covers pixels permanently and cancelling attaches 
     await page.evaluate(() => Lowcord.privacy.set({ coverAsk: true }));
     const buffer = Buffer.from(await whitePng(page));
     await page.getByLabel('Cover test').setInputFiles({ name: 'address.png', mimeType: 'image/png', buffer });
-    const canvas = page.locator('.lowcord-cover-stage canvas');
+    const canvas = page.locator('.lowcord-edit-stage canvas');
     await expect(canvas).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(canvas).toHaveCount(0);
@@ -335,6 +335,56 @@ test('asking before attaching covers pixels permanently and cancelling attaches 
         return [[...context.getImageData(60, 50, 1, 1).data], [...context.getImageData(190, 50, 1, 1).data]];
     })).toEqual([[0, 0, 0, 255], [255, 255, 255, 255]]);
     expect(await page.evaluate(() => Lowcord.privacy.report.totals.covered)).toBe(1);
+});
+test('the editor rotates, crops to a shape and flips before attaching', async ({ page }, info) => {
+    await setup(page); await attachedFile(page);
+    await page.evaluate(() => Lowcord.privacy.set({ coverAsk: true }));
+    // Left half red, right half blue.
+    const buffer = Buffer.from(await page.evaluate(async () => {
+        const canvas = new OffscreenCanvas(200, 100), context = canvas.getContext('2d');
+        context.fillStyle = '#f00'; context.fillRect(0, 0, 100, 100); context.fillStyle = '#00f'; context.fillRect(100, 0, 100, 100);
+        return [...new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer())];
+    }));
+    await page.getByLabel('Cover test').setInputFiles({ name: 'halves.png', mimeType: 'image/png', buffer });
+    await expect(page.getByRole('heading', { name: 'Edit image' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Cover areas' })).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: 'Rotate right' }).click();
+    await page.getByRole('button', { name: 'Square' }).click();
+    await page.getByRole('button', { name: 'Flip vertically' }).click();
+    await expect(page.locator('.lowcord-capture-count')).toHaveText('100 × 100');
+    await page.screenshot({ path: info.outputPath('edit-image.png') });
+    // Holding compare shows the untouched 200 × 100 original, then the edit again.
+    const compare = page.getByRole('button', { name: 'Hold to see the original' });
+    await compare.hover(); await page.mouse.down();
+    await expect.poll(() => page.locator('.lowcord-edit-stage canvas').evaluate(node => node.width / node.height)).toBe(2);
+    await page.mouse.up();
+    await expect.poll(() => page.locator('.lowcord-edit-stage canvas').evaluate(node => node.width / node.height)).toBe(1 / 2);
+    await page.getByRole('button', { name: 'Undo' }).click();
+    await page.getByRole('button', { name: 'Redo' }).click();
+    await page.getByRole('button', { name: 'Undo' }).click();
+    await expect(page.getByRole('button', { name: 'Redo' })).toBeEnabled();
+    await page.getByRole('button', { name: 'Flip vertically' }).click();
+    await expect(page.getByRole('button', { name: 'Redo' })).toBeDisabled();
+    await page.getByRole('button', { name: 'Attach image' }).click();
+    await expect.poll(() => page.evaluate(() => privacyFixture.attached?.name)).toBe('halves.png');
+    // Turned clockwise, red is on top; the flip puts blue on top of the square.
+    expect(await page.evaluate(async () => {
+        const bitmap = await createImageBitmap(privacyFixture.attached), canvas = new OffscreenCanvas(bitmap.width, bitmap.height), context = canvas.getContext('2d');
+        context.drawImage(bitmap, 0, 0);
+        return [bitmap.width, bitmap.height, [...context.getImageData(50, 20, 1, 1).data], [...context.getImageData(50, 80, 1, 1).data]];
+    })).toEqual([100, 100, [0, 0, 255, 255], [255, 0, 0, 255]]);
+});
+test('an image left unchanged in the editor attaches as the original file', async ({ page }) => {
+    await setup(page); await attachedFile(page);
+    await page.evaluate(() => Lowcord.privacy.set({ coverAsk: true }));
+    const buffer = Buffer.from(await whitePng(page));
+    await page.getByLabel('Cover test').setInputFiles({ name: 'plain.png', mimeType: 'image/png', buffer });
+    await page.getByRole('button', { name: 'Rotate left' }).click();
+    await page.getByRole('button', { name: 'Rotate right' }).click();
+    await page.getByRole('button', { name: 'Flip horizontally' }).click();
+    await page.getByRole('button', { name: 'Flip horizontally' }).click();
+    await page.getByRole('button', { name: 'Attach image' }).click();
+    await expect.poll(() => page.evaluate(() => privacyFixture.attached?.size)).toBe(buffer.length);
 });
 test('videos lose their metadata on the way to the composer and report it', async ({ page }) => {
     await setup(page); await attachedFile(page);
