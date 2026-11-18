@@ -10,8 +10,8 @@ Windows automatically checks after startup and daily, downloads in the backgroun
 
 ## Legacy 0.1.5.1 installations
 
-Those installers displayed `0.1.5.1` but stored `0.1.5-1` as the app version. Windows selected numeric prerelease channel `1`. Each release also publishes a `vX.Y.Z-1` compatibility prerelease with `1.yml` and the same stable Windows installer. It lets those old clients discover and install the stable version; the updated app explicitly uses the stable channel thereafter. The compatibility prerelease is never marked latest.
+Those installers displayed `0.1.5.1` but stored `0.1.5-1` as the app version. Windows selected numeric prerelease channel `1`. The compatibility releases for that channel have been retired. Users still on that version need to install the latest stable Windows release manually. After that, the app uses the stable update channel.
 
 The macOS 0.1.5.1 updater rejected its own version before contacting GitHub. It requires one manual upgrade from the stable release page. This cannot be repaired remotely in the already installed code. Other older Mac versions with working checks show the stable release, and 0.1.7 and later support the settings download flow.
 
-Use stable semantic versions such as `0.1.7` and `0.1.8`. Do not put a fourth revision or a prerelease suffix in `package.json` for a stable release. The `-1` suffix is only for the compatibility release's tag, not the app version.
+Use stable semantic versions such as `0.1.7` and `0.1.8`. Do not put a fourth revision or a prerelease suffix in `package.json` for a stable release.

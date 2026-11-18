@@ -148,22 +148,13 @@ jobs:
           merge-multiple: true
       - name: Validate both installers, versions and update checksums before publication
         run: node scripts/release-assets.mjs release-files
-      - name: Publish the stable release and legacy Windows update bridge
+      - name: Publish the stable release
         shell: bash
         run: |
           set -euo pipefail
           TAG="v$VERSION"
-          BRIDGE="$TAG-1"
-          EXE="release-files/OrbitCord-$VERSION-windows-x64-Setup.exe"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "OrbitCord $VERSION" --generate-notes
           fi
           gh release upload "$TAG" release-files/* --clobber
-          if ! gh release view "$BRIDGE" >/dev/null 2>&1; then
-            gh release create "$BRIDGE" --draft --prerelease --target "$GITHUB_SHA" \
-              --title "OrbitCord $VERSION — legacy Windows update bridge" \
-              --notes "Compatibility feed for Windows 0.1.5.1 installations. The installer is the stable OrbitCord $VERSION build. New installations should use the stable release."
-          fi
-          gh release upload "$BRIDGE" "$EXE" "$EXE.blockmap" release-files/1.yml release-files/latest.yml --clobber
-          gh release edit "$BRIDGE" --draft=false --prerelease
           gh release edit "$TAG" --draft=false --prerelease=false --latest
