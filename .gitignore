@@ -6,3 +6,6 @@ src-tauri/gen/
 .DS_Store
 .lowcord/
 dist/
+/.cursor/hooks/state/
+/output/privacy/
+/test-results/

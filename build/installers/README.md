@@ -6,6 +6,6 @@ Windows uses the standard NSIS MUI2 wizard geometry throughout welcome, license,
 
 Run `pnpm installer:artwork` to regenerate the artwork from `scripts/installer-artwork.mjs` using the existing app icon. The generated files are checked in so packaging requires no artwork renderer. Playwright's Chromium is needed only when regenerating them.
 
-To regenerate only Windows artwork, run `node scripts/installer-artwork.mjs --win`. The full-page Windows BMP/PNG files are retained as design previews; the installer uses only the header and sidebar BMPs.
+To regenerate the Windows header and sidebar, run `node scripts/installer-artwork.mjs --win`.
 
 Build both installers on macOS with `pnpm build:installers`, or use `pnpm build:mac` and `pnpm build:win` individually. Files are written to `dist/`.

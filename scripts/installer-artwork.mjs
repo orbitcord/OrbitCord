@@ -68,24 +68,12 @@ try {
         await page.close();
     }
     const designs = [
-        // 2x artwork is downsampled with HALFTONE by the Windows UI. Text and
-        // keyboard-accessible buttons are native controls layered above it.
-        ['windows-background.bmp', 1440, 840, `${frost(1440, 840)}<image href="${icon}" x="608" y="56" width="224" height="224"/>`],
-        ['windows-finish.bmp', 1440, 840, `${frost(1440, 840)}
-            <circle cx="720" cy="188" r="112" fill="#fff" fill-opacity=".48"/>
-            <image href="${icon}" x="640" y="108" width="160" height="160"/>
-            <circle cx="786" cy="254" r="31" fill="#fff"/>
-            <circle cx="786" cy="254" r="26" fill="#247bf3"/>
-            <path d="m774 254 8 8 16-18" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>`],
         ['windows-header.bmp', 150, 57, `<rect width="150" height="57" fill="#eaf2ff"/><image href="${icon}" x="100" y="11" width="36" height="36"/>`],
         ['windows-sidebar.bmp', 164, 314, `${frost(164, 314)}<image href="${icon}" x="38" y="106" width="88" height="88"/>`],
     ];
     for (const [file, width, height, content] of designs) {
         const page = await render(width, height, content);
         await bmp(page, file, width, height);
-        if (file === 'windows-background.bmp' || file === 'windows-finish.bmp') {
-            await page.screenshot({ path: join(out, file.replace('.bmp', '.png')) });
-        }
         await page.close();
     }
 } finally { await browser.close(); }
