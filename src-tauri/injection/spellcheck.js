@@ -6,7 +6,8 @@
     // ----- Spellcheck ----------------------------------------------------------
     // Chromium checks spelling per session; each account window applies its
     // own saved choice. The result lists the dictionaries the settings can offer.
-    const spellcheck = window.Lowcord.spellcheck = { languages: [], active: [] };
+    const spellcheckEvent = "lowcord-spellcheck-change";
+    const spellcheck = window.Lowcord.spellcheck = { languages: [], active: [], changeEvent: spellcheckEvent };
     let applied = "";
     function sync() {
         if (!native?.spellcheck) return;
@@ -17,7 +18,7 @@
         native.spellcheck(settings).then(result => {
             const changed = JSON.stringify(result.languages) !== JSON.stringify(spellcheck.languages);
             Object.assign(spellcheck, { languages: result.languages, active: result.active });
-            if (changed) window.dispatchEvent(new Event(extensions.changeEvent));
+            if (changed) window.dispatchEvent(new Event(spellcheckEvent));
         }, error => {
             // A saved dictionary this system doesn't have falls back to the system's.
             if (settings.language !== "auto") { try { extensions.setOption("spellcheckLanguage", "auto"); } catch {} }
@@ -112,9 +113,12 @@
         last = null;
         if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey) return;
         if (!extensions.enabled("autocorrect")) return;
+        const isSpace = event.key === " " && !event.shiftKey;
+        const isUndo = event.key === "Backspace" && !event.shiftKey && Boolean(previous);
+        if (!isSpace && !isUndo) return;
         const editor = event.target instanceof Element ? event.target.closest(editorSelector) : null;
         if (!editor || editor.closest('[role="dialog"]')) return;
-        if (event.key === " " && !event.shiftKey) {
+        if (isSpace) {
             const found = candidate(editor);
             if (!found) return;
             event.preventDefault();
@@ -125,7 +129,7 @@
         }
         // Backspace right after a fix restores what was typed, minus the space,
         // and keeps that word as typed from then on.
-        if (event.key !== "Backspace" || event.shiftKey || !previous || previous.editor !== editor) return;
+        if (previous.editor !== editor) return;
         const selection = getSelection(), node = selection?.focusNode;
         if (!selection?.isCollapsed || node?.nodeType !== Node.TEXT_NODE || !editor.contains(node)) return;
         const offset = selection.focusOffset, typed = node.data.slice(0, offset).replace(/\u00a0$/, " ");

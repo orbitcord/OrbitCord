@@ -153,9 +153,11 @@ function setupLowcordSettings() {
     // instead, so both stay signed in.
     const submenuPrefix = "switch-accounts-submenu-";
     const switchTarget = event => {
-        let item = event.target?.closest?.(`[role="menuitem"][id^="${submenuPrefix}"]`);
+        const menu = document.getElementById("switch-accounts-submenu");
+        if (!menu || !(event.target instanceof Node) || !menu.contains(event.target)) return null;
+        let item = event.target instanceof Element ? event.target.closest(`[role="menuitem"][id^="${submenuPrefix}"]`) : null;
         // Keyboard activation targets the menu; the focused item is active.
-        if (!item && event.type === "keydown") item = event.target?.closest?.(`#switch-accounts-submenu`)?.querySelector('[role="menuitem"][class*="focused"]');
+        if (!item && event.type === "keydown") item = menu.querySelector('[role="menuitem"][class*="focused"]');
         const userId = item?.id.slice(submenuPrefix.length);
         if (!userId || !/^\d+$/.test(userId) || userId === window.Lowcord.store("UserStore")?.getCurrentUser?.()?.id) return null;
         return { item, userId, name: item.textContent.trim() };
@@ -396,8 +398,13 @@ function setupLowcordSettings() {
         });
         React.useEffect(() => {
             const update = () => { setState(extensions.state); setOptions(extensions.options); };
+            const spellEvent = window.Lowcord.spellcheck?.changeEvent;
             window.addEventListener(extensions.changeEvent, update);
-            return () => window.removeEventListener(extensions.changeEvent, update);
+            if (spellEvent) window.addEventListener(spellEvent, update);
+            return () => {
+                window.removeEventListener(extensions.changeEvent, update);
+                if (spellEvent) window.removeEventListener(spellEvent, update);
+            };
         }, []);
         const option = (id, value) => {
             try { extensions.setOption(id, value); setError(""); } catch (failure) { setError(failure.message); }
@@ -601,6 +608,7 @@ function setupLowcordSettings() {
             link.removeAttribute("aria-current");
             removed.forEach(([node, names]) => { if (node.isConnected) node.classList.add(...names); });
         } };
+        syncSettingsObserver();
     }
     function closeInline() {
         exitInspector();
@@ -610,11 +618,20 @@ function setupLowcordSettings() {
         current.cleanup();
         current.root.unmount();
         current.host.remove();
+        syncSettingsObserver();
     }
-    window.Lowcord.onDomChange(() => {
-        if (inline && !inline.host.isConnected) closeInline();
-        if (inspector && !inspector.from.isConnected) exitInspector();
-    });
+    let stopSettingsDom;
+    function syncSettingsObserver() {
+        if (inline || inspector) {
+            stopSettingsDom ??= window.Lowcord.onDomChange(() => {
+                if (inline && !inline.host.isConnected) closeInline();
+                if (inspector && !inspector.from.isConnected) exitInspector();
+            });
+        } else if (stopSettingsDom) {
+            stopSettingsDom();
+            stopSettingsDom = undefined;
+        }
+    }
 
     // Live preview: the settings window docks as a narrow panel on the right
     // and its dimming scrim lets clicks through, so Discord beside it stays
@@ -644,6 +661,7 @@ function setupLowcordSettings() {
             document.documentElement.removeAttribute("data-lowcord-inspector");
             window.removeEventListener("keydown", onEscape, true);
         } };
+        syncSettingsObserver();
         window.dispatchEvent(new Event(inspectorEvent));
         return true;
     }
@@ -652,6 +670,7 @@ function setupLowcordSettings() {
         const current = inspector;
         inspector = undefined;
         current.cleanup();
+        syncSettingsObserver();
         window.dispatchEvent(new Event(inspectorEvent));
     }
     window.__lowcordInspector = { enter: enterInspector, exit: exitInspector, get active() { return Boolean(inspector); }, changeEvent: inspectorEvent };

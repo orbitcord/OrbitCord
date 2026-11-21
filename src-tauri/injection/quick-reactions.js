@@ -94,8 +94,10 @@
         return [...toolbar.querySelectorAll('[role="button"], button')].filter(node =>
             !node.closest(`.${extraClass}`) && emojiIn(node) && !node.querySelector("svg"));
     }
+    let hovered = null, hoverFrame, filledItem = null;
     function fillToolbar(toolbar, channelId, messageId) {
-        if (toolbar.querySelector(`.${extraClass}`)) return;
+        const existing = toolbar.querySelector(`.${extraClass}`);
+        if (existing) { filledItem = existing; return; }
         const shown = toolbarReactions(toolbar);
         if (!shown.length || shown.length >= toolbarTotal) return;
         const channel = store("ChannelStore")?.getChannel?.(channelId);
@@ -135,14 +137,18 @@
             button.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") choose(event); });
             after.after(item);
             after = item;
+            filledItem = item;
         }
     }
-    let hovered = null, hoverFrame;
     function onPointerOver(event) {
         if (!(event.target instanceof Element)) return;
+        if (hovered?.isConnected && hovered.contains(event.target)) {
+            if (hoverFrame !== undefined || (filledItem?.isConnected && hovered.contains(filledItem))) return;
+        }
         const row = event.target.closest('[id^="chat-messages-"]');
         if (!row) return;
-        hovered = row;
+        if (row !== hovered) { hovered = row; filledItem = null; }
+        else if (hoverFrame !== undefined || (filledItem?.isConnected && row.contains(filledItem))) return;
         const [, channelId, messageId] = /^chat-messages-(\d+)-(\d+)$/.exec(row.id) ?? [];
         if (!messageId) return;
         if (hoverFrame !== undefined) cancelAnimationFrame(hoverFrame);
@@ -186,6 +192,8 @@
             window.removeEventListener("contextmenu", onContextMenu, true);
             document.removeEventListener("pointerover", onPointerOver, true);
             hovered = null;
+            filledItem = null;
+            if (hoverFrame !== undefined) { cancelAnimationFrame(hoverFrame); hoverFrame = undefined; }
             document.querySelectorAll(`.${extraClass}`).forEach(item => item.remove());
         }
     }

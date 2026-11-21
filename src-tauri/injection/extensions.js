@@ -107,7 +107,11 @@
         options = next;
         window.dispatchEvent(new Event(changeEvent));
     }
+    let lastEmbedPrefs = "";
     function syncEmbedPreferences() {
+        const key = `${state.youtubeAdblock}|${state.musicEmbeds}|${options.musicVolume}|${state.fullQualityImages === true}`;
+        if (key === lastEmbedPrefs) return;
+        lastEmbedPrefs = key;
         window.__LOWCORD_NATIVE__?.setEmbedPreferences?.({ youtubeAdblock: state.youtubeAdblock,
             musicEmbeds: state.musicEmbeds, musicVolume: options.musicVolume, fullQualityImages: state.fullQualityImages === true })?.catch(error => console.warn("[lowcord] Embed settings:", error.message));
     }
@@ -573,8 +577,10 @@
         return true;
     }
 
-    function messageRequest(method, url) {
-        return (method === "POST" || method === "PATCH") && /^\/channels\/\d+\/messages(?:\/\d+)?$/.test(route(url)?.path ?? "");
+    function messageRequest(method, target) {
+        if (method !== "POST" && method !== "PATCH") return false;
+        const path = (typeof target === "string" ? route(target) : target)?.path;
+        return Boolean(path && /^\/channels\/\d+\/messages(?:\/\d+)?$/.test(path));
     }
     function payloadOf(body) {
         try {
@@ -589,8 +595,9 @@
         return form;
     }
     function hasSocialLinks(body) {
+        if (typeof body === "string" && !body.includes("http")) return false;
         const content = payloadOf(body)?.content;
-        if (typeof content !== "string") return false;
+        if (typeof content !== "string" || !content.includes("http")) return false;
         let found = false;
         links.rewrite(content, (target, value) => { if (target.original || generatedSocial.has(value)) found = true; return null; });
         return found;
@@ -624,7 +631,10 @@
         if (channelId) window.Lowcord.Dispatcher?.dispatch({ type: "DELETE_PENDING_REPLY", channelId });
     }
     function replyKey(event) {
-        if (!enabled("quickReply") || event.defaultPrevented || event.isComposing || event.keyCode === 229
+        const isEscape = event.key === "Escape" && !event.shiftKey;
+        const isArrow = event.shiftKey && (event.key === "ArrowUp" || event.key === "ArrowDown");
+        if ((!isEscape && !isArrow) || (isEscape && !replySelection)
+            || !enabled("quickReply") || event.defaultPrevented || event.isComposing || event.keyCode === 229
             || event.altKey || event.ctrlKey || event.metaKey) return;
         const editor = event.target instanceof Element ? event.target.closest('[contenteditable="true"][role="textbox"], textarea') : null;
         if (!editor?.closest('[class*="channelTextArea_"]') || editor.closest('[role="dialog"]')
@@ -632,13 +642,13 @@
         // Let Discord's completion menus keep their own keyboard navigation.
         if (editor.getAttribute("aria-expanded") === "true" || editor.getAttribute("aria-activedescendant")) return;
         reconcileReply();
-        if (event.key === "Escape" && !event.shiftKey && replySelection) {
+        if (isEscape) {
+            if (!replySelection) return;
             event.preventDefault(); event.stopImmediatePropagation();
             cancelQuickReply();
             return;
         }
-        if (!event.shiftKey || !["ArrowUp", "ArrowDown"].includes(event.key)
-            || (editor.value ?? editor.textContent).replace(/[\u200b\ufeff]/g, "").trim()) return;
+        if ((editor.value ?? editor.textContent).replace(/[\u200b\ufeff]/g, "").trim()) return;
         const channelId = window.Lowcord.store("SelectedChannelStore")?.getChannelId();
         const channel = window.Lowcord.store("ChannelStore")?.getChannel(channelId);
         const messages = window.Lowcord.store("MessageStore");
@@ -764,6 +774,7 @@
         return { channel, message, composer };
     }
     function cancelClickReply() {
+        if (clickTimer === undefined) return;
         clearTimeout(clickTimer);
         clickTimer = undefined;
     }
@@ -779,7 +790,7 @@
             else window.Lowcord.Dispatcher?.dispatch({ type: "DELETE_PENDING_REPLY", channelId });
         }
         clickUndo = undefined;
-        clickPress = event.button === 0 && event.detail <= 1
+        clickPress = enabled("clickReply") && event.button === 0 && event.detail <= 1
             ? { x: event.clientX, y: event.clientY, target: event.target, selection: selectionText() } : undefined;
     }
     function clickReply(event) {
@@ -832,27 +843,27 @@
     // promise of a JSON-able body, or null to let the request go to Discord.
     const responders = [];
     function addResponder(respond) { responders.push(respond); return () => responders.splice(responders.indexOf(respond), 1); }
-    function responderFor(method, url) {
+    function responderFor(method, target) {
         if (method !== "GET" || !responders.length) return null;
-        const target = route(url);
-        if (!target?.path) return null;
-        for (const respond of responders) { const answer = respond(target); if (answer) return answer; }
+        const resolved = typeof target === "string" ? route(target) : target;
+        if (!resolved?.path) return null;
+        for (const respond of responders) { const answer = respond(resolved); if (answer) return answer; }
         return null;
     }
     // "ok" answers like the server would, so Discord drops the batch instead of retrying.
-    function decide(method, url) {
-        const target = route(url);
-        if (!target) return null;
-        const { path } = target;
+    function decide(method, target) {
+        const resolved = typeof target === "string" ? route(target) : target;
+        if (!resolved) return null;
+        const { path } = resolved;
         const report = window.Lowcord.privacy?.count;
         if (enabled("silentTyping") && method === "POST" && /^\/channels\/\d+\/typing$/.test(path ?? "")) { report?.("typing"); return "ok"; }
         if (method === "PUT" && reactAsReply(path)) return "ok";
         if (enabled("noTracking")) {
             if (/^\/(science|track|metrics(\/v2)?)$/.test(path ?? "")) { report?.("analytics"); return "ok"; }
             // Discord tunnels Sentry crash reports through its own origin.
-            if (target.url.pathname.startsWith("/error-reporting-proxy/") || /(^|\.)sentry\.io$/.test(target.url.hostname)) { report?.("analytics"); return "ok"; }
+            if (resolved.url.pathname.startsWith("/error-reporting-proxy/") || /(^|\.)sentry\.io$/.test(resolved.url.hostname)) { report?.("analytics"); return "ok"; }
             // The desktop app's local RPC server, which Discord probes before deep linking.
-            if (target.url.hostname === "127.0.0.1" && rpcPorts(target.url.port)) return "fail";
+            if (resolved.url.hostname === "127.0.0.1" && rpcPorts(resolved.url.port)) return "fail";
         }
         return null;
     }
@@ -1151,7 +1162,7 @@
     // Capturing on window runs before Discord's root listeners.
     window.addEventListener("click", pickSticker, true);
     window.addEventListener("keydown", event => {
-        if (event.key === "Enter" || (event.key === " " && event.target instanceof Element && event.target.matches('[data-type="sticker"]'))) pickSticker(event);
+        if (event.key === "Enter" || (event.key === " " && event.target instanceof Element && event.target.getAttribute("data-type") === "sticker")) pickSticker(event);
     }, true);
 
     // Received links, from OrbitCord or Vencord's Fake Nitro, show as the emoji
@@ -1166,11 +1177,14 @@
     }
     function showFakeNitro(message) {
         if (!message || typeof message !== "object") return;
-        showFakeNitro(message.referenced_message);
-        for (const snapshot of Array.isArray(message.message_snapshots) ? message.message_snapshots : []) showFakeNitro(snapshot?.message);
-        const keys = new Set();
+        if (message.referenced_message) showFakeNitro(message.referenced_message);
+        const snapshots = message.message_snapshots;
+        if (Array.isArray(snapshots)) {
+            for (let i = 0; i < snapshots.length; i++) if (snapshots[i]?.message) showFakeNitro(snapshots[i].message);
+        }
+        let keys = null;
         if (typeof message.content === "string" && message.content.includes("discordapp.")) {
-            const stickers = [...(Array.isArray(message.sticker_items) ? message.sticker_items : [])], links = [];
+            const stickers = Array.isArray(message.sticker_items) ? message.sticker_items.slice() : [], links = [];
             const content = message.content.replace(receivedLink, (match, code, text, maskedKind, maskedId, maskedType, kind = maskedKind, id = maskedId, type = maskedType) => {
                 if (code) return match;
                 const url = new URL(text === undefined ? match : match.slice(match.lastIndexOf("](") + 2, -1));
@@ -1179,15 +1193,15 @@
                     const known = store("StickersStore")?.getStickerById?.(id);
                     stickers.push({ id, name: known?.name ?? text ?? "Sticker", format_type: known?.format_type ?? (type === "gif" ? 4 : 1) });
                     links.push(match);
-                    keys.add(`stickers/${id}`);
+                    (keys ??= new Set()).add(`stickers/${id}`);
                     return "";
                 }
                 const name = (url.searchParams.get("name") ?? text ?? "").replace(/\W/g, "_").slice(0, 32);
                 if (text === undefined && !url.searchParams.has("name")) return match;
-                keys.add(`emojis/${id}`);
+                (keys ??= new Set()).add(`emojis/${id}`);
                 return `<${type === "gif" || url.searchParams.get("animated") === "true" ? "a" : ""}:${name.length >= 2 ? name : "emoji"}:${id}>`;
             });
-            if (keys.size) {
+            if (keys?.size) {
                 message.content = content.trim();
                 if (stickers.length) message.sticker_items = stickers;
                 if (links.length && message.id && message.author?.id === store("UserStore")?.getCurrentUser?.()?.id) {
@@ -1201,8 +1215,8 @@
             }
         }
         // An embed update can arrive without the content it belongs to.
-        if (Array.isArray(message.embeds) && message.embeds.length && (keys.size || (message.content === undefined && shownMessages.has(message.id))))
-            message.embeds = message.embeds.filter(embed => { const key = linkKey(embed?.url); return !key || (keys.size && !keys.has(key)); });
+        if (Array.isArray(message.embeds) && message.embeds.length && (keys?.size || (message.content === undefined && shownMessages.has(message.id))))
+            message.embeds = message.embeds.filter(embed => { const key = linkKey(embed?.url); return !key || (Boolean(keys?.size) && !keys.has(key)); });
     }
     window.Lowcord.waitFor(window.Lowcord.filters.byProps("dispatch", "subscribe", "addInterceptor"), dispatcher => {
         dispatcher.addInterceptor(action => {
@@ -1213,15 +1227,24 @@
                     if (emoji) { replyWithEmoji(action.channelId, action.messageId, emoji); return true; }
                 }
                 if (action.message) showFakeNitro(action.message);
-                if (Array.isArray(action.messages)) for (const message of action.messages.flat()) showFakeNitro(message);
+                const list = action.messages;
+                if (Array.isArray(list)) {
+                    for (let i = 0; i < list.length; i++) {
+                        const item = list[i];
+                        if (Array.isArray(item)) {
+                            for (let j = 0; j < item.length; j++) showFakeNitro(item[j]);
+                        } else showFakeNitro(item);
+                    }
+                }
             } catch (error) { console.warn("[lowcord] Fake Nitro:", error); }
             return false;
         });
     });
 
     // Returns a replacement body, or undefined to send the original.
-    function rewrite(method, url, body) {
-        const path = route(url)?.path;
+    function rewrite(method, target, body) {
+        if (method !== "POST" && method !== "PATCH") return undefined;
+        const path = (typeof target === "string" ? route(target) : target)?.path;
         if (!path || (!enabled("anonymiseFileNames") && !enabled("cleanUrls") && !enabled("socialEmbeds") && !enabled("musicEmbeds") && !enabled("fakeNitro") && !videos.size)) return undefined;
         const upload = method === "POST" && /^\/channels\/\d+\/attachments$/.test(path);
         const message = (method === "POST" || method === "PATCH") && /^\/channels\/\d+\/messages(\/\d+)?$/.test(path);
@@ -1278,8 +1301,10 @@
     // enforce_nonce, so a slow first attempt, like a reply that accepts a
     // message request, could post twice. With it, the server returns the
     // message it already made for that nonce instead of a second copy.
-    function withEnforcedNonce(method, url, body) {
-        if (method !== "POST" || !/^\/channels\/\d+\/messages$/.test(route(url)?.path ?? "")) return body;
+    function withEnforcedNonce(method, target, body) {
+        if (method !== "POST") return body;
+        const path = (typeof target === "string" ? route(target) : target)?.path;
+        if (!path || !/^\/channels\/\d+\/messages$/.test(path)) return body;
         const data = payloadOf(body);
         if (!data || data.nonce == null || data.nonce === "" || data.enforce_nonce !== undefined) return body;
         data.enforce_nonce = true;
@@ -1336,9 +1361,10 @@
         const meta = this.__lowcord;
         if (meta) {
             if (meta.pending) throw new DOMException("Request already sent", "InvalidStateError");
-            const verdict = decide(meta.method, meta.url);
+            const target = route(meta.url);
+            const verdict = decide(meta.method, target);
             if (verdict) { answer(this, verdict); return; }
-            const responding = meta.async && this.readyState === 1 ? responderFor(meta.method, meta.url) : null;
+            const responding = meta.async && this.readyState === 1 ? responderFor(meta.method, target) : null;
             if (responding) {
                 meta.pending = true;
                 void Promise.resolve(responding).catch(() => null).then(result => {
@@ -1348,19 +1374,21 @@
                 });
                 return;
             }
-            const replacement = rewrite(meta.method, meta.url, body);
-            if (replacement !== undefined) body = replacement;
-            body = withEnforcedNonce(meta.method, meta.url, body);
-            if (meta.async && enabled("socialEmbeds") && window.__LOWCORD_NATIVE__?.resolveSocialLink
-                && messageRequest(meta.method, meta.url) && hasSocialLinks(body)) {
-                if (this.readyState !== 1) return send.call(this, body);
-                meta.pending = true;
-                void checkMessageBody(body).catch(() => body).then(next => {
-                    if (meta.cancelled || this.__lowcord !== meta || this.readyState !== 1) return;
-                    try { meta.sent = true; send.call(this, next); }
-                    catch { this.dispatchEvent(new ProgressEvent("error")); this.dispatchEvent(new ProgressEvent("loadend")); }
-                });
-                return;
+            if (body != null && (meta.method === "POST" || meta.method === "PATCH")) {
+                const replacement = rewrite(meta.method, target, body);
+                if (replacement !== undefined) body = replacement;
+                body = withEnforcedNonce(meta.method, target, body);
+                if (meta.async && enabled("socialEmbeds") && window.__LOWCORD_NATIVE__?.resolveSocialLink
+                    && messageRequest(meta.method, target) && hasSocialLinks(body)) {
+                    if (this.readyState !== 1) return send.call(this, body);
+                    meta.pending = true;
+                    void checkMessageBody(body).catch(() => body).then(next => {
+                        if (meta.cancelled || this.__lowcord !== meta || this.readyState !== 1) return;
+                        try { meta.sent = true; send.call(this, next); }
+                        catch { this.dispatchEvent(new ProgressEvent("error")); this.dispatchEvent(new ProgressEvent("loadend")); }
+                    });
+                    return;
+                }
             }
         }
         return send.call(this, body);
@@ -1391,22 +1419,24 @@
     window.fetch = async function (input, init) {
         const url = input instanceof Request ? input.url : String(input);
         const method = String(init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
-        const verdict = decide(method, url);
+        const target = route(url);
+        const verdict = decide(method, target);
         if (verdict === "ok") return Promise.resolve(new Response(null, { status: 204 }));
         if (verdict === "fail") return Promise.reject(new TypeError("Failed to fetch"));
-        const responding = responderFor(method, url);
+        const responding = responderFor(method, target);
         if (responding) {
             const result = await Promise.resolve(responding).catch(() => null);
             if (result != null) return new Response(JSON.stringify(result), { status: 200, headers: { "content-type": "application/json" } });
         }
         let body = init?.body;
-        const requestBody = body === undefined && input instanceof Request && messageRequest(method, url);
+        const isMsg = messageRequest(method, target);
+        const requestBody = body === undefined && input instanceof Request && isMsg;
         if (requestBody) {
             try { body = await input.clone().text(); } catch { return nativeFetch.call(this, input, init); }
         }
         if (body !== undefined) {
-            body = withEnforcedNonce(method, url, rewrite(method, url, body) ?? body);
-            if (messageRequest(method, url)) body = await checkMessageBody(body);
+            body = withEnforcedNonce(method, target, rewrite(method, target, body) ?? body);
+            if (isMsg) body = await checkMessageBody(body);
             if (requestBody) input = new Request(input, { body });
             else init = { ...init, body };
         }
@@ -1846,13 +1876,42 @@
         placeActions(new Event(changeEvent));
     }
     let actionBars = [], actionsScanned = 0, placedActions = "", actionsMenu;
+    function hasNewComposerBar(records) {
+        for (let i = 0; i < records.length; i++) {
+            const record = records[i];
+            if (record.type === "childList") {
+                const added = record.addedNodes;
+                for (let j = 0; j < added.length; j++) {
+                    const node = added[j];
+                    if (node.nodeType !== 1) continue;
+                    const cls = typeof node.className === "string" ? node.className : "";
+                    if (cls.includes("channelTextArea_")) return true;
+                    if (cls.includes("buttons_") && record.target instanceof Element && record.target.closest('[class*="channelTextArea_"]')) return true;
+                    if (node.childElementCount > 0 && node.querySelector('[class*="channelTextArea_"]')) return true;
+                }
+            } else if (record.type === "attributes" && record.attributeName === "class") {
+                const cls = typeof record.target?.className === "string" ? record.target.className : "";
+                if (cls.includes("channelTextArea_") || cls.includes("buttons_")) return true;
+            }
+        }
+        return false;
+    }
     function placeActions(event) {
-        if (!window.Lowcord.domChanged(event, '[class*="channelTextArea_"]')) return;
+        if (!document.body) return;
+        const isRecords = Array.isArray(event);
         const actions = composerActions.filter(action => enabled(action.id));
         const key = actions.map(action => action.id).join();
-        const settled = key === placedActions && actionBars.length
-            && actionBars.every(bar => bar.isConnected && (!actions.length || bar.querySelector(":scope > .lowcord-actions-button")));
-        if (!event && settled && performance.now() - actionsScanned < 500) return;
+        const settled = key === placedActions && actionBars.length > 0
+            && actionBars.every(bar => bar.isConnected && (!actions.length
+                || bar.firstElementChild?.classList.contains("lowcord-actions-button")
+                || bar.querySelector(":scope > .lowcord-actions-button")));
+        if (isRecords) {
+            if (settled) {
+                if (!hasNewComposerBar(event)) return;
+            } else if (!window.Lowcord.domChanged(event, '[class*="channelTextArea_"]')) {
+                return;
+            }
+        }
         actionsScanned = performance.now();
         if (key !== placedActions) {
             closeActions(true);
@@ -1861,7 +1920,7 @@
         }
         actionBars = [...document.querySelectorAll('[class*="channelTextArea_"] [class*="buttons_"]')];
         for (const bar of actionBars) {
-            if (!actions.length || bar.querySelector(":scope > .lowcord-actions-button")) continue;
+            if (!actions.length || bar.firstElementChild?.classList.contains("lowcord-actions-button") || bar.querySelector(":scope > .lowcord-actions-button")) continue;
             const [only] = actions;
             const button = actions.length === 1
                 ? ui("button", { type: "button", className: "lowcord-actions-button", "aria-label": only.label, title: only.label,
@@ -1929,9 +1988,13 @@
     // Allow playback only for official music embeds. Save the original allow
     // attribute so disabling the plugin restores Discord's own frame policy.
     const musicAllows = new WeakMap();
+    const liveFrames = document.getElementsByTagName("iframe");
     function fixMusicFrames(records) {
+        if (!liveFrames.length) return;
         if (!window.Lowcord.domChanged(records, 'iframe[src]')) return;
-        for (const frame of document.querySelectorAll('iframe[src]')) {
+        for (let i = 0; i < liveFrames.length; i++) {
+            const frame = liveFrames[i];
+            if (!frame.hasAttribute('src')) continue;
             let url;
             try { url = new URL(frame.src); } catch { continue; }
             if (url.protocol !== 'https:' || !(url.hostname === 'embed.music.apple.com'
@@ -1955,7 +2018,7 @@
         cleanContent, socialContent, anonymous, openRecorder, toast, toastBadge, progress, ui, mountComposerPopup, addComposerAction, addResponder,
         get composerActions() { return [...composerActions]; } };
     window.Lowcord.waitForStore("UserStore", store => {
-        let compressing;
+        let compressing = false;
         const update = () => {
             const next = enabled("compressVideos");
             if (next === compressing) return;

@@ -4,6 +4,7 @@
     const { extensions, onDomChange } = window.Lowcord;
     if (!document.pictureInPictureEnabled || !HTMLVideoElement.prototype.requestPictureInPicture) return;
     const scope = '[id^="chat-messages-"], [role="dialog"]';
+    const liveVideos = document.getElementsByTagName('video');
     let target, button, frame, unobserve, resizing, pending = false;
     const enabled = () => extensions.enabled('pictureInPicture');
     function eligible(video) {
@@ -113,19 +114,33 @@
     function underPointer(event) {
         const node = event.target;
         if (!(node instanceof Element) || button?.contains(node)) return;
-        const container = node.closest(scope);
-        const videos = node instanceof HTMLVideoElement ? [node] : container?.querySelectorAll('video') ?? [];
-        const video = [...videos].find(video => {
-            if (!eligible(video)) return false;
-            const box = video.getBoundingClientRect();
-            return event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
-        });
+        let video = null;
+        if (node instanceof HTMLVideoElement) {
+            if (eligible(node)) {
+                const box = node.getBoundingClientRect();
+                if (event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom) video = node;
+            }
+        } else {
+            const container = node.closest(scope);
+            const videos = container?.getElementsByTagName('video');
+            if (videos?.length) {
+                for (let i = 0; i < videos.length; i++) {
+                    const candidate = videos[i];
+                    if (!eligible(candidate)) continue;
+                    const box = candidate.getBoundingClientRect();
+                    if (event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom) {
+                        video = candidate;
+                        break;
+                    }
+                }
+            }
+        }
         if (video) show(video);
         else if (target && !button?.matches(':focus')) hide();
     }
-    document.addEventListener('pointerover', event => { if (enabled()) underPointer(event); }, true);
+    document.addEventListener('pointerover', event => { if (enabled() && (liveVideos.length || target)) underPointer(event); }, true);
     document.addEventListener('focusin', event => {
-        if (!enabled() || button?.contains(event.target)) return;
+        if (!enabled() || (!liveVideos.length && !target) || button?.contains(event.target)) return;
         const node = event.target;
         const video = node instanceof HTMLVideoElement ? node : node.closest?.('[class*="videoWrapper_"], [class*="videoContainer_"]')?.querySelector('video');
         if (video) show(video); else hide();

@@ -880,6 +880,7 @@
             for (const panel of [...list]) close(panel.inst);
             quiet = false;
             restored = false;
+            watchRestore();
         }
         function restore() {
             if (restored || !miniOn()) return;
@@ -890,6 +891,8 @@
             lastTry = Date.now();
             if (!store("ChannelStore")?.getChannel || !store("UserStore")?.getCurrentUser?.()) { later(); return; }
             restored = true;
+            stopRestore?.();
+            stopRestore = null;
             const chats = read();
             quiet = true;
             for (const chat of chats) open(chat.id, chat);
@@ -904,14 +907,30 @@
         return { list, open, close, collapse: inst => { const panel = find(inst); if (panel) setCollapsed(panel, !panel.min); }, teardown, restore };
     })();
 
-    // Restore saved mini chats once Discord's stores are ready.
-    window.Lowcord.onDomChange(() => panels.restore());
+    // Restore saved mini chats once Discord's stores are ready, then stop observing DOM.
+    let stopRestore = null;
+    function watchRestore() {
+        stopRestore ??= window.Lowcord.onDomChange(() => panels.restore());
+    }
+    watchRestore();
 
     // ----- Hover intent ---------------------------------------------------------
-    let openTimer, prefetchTimer;
+    let openTimer, prefetchTimer, dmList = null;
     function rowAt(target) {
-        const row = target?.closest?.(`${listSelector} li`);
-        const link = row?.querySelector('a[href^="/channels/@me/"]');
+        if (!(target instanceof Element)) return null;
+        if (dmList?.isConnected) {
+            if (!dmList.contains(target)) return null;
+            const row = target.closest("li");
+            if (!row || !dmList.contains(row)) return null;
+            const link = row.querySelector('a[href^="/channels/@me/"]');
+            const id = link?.getAttribute("href").split("/")[3];
+            return id ? { row, id } : null;
+        }
+        const row = target.closest("li");
+        const list = row?.closest(listSelector);
+        if (!list) return null;
+        dmList = list;
+        const link = row.querySelector('a[href^="/channels/@me/"]');
         const id = link?.getAttribute("href").split("/")[3];
         return id ? { row, id } : null;
     }
@@ -950,6 +969,7 @@
     }, { passive: true });
     // Clicking a row opens Discord's chat; the card would only repeat it.
     document.addEventListener("click", event => {
+        if (!hover.card && !openTimer && !prefetchTimer) return;
         if (rowAt(event.target)) { cancelPending(); hover.close(true); }
     }, true);
 

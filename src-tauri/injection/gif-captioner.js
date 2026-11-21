@@ -585,8 +585,26 @@
         button.append(glyph());
         result.append(button);
     }
+    function findResult(target) {
+        const panel = document.getElementById("gif-picker-tab-panel");
+        if (panel?.contains(target)) {
+            const result = target.closest('[class*="result_"]');
+            return result && panel.contains(result) ? result : null;
+        }
+        // Fast-path when outside #gif-picker-tab-panel: check ancestors for a
+        // result_ class inside gifPickerWrap without invoking the CSS selector engine.
+        let result = null;
+        for (let node = target; node && node !== document.body; node = node.parentElement) {
+            const cls = node.className;
+            if (typeof cls !== "string" || !cls) continue;
+            if (!result && cls.includes("result_")) result = node;
+            else if (result && cls.includes("gifPickerWrap")) return result;
+        }
+        return null;
+    }
     const onHover = event => {
-        const result = event.target instanceof Element && event.target.closest(resultSelector);
+        if (!(event.target instanceof Element)) return;
+        const result = findResult(event.target);
         if (result) addButton(result);
     };
     const onClick = event => {

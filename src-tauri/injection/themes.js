@@ -326,8 +326,9 @@ function setupLowcordThemes() {
     // Listens to Discord's events only while the Match music theme is chosen.
     function syncMusic(attempt = 0) {
         const wanted = state.id === "music";
+        if (wanted === musicListening) return;
         const dispatcher = window.Lowcord?.Dispatcher;
-        if (wanted && !musicListening) {
+        if (wanted) {
             if (!dispatcher) {
                 if (attempt < 40) setTimeout(() => syncMusic(attempt + 1), 1500);
                 return;
@@ -336,7 +337,7 @@ function setupLowcordThemes() {
             musicListening = true;
             musicShown = undefined;
             musicEvent();
-        } else if (!wanted && musicListening) {
+        } else {
             for (const type of musicEvents) dispatcher?.unsubscribe(type, musicEvent);
             musicListening = false;
             clearTimeout(musicTimer);
