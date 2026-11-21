@@ -24,7 +24,10 @@ test.beforeEach(async ({ page }) => {
             }
         } });
         Object.defineProperty(window.Lowcord, 'RestAPI', { value: { post: async request => {
-            if (fixture.postError) throw Error('server failure');
+            fixture.postAttempts = (fixture.postAttempts || 0) + 1;
+            // Discord's REST client rejects with its response, not an Error.
+            const failure = fixture.postFailures?.shift();
+            if (failure) throw failure;
             fixture.posts.push(request);
             return { body: { id: 'sent' } };
         } } });
@@ -34,6 +37,8 @@ test.beforeEach(async ({ page }) => {
                 if (fixture.slowQuery === query) await new Promise(resolve => { fixture.searchDone = resolve; });
                 if (fixture.searchError) return { error: 'rate-limited' };
                 if (options.mode === 'creators' && !options.creator) return { creators: [{ id: 'neutral_creator', name: 'Neutral Creator', videos: 12, followers: 34, verified: true }], more: page < 2 };
+                if (options.mode === 'tags' && !options.tag) return { tags: [{ id: 'Neutral Art', name: 'Neutral Art', videos: 90 }, { id: 'Forest', name: 'Forest', videos: 5 }]
+                    .filter(tag => tag.name.toLowerCase().includes(query.toLowerCase())), more: false };
                 if (options.mode === 'niches') return { niches: [{ id: 'neutral-animation', name: 'Neutral animation', videos: 128, subscribers: 2400 },
                     { id: 'neutral-art', name: 'Neutral art', videos: 32, subscribers: 400 }], more: false };
                 return { items: Array.from({ length: fixture.count || 3 }, (_, index) => ({ id: `${query || 'feed'}${page}${index}`, key: `key${page}${index}`,
@@ -253,7 +258,7 @@ test('picker drag and resize persist, preserve chat drafts and reset without cha
 test('collapse releases previews, retains browsing state and lets an active upload finish', async ({ page }) => {
     await page.evaluate(() => { redgifsFixture.slowUpload = true; });
     await open(page);
-    await page.getByRole('tab', { name: 'Explore', exact: true }).click();
+    await page.getByRole('tab', { name: 'Trending', exact: true }).click();
     await page.getByRole('searchbox').fill('forest');
     await page.getByRole('button', { name: 'Search', exact: true }).click();
     await tile(page).click();
@@ -272,7 +277,7 @@ test('collapse releases previews, retains browsing state and lets an active uplo
     await expect.poll(() => page.evaluate(() => redgifsFixture.posts.length)).toBe(1);
     await page.getByRole('button', { name: 'Restore RedGIFs picker', exact: true }).click();
     await expect(page.getByRole('searchbox')).toHaveValue('forest');
-    await expect(page.getByRole('tab', { name: 'Explore', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('tab', { name: 'Trending', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('textbox', { name: 'Message composer' })).toHaveText('Still typing while browsing is collapsed');
 });
 
@@ -382,6 +387,57 @@ test('preparation and upload errors allow retry without posting a link', async (
     await page.evaluate(() => { redgifsFixture.uploadError = false; });
     await tile(page).click();
     await expect(status(page)).toContainText('Video sent.');
+});
+
+test('lost or rate-limited posts retry with the same nonce; rejected posts show Discord\'s reason', async ({ page }) => {
+    await open(page);
+    await page.evaluate(() => { redgifsFixture.postFailures = [{ ok: false, status: 0 }, { ok: false, status: 429, body: { retry_after: 0.05 } }]; });
+    await tile(page).click();
+    await expect(status(page)).toContainText('Video sent.');
+    const sent = await page.evaluate(() => ({ attempts: redgifsFixture.postAttempts, posts: redgifsFixture.posts.length, uploads: redgifsFixture.uploads.length }));
+    expect(sent).toEqual({ attempts: 3, posts: 1, uploads: 1 });
+
+    const second = page.getByRole('button', { name: /Send video by/ }).nth(1);
+    await page.evaluate(() => { redgifsFixture.postFailures = [{ ok: false, status: 403, body: { code: 50013, message: 'Missing Permissions' } }]; });
+    await second.click();
+    await expect(status(page)).toHaveText('You do not have permission to send files here.');
+    await page.evaluate(() => { redgifsFixture.postFailures = [{ ok: false, status: 400, body: { code: 0, message: 'Odd problem' } }]; });
+    await second.click();
+    await expect(status(page)).toHaveText('Discord rejected the video: Odd problem.');
+    await page.evaluate(() => { redgifsFixture.postFailures = [{ ok: false, status: 400, body: { code: 20009, message: 'Explicit content cannot be sent to the desired recipient(s).' } }]; });
+    await second.click();
+    await expect(status(page)).toContainText("can't receive explicit media from you");
+    await second.click();
+    await expect(status(page)).toContainText('Video sent.');
+    const posts = await page.evaluate(() => redgifsFixture.posts.map(post => post.body.nonce));
+    expect(posts).toHaveLength(2);
+    expect(posts[0]).not.toBe(posts[1]);
+});
+
+test('a reply whose target was deleted is sent without the reply', async ({ page }) => {
+    await page.evaluate(() => {
+        const store = window.Lowcord.store;
+        window.Lowcord.store = name => name === 'PendingReplyStore' ? { getPendingReply: () => ({ message: { id: '55' }, channel: {} }) } : store(name);
+        redgifsFixture.postFailures = [{ ok: false, status: 400, body: { code: 50035, message: 'Invalid Form Body', errors: { message_reference: { _errors: [{ code: 'MESSAGE_REFERENCE_UNKNOWN_MESSAGE' }] } } } }];
+    });
+    await open(page);
+    await tile(page).click();
+    await expect(status(page)).toContainText('Video sent.');
+    expect(await page.evaluate(() => redgifsFixture.posts[0].body.message_reference)).toBeUndefined();
+});
+
+test('creator names open that creator; refresh reloads the feed without the search cache', async ({ page }) => {
+    await open(page);
+    await page.getByRole('button', { name: 'Refresh results', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => redgifsFixture.searches.at(-1))).toEqual({ query: '', page: 1, mode: 'videos', refresh: true });
+    await page.getByRole('button', { name: 'View videos by fixture10', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => redgifsFixture.searches.at(-1))).toEqual({ query: '', page: 1, mode: 'creators', creator: 'fixture10' });
+    expect(await page.evaluate(() => redgifsFixture.prepares.length)).toBe(0);
+    await expect(page.locator('.lowcord-redgifs-heading')).toHaveText('fixture10');
+    await expect(page.getByRole('button', { name: 'Save favorite creator fixture10', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Back to trending', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => redgifsFixture.searches.at(-1))).toEqual({ query: '', page: 1, mode: 'videos' });
+    await expect(page.getByRole('tab', { name: 'Trending', exact: true })).toHaveAttribute('aria-selected', 'true');
 });
 
 test('switching channels while preparing closes the picker and never uploads or sends', async ({ page }) => {
@@ -804,12 +860,33 @@ test('compact creator grid keeps rows aligned through pagination, narrow windows
     expect(errors).toEqual([]);
 });
 
-test('Explore and Creators browse independently, creator pagination and back navigation retain the search', async ({ page }) => {
+test('Tags lists and filters tags, opens a tag\'s videos and returns to the filtered list', async ({ page }) => {
+    await open(page);
+    await page.getByRole('tab', { name: 'Tags', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => redgifsFixture.searches.at(-1))).toEqual({ query: '', page: 1, mode: 'tags' });
+    await expect(page.getByRole('searchbox')).toHaveAttribute('placeholder', 'Search tags');
+    await expect(page.getByRole('button', { name: /Browse tag/ })).toHaveCount(2);
+    await expect(page.locator('.lowcord-redgifs-star')).toHaveCount(0);
+    await page.getByRole('searchbox').fill('art');
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(page.getByRole('button', { name: /Browse tag/ })).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Browse tag Neutral Art', exact: true })).toContainText('90 videos');
+    await page.getByRole('button', { name: 'Browse tag Neutral Art', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => redgifsFixture.searches.at(-1))).toEqual({ query: '', page: 1, mode: 'tags', tag: 'Neutral Art' });
+    await expect(page.getByRole('button', { name: /Send video by/ })).toHaveCount(3);
+    await expect(page.locator('.lowcord-redgifs-heading')).toHaveText('Neutral Art');
+    await page.getByRole('button', { name: 'View videos by fixture10', exact: true }).click();
+    await page.getByRole('button', { name: 'Back to neutral art', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => redgifsFixture.searches.at(-1))).toEqual({ query: '', page: 1, mode: 'tags', tag: 'Neutral Art' });
+    await page.getByRole('button', { name: 'Back to tags', exact: true }).click();
+    await expect(page.getByRole('searchbox')).toHaveValue('art');
+    await expect(page.getByRole('button', { name: /Browse tag/ })).toHaveCount(1);
+});
+
+test('Trending and Creators browse independently, creator pagination and back navigation retain the search', async ({ page }) => {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await open(page);
-    await page.getByRole('tab', { name: 'Explore', exact: true }).click();
-    await expect.poll(() => page.evaluate(() => redgifsFixture.searches.at(-1))).toEqual({ query: '', page: 1, mode: 'explore' });
     await tile(page).focus();
     await expect(tile(page).locator('video')).toHaveCount(1);
     await page.getByRole('tab', { name: 'Creators', exact: true }).click();

@@ -310,6 +310,78 @@ const whitePng = page => page.evaluate(async () => {
     context.fillStyle = '#fff'; context.fillRect(0, 0, 200, 100);
     return [...new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer())];
 });
+// Stands in for the native bridge: paste() pastes `clipboard` like the OS would.
+async function editBridge(page) {
+    await page.exposeFunction('sanitizeFixture', bytes => { const result = sanitizeImage(Uint8Array.from(bytes)); return { ...result, bytes: result.bytes ? Array.from(result.bytes) : null }; });
+    const png = await whitePng(page);
+    await page.evaluate(png => {
+        const editor = document.querySelector('[aria-label="Private draft"]');
+        window.editFixture = { arrived: [], pastes: [], clipboard: [new File([new Uint8Array(png)], 'shot.png', { type: 'image/png' })] };
+        window.__LOWCORD_NATIVE__ = {
+            sanitizeImage: async input => { const result = await sanitizeFixture(Array.from(input)); return { ...result, bytes: result.bytes && new Uint8Array(result.bytes) }; },
+            paste: async plain => {
+                editFixture.pastes.push(plain);
+                const data = new DataTransfer();
+                for (const file of plain ? [] : editFixture.clipboard) data.items.add(file);
+                editor.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }));
+            },
+            downloadDroppedImage: async url => ({ name: 'from-chat.png', type: 'image/png', data: new Uint8Array(png), url }),
+        };
+        editor.addEventListener('paste', event => { if (!event.defaultPrevented) editFixture.arrived.push(...event.clipboardData.files); });
+    }, png);
+}
+test('Cmd/Ctrl+Shift+V pastes an image into the editor, and pastes text as plain text', async ({ page }) => {
+    await setup(page); await editBridge(page);
+    const editor = page.getByLabel('Private draft');
+    await editor.focus();
+    await page.keyboard.press('ControlOrMeta+Shift+V');
+    const canvas = page.locator('.lowcord-edit-stage canvas');
+    await expect(canvas).toBeVisible();
+    // Crop is the starting tool for an image edited on demand.
+    await page.getByRole('button', { name: 'Square' }).click();
+    await page.getByRole('button', { name: 'Attach image' }).click();
+    await expect.poll(() => page.evaluate(() => editFixture.arrived.length)).toBe(1);
+    expect(await page.evaluate(async () => { const bitmap = await createImageBitmap(editFixture.arrived[0]); return [bitmap.width, bitmap.height]; })).toEqual([100, 100]);
+    // A plain Cmd/Ctrl+V still goes straight to Discord.
+    await page.evaluate(() => { editFixture.arrived.length = 0; });
+    await page.evaluate(() => editFixture.clipboard = []);
+    await page.keyboard.press('ControlOrMeta+Shift+V');
+    await expect.poll(() => page.evaluate(() => editFixture.pastes)).toEqual([false, false, true]);
+    await expect(canvas).toHaveCount(0);
+});
+test('right-clicking an image in the chat offers Edit image and attaches the edited copy', async ({ page }) => {
+    await setup(page); await editBridge(page);
+    await page.evaluate(() => {
+        document.body.insertAdjacentHTML('beforeend', `<ol style="position:fixed;top:0;left:300px;z-index:50;margin:0;list-style:none">
+            <li id="chat-messages-10-1"><div id="message-accessories-1">
+                <div class="imageWrapper_test" id="photo" style="width:120px;height:80px;position:relative">
+                    <a class="originalLink_test" href="https://cdn.discordapp.com/attachments/1/2/photo.png?ex=1" style="position:absolute;inset:0"></a>
+                    <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" style="width:120px;height:80px"></div>
+                <div class="wrapper_test" id="clip"><video width="120" height="60"></video></div>
+            </div></li></ol>`);
+        window.addEventListener('contextmenu', event => {
+            event.preventDefault();
+            requestAnimationFrame(() => {
+                document.querySelector('#message')?.remove();
+                document.body.insertAdjacentHTML('beforeend', `<div id="message" role="menu" style="position:fixed;top:200px;left:300px;z-index:60;background:#111">
+                    <div class="item_test" role="menuitem" id="message-copy-text" tabindex="-1"><svg width="24" height="24"></svg><span data-text-variant="text-sm/medium">Copy Text</span></div></div>`);
+            });
+        });
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') document.querySelector('#message')?.remove(); });
+    });
+    const item = page.locator('#message').getByRole('menuitem', { name: 'Edit image' });
+    await page.locator('#clip').click({ button: 'right' });
+    await expect(page.locator('#message')).toBeVisible();
+    await expect(item).toHaveCount(0);
+    await page.locator('#photo').click({ button: 'right' });
+    await item.click();
+    await expect(page.locator('#message')).toHaveCount(0);
+    await expect(page.locator('.lowcord-edit-stage canvas')).toBeVisible();
+    await page.getByRole('button', { name: 'Rotate left' }).click();
+    await page.getByRole('button', { name: 'Attach image' }).click();
+    await expect.poll(() => page.evaluate(() => editFixture.arrived.length)).toBe(1);
+    expect(await page.evaluate(async () => { const bitmap = await createImageBitmap(editFixture.arrived[0]); return [bitmap.width, bitmap.height]; })).toEqual([100, 200]);
+});
 test('asking before attaching covers pixels permanently and cancelling attaches nothing', async ({ page }, info) => {
     await setup(page); await attachedFile(page);
     await page.evaluate(() => Lowcord.privacy.set({ coverAsk: true }));

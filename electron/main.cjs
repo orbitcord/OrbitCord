@@ -679,6 +679,12 @@ function registerIpc() {
         try { return await require('./image-drop.cjs').downloadImage(url, { fetchPage: (url, init) => net.fetch(url, init) }); }
         catch (error) { return { error: error.code ?? 'download-failed' }; }
     });
+    // Edit-on-paste: the page arms its editor, then asks for a real paste,
+    // because the shortcut's own paste-and-match-style carries text only.
+    ipcMain.handle('lowcord:paste', (event, plain) => {
+        assertSender(event);
+        if (plain === true) event.sender.pasteAndMatchStyle(); else event.sender.paste();
+    });
     ipcMain.handle('lowcord:app-icon', async (event, id) => {
         assertSender(event);
         if (id === undefined) return readAppIcon();

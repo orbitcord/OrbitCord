@@ -14,7 +14,7 @@
         { id: "mediaSources", title: "Media sources", description: "Browse GifReels and XXXTik. Send photos and videos as files." },
         { id: "redditPicker", title: "Reddit picker", description: "Browse Reddit and send photos and videos as files. Compress large videos below 20 MB." },
         { id: "chatCapture", title: "Chat screenshots", description: "Use the camera button to capture a range of messages in one image." },
-        { id: "coverImages", title: "Edit photos", description: "Crop, rotate, flip or cover parts of photos before you attach them." },
+        { id: "coverImages", title: "Edit photos", description: "Crop, rotate, flip or cover parts of photos before you attach them, including pasted images and images from the chat." },
         { id: "mediaGallery", title: "Media gallery", description: "Browse photos and videos from the chat header. Select an item to jump to its message." },
         { id: "pictureInPicture", title: "Picture-in-picture", description: "Hover a chat video and use the pop-out button, or press Alt+P, to watch in a floating window." },
         { id: "downloadVideos", title: "Download linked videos", description: "Right-click a linked or embedded video to save its media file." },

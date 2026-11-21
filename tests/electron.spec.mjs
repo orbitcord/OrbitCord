@@ -724,7 +724,7 @@ test('real Electron decodes MP4/H.264, AAC, WebM and GIF loops inline', async ()
         expect(await page.evaluate(() => window.earlyInjection)).toEqual({ initialized: true, hooked: true,
             extensions: await page.evaluate(() => window.Lowcord.extensions.catalog.length), fetchHooked: true });
         expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, bridge: Object.keys(window.__LOWCORD_NATIVE__) })))
-            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'fetchRemote', 'touchId', 'touchIdAvailable', 'setEmbedPreferences', 'spellcheck', 'insertText', 'mediaProcess', 'sanitizeImage', 'privacyPreferences', 'traces', 'onWalkAway', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged'] });
+            .toEqual({ node: 'undefined', process: 'undefined', bridge: ['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'fetchRemote', 'touchId', 'touchIdAvailable', 'setEmbedPreferences', 'spellcheck', 'insertText', 'mediaProcess', 'sanitizeImage', 'privacyPreferences', 'traces', 'onWalkAway', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'paste', 'reportAccount', 'accounts', 'onAccountsChanged'] });
         expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsSearch('fixture', -1))).toEqual({ error: 'invalid-search' });
         expect(await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsPrepare('not-a-token', 20_000_000))).toEqual({ error: 'expired' });
         await page.evaluate(() => window.__LOWCORD_NATIVE__.redgifsCancel());
@@ -771,6 +771,7 @@ test('RedGIFs opaque preview proxy and prepared file cross the sandbox bridge in
             const bytes = await readFile(`${root}/tests/fixtures/media/sample.mp4`);
             const service = global.redgifsTestService = createRedgifs({ fetchPage: async url => {
                 if (url.endsWith('/auth/temporary')) return new Response(JSON.stringify({ token: 'fixture' }));
+                if (url.endsWith('/v1/tags')) return Response.json({ tags: [{ name: 'Animation', count: 12 }] });
                 if (url.includes('/niches/search?')) return new Response(JSON.stringify({ pages: 1, niches: [
                     { id: 'neutral-animation', name: 'Neutral animation', gifs: 12, subscribers: 34 },
                 ] }));
@@ -811,7 +812,8 @@ test('RedGIFs opaque preview proxy and prepared file cross the sandbox bridge in
             const niches = await __LOWCORD_NATIVE__.redgifsSearch('animation', 1, { mode: 'niches' });
             const feed = await __LOWCORD_NATIVE__.redgifsSearch('', 1, { mode: 'videos', nicheId: niches.niches[0].id });
             const trending = await __LOWCORD_NATIVE__.redgifsSearch('', 1);
-            const explore = await __LOWCORD_NATIVE__.redgifsSearch('', 1, { mode: 'explore' });
+            const tags = await __LOWCORD_NATIVE__.redgifsSearch('anim', 1, { mode: 'tags' });
+            const tagFeed = await __LOWCORD_NATIVE__.redgifsSearch('', 1, { mode: 'tags', tag: tags.tags[0].id });
             const creators = await __LOWCORD_NATIVE__.redgifsSearch('', 1, { mode: 'creators' });
             const creatorFeed = await __LOWCORD_NATIVE__.redgifsSearch('', 1, { mode: 'creators', creator: creators.creators[0].id });
             const favorite = await __LOWCORD_NATIVE__.redgifsResolve(items[0].id);
@@ -825,12 +827,13 @@ test('RedGIFs opaque preview proxy and prepared file cross the sandbox bridge in
             return { type: prepared.type, name: prepared.name, bytes: preparedData.byteLength,
                 signature: String.fromCharCode(...preparedData.slice(4, 8)), preview: items[0].preview, playbackError,
                 nicheCount: niches.niches.length, nicheFeedCount: feed.items.length,
-                trendingCount: trending.items.length, exploreCount: explore.items.length, creatorCount: creators.creators.length,
+                trendingCount: trending.items.length, tags: tags.tags, tagFeedCount: tagFeed.items.length, creatorCount: creators.creators.length,
                 creatorFeedCount: creatorFeed.items.length, freshFavorite: favorite.key !== items[0].key };
         });
         expect({ error: result.playbackError, protocol: await app.evaluate(() => global.redgifsTestTrace) }).toEqual({ error: undefined, protocol: expect.objectContaining({ status: 200 }) });
         expect(result).toMatchObject({ type: 'video/mp4', name: 'redgifs-NeutralFixture.mp4', signature: 'ftyp', nicheCount: 1, nicheFeedCount: 1,
-            trendingCount: 1, exploreCount: 1, creatorCount: 1, creatorFeedCount: 1, freshFavorite: true });
+            trendingCount: 1, tags: [{ id: 'Animation', name: 'Animation', videos: 12 }], tagFeedCount: 1,
+            creatorCount: 1, creatorFeedCount: 1, freshFavorite: true });
         expect(result.bytes).toBeGreaterThan(1000);
         expect(result.preview).toMatch(/^lowcord-media:\/\/redgifs\//);
         await expect.poll(() => page.$eval('#redgifs-proxy-test', video => video.currentTime)).toBeGreaterThan(0.1);
@@ -1156,7 +1159,7 @@ test('downloaded update shows a quiet corner notice, dismisses across reloads an
         await app.evaluate(() => global.testUpdater.emit('update-downloaded', { version:'0.1.5' }));
         await expect(notice.getByRole('button', { name:'Later', exact:true })).toBeDisabled();
         expect(await page.evaluate(() => Object.keys(window.__LOWCORD_NATIVE__)))
-            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'fetchRemote', 'touchId', 'touchIdAvailable', 'setEmbedPreferences', 'spellcheck', 'insertText', 'mediaProcess', 'sanitizeImage', 'privacyPreferences', 'traces', 'onWalkAway', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'reportAccount', 'accounts', 'onAccountsChanged']);
+            .toEqual(['notify', 'setBadge', 'log', 'openExternal', 'updateStatus', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'onUpdateStatus', 'appIcon', 'fetchRemote', 'touchId', 'touchIdAvailable', 'setEmbedPreferences', 'spellcheck', 'insertText', 'mediaProcess', 'sanitizeImage', 'privacyPreferences', 'traces', 'onWalkAway', 'onAttachmentInspection', 'background', 'resolveSocialLink', 'socialPost', 'socialVideo', 'socialMedia', 'redgifsSearch', 'redgifsPrepare', 'redgifsCancel', 'redgifsResolve', 'redgifsRelease', 'reddit', 'videoCompression', 'mediaSources', 'onMediaSource', 'captureRegion', 'copyImage', 'saveImage', 'downloadMedia', 'downloadDroppedImage', 'paste', 'reportAccount', 'accounts', 'onAccountsChanged']);
         expect(await app.evaluate(() => global.updateDialogs)).toBe(0);
     } finally { await app.close(); await rm(dir, { recursive:true, force:true }); }
 });
@@ -1310,6 +1313,36 @@ test('text fields get a native edit menu that pastes, and passkey autofill stays
     }
 });
 
+test('the paste bridge delivers a copied image as a file, and plain paste as text', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orbitcord-paste-'));
+    const app = await launch(dir);
+    try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('domcontentloaded');
+        await app.evaluate(async ({ clipboard, nativeImage, ClipboardItem }) => {
+            global.savedText = clipboard.readText();
+            const png = nativeImage.createFromBitmap(Buffer.alloc(8 * 4 * 4, 255), { width: 8, height: 4 }).toPNG();
+            await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]);
+        });
+        await page.locator('#message-input').focus();
+        const files = await page.evaluate(() => new Promise(resolve => {
+            addEventListener('paste', event => { event.preventDefault(); resolve([...event.clipboardData.files].map(file => file.type)); }, { once: true, capture: true });
+            __LOWCORD_NATIVE__.paste(false);
+        }));
+        expect(files).toEqual(['image/png']);
+        await app.evaluate(({ clipboard, ClipboardItem }) => clipboard.write([new ClipboardItem({
+            'text/plain': new Blob(['plain'], { type: 'text/plain' }), 'text/html': new Blob(['<b>bold</b>'], { type: 'text/html' }) })]));
+        const types = await page.evaluate(() => new Promise(resolve => {
+            addEventListener('paste', event => { event.preventDefault(); resolve([...event.clipboardData.types]); }, { once: true, capture: true });
+            __LOWCORD_NATIVE__.paste(true);
+        }));
+        expect(types).toEqual(['text/plain']);
+    } finally {
+        await app.evaluate(({ clipboard }) => clipboard.writeText(global.savedText ?? '')).catch(() => {});
+        await app.close();
+        await rm(dir, { recursive: true, force: true });
+    }
+});
 test('chat screenshots capture real window pixels across scrolling, at page zoom, to the clipboard', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'orbitcord-chat-capture-'));
     const app = await launch(dir);

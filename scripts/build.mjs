@@ -135,6 +135,7 @@ if (process.isMainFrame && location.protocol !== 'data:') {
         saveImage: (bytes, name) => ipcRenderer.invoke('lowcord:save-image', bytes, name),
         downloadMedia: url => ipcRenderer.invoke('lowcord:download-media', url),
         downloadDroppedImage: url => ipcRenderer.invoke('lowcord:download-dropped-image', url),
+        paste: plain => ipcRenderer.invoke('lowcord:paste', plain === true),
         reportAccount: name => ipcRenderer.invoke('lowcord:account', name),
         accounts: (action, id) => ipcRenderer.invoke('lowcord:accounts', action, id),
         onAccountsChanged: callback => {

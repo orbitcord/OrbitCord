@@ -33,6 +33,8 @@ async function fixture(t, { media, gifs = [gif], compress, search, niches, niche
         if (url.pathname === '/v2/creators/search') return json({ items: creators, pages: 3 });
         if (/^\/v2\/users\/[^/]+\/search$/.test(url.pathname)) return json({ gifs, pages: 2 });
         if (/^\/v2\/gifs\/[a-z0-9]+$/i.test(url.pathname)) return json({ gif: gifs[0] });
+        if (url.pathname === '/v1/tags') return json({ tags: [{ name: 'Forest', count: 5 }, { name: 'Neutral Art', count: 90 }, { name: 'Art Deco', count: 40 },
+            { name: 'bad,tag', count: 1 }, null, { name: 'Sunset', count: 20 }] });
         if (url.pathname === '/v2/niches/search') return json({ niches: niches ?? [], pages: 2 });
         if (/^\/v2\/niches\/[^/]+\/gifs$/.test(url.pathname)) return json({ gifs: nicheVideos ?? gifs, pages: 3 });
         return media ? media(url, options) : new Response(await sample, { headers: { 'content-type': 'video/mp4' } });
@@ -57,7 +59,7 @@ test('search encodes text, paginates, reuses temporary auth and exposes only opa
     assert.equal(calls[1].options.redirect, 'error');
 });
 
-test('Trending, Explore, creator discovery and creator videos match the site routes', async t => {
+test('Trending, Tags, creator discovery and creator videos match the site routes', async t => {
     const { service, calls } = await fixture(t, { creators: [{ username: 'neutral_creator', name: 'Neutral Creator',
         publishedGifs: 12, followers: 34, verified: true, profileImageUrl: 'https://unsafe.test/image' }, null, { username: '../bad' }] });
     await service.search(1);
@@ -65,9 +67,18 @@ test('Trending, Explore, creator discovery and creator videos match the site rou
     assert.equal(calls.at(-1).url.searchParams.get('page'), '1');
     await service.search(1, '', 2);
     assert.equal(calls.at(-1).url.searchParams.get('page'), '2');
-    await service.search(1, '', 1, { mode: 'explore' });
+    // The tag list is fetched once, filtered locally and ordered by
+    // prefix match, then popularity.
+    assert.deepEqual(await service.search(1, '', 1, { mode: 'tags' }), { tags: [{ id: 'Neutral Art', name: 'Neutral Art', videos: 90 },
+        { id: 'Art Deco', name: 'Art Deco', videos: 40 }, { id: 'Sunset', name: 'Sunset', videos: 20 }, { id: 'Forest', name: 'Forest', videos: 5 }], more: false });
+    assert.deepEqual((await service.search(1, 'ART', 1, { mode: 'tags' })).tags.map(tag => tag.id), ['Art Deco', 'Neutral Art']);
+    assert.equal(calls.filter(call => call.url.pathname === '/v1/tags').length, 1);
+    await service.search(1, '', 1, { mode: 'tags', refresh: true });
+    assert.equal(calls.filter(call => call.url.pathname === '/v1/tags').length, 2);
+    await service.search(1, '', 1, { mode: 'tags', tag: 'Neutral Art' });
     assert.equal(calls.at(-1).url.pathname, '/v2/gifs/search');
-    assert.equal(calls.at(-1).url.searchParams.get('verified'), 'y');
+    assert.equal(calls.at(-1).url.searchParams.get('tags'), 'Neutral Art');
+    assert.equal(calls.at(-1).url.searchParams.get('order'), 'trending');
     assert.equal(calls.at(-1).url.searchParams.get('type'), 'g');
     const result = await service.search(1, 'neutral', 2, { mode: 'creators' });
     assert.deepEqual(result.creators, [{ id: 'neutral_creator', name: 'Neutral Creator', videos: 12, followers: 34, verified: true }]);
@@ -81,7 +92,8 @@ test('Trending, Explore, creator discovery and creator videos match the site rou
     assert.equal(calls.at(-1).url.pathname, '/v2/users/neutral_creator/search');
     assert.equal(calls.at(-1).url.searchParams.get('order'), 'latest');
     assert.equal(calls.at(-1).url.searchParams.get('type'), 'g');
-    for (const options of [{ mode: 'creators', creator: '../bad' }, { mode: 'explore', creator: 'valid' }, { mode: 'creators', nicheId: 'valid' }]) {
+    for (const options of [{ mode: 'creators', creator: '../bad' }, { mode: 'tags', creator: 'valid' }, { mode: 'creators', nicheId: 'valid' }, { mode: 'explore' },
+        { mode: 'videos', tag: 'Forest' }, { mode: 'tags', tag: 'a,b' }, { mode: 'tags', tag: '' }]) {
         await assert.rejects(service.search(1, '', 1, options), { code: 'invalid-search' });
     }
 });

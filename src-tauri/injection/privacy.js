@@ -346,10 +346,11 @@
     const counted = (amount, name) => `${amount} ${name}${amount === 1 ? '' : 's'}`;
     const transfer = files => { const data = new DataTransfer(); for (const file of files) data.items.add(file); return data; };
     function dispatch(target, event) { replayed.add(event); target.dispatchEvent(event); }
-    function preprocess(event, files, replay) {
+    function preprocess(event, files, replay, editing = false) {
         // Other hooks (anonymous file names) replay our cleaned files as new File
         // objects while we deliver them; those events must pass straight through.
-        const cover = state.coverAsk && !bypassCover ? window.Lowcord.imageCover : null;
+        // `editing` is a paste made with the Edit photos shortcut.
+        const cover = editing || state.coverAsk && !bypassCover ? window.Lowcord.imageCover : null;
         if (delivering || replayed.has(event) || event.defaultPrevented || !state.metadata && !cover || !window.__LOWCORD_NATIVE__?.sanitizeImage) return;
         const cleanable = file => state.metadata && (supportedImage(file) || boxMedia(file));
         if (!files.some(file => !prepared.has(file) && (cleanable(file) || cover?.supports(file)))) return;
@@ -368,7 +369,7 @@
                 for (let file of files) {
                     if (prepared.has(file)) { output.push(file); continue; }
                     if (cover?.supports(file)) {
-                        file = await cover.review(file, { index: reviewing.indexOf(file), total: reviewing.length, queue: reviewing });
+                        file = await cover.review(file, { index: reviewing.indexOf(file), total: reviewing.length, queue: reviewing, ...editing && { tool: 'crop' } });
                         if (!file) continue;
                     }
                     if (!cleanable(file)) { output.push(file); continue; }
@@ -429,11 +430,12 @@
     window.addEventListener('paste', event => {
         const target = event.target;
         if (!(target instanceof Element) || !target.closest(composerSelector) || target.closest('[role="dialog"]')) return;
+        const editing = !replayed.has(event) && window.Lowcord.imageCover?.claimPaste?.(event) === true;
         preprocess(event, [...(event.clipboardData?.files ?? [])], files => {
             const editor = target.isConnected ? target : document.querySelector(editorSelector);
             if (!editor) return false;
             for (const file of files) dispatch(editor, new ClipboardEvent('paste', { bubbles: true, cancelable: true, composed: true, clipboardData: transfer([file]) }));
-        });
+        }, editing);
     }, true);
     window.addEventListener('drop', event => {
         const target = event.target;
@@ -686,7 +688,7 @@
         }
         const details = {
             cover: () => [header('cover', 'Hides names, addresses, faces and anything else in an image before it reaches the message box.'),
-                section('How to use it', facts([['Message bar', 'Open the actions button and choose Edit photos'], ['Ask before attaching', 'When on, each image you paste, drop or choose opens the editor first']])),
+                section('How to use it', facts([['Message bar', 'Open the actions button and choose Edit photos'], ['Paste to edit', 'Press Cmd/Ctrl+Shift+V in the message box to paste an image into the editor'], ['From the chat', 'Right-click an image in a message and choose Edit image'], ['Ask before attaching', 'When on, each image you paste, drop or choose opens the editor first']])),
                 note('Covered areas are replaced with solid pixels, so they cannot be recovered from the attached file. Animated images are not supported.')],
             walkAway: () => [header('walkAway', 'Protects your call if you step away. When your computer locks or sleeps, OrbitCord turns off what others can hear and see.'),
                 section('What happens', list('kept', ['Your microphone is muted', 'Your camera turns off', 'Your screen share stops'])),

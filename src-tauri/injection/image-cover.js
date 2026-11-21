@@ -353,20 +353,151 @@
             return null;
         } finally { bitmap?.close(); }
     }
-    function choose() {
-        const input = ui("input", { type: "file", accept: "image/png,image/jpeg,image/webp", multiple: "" });
-        input.addEventListener("change", async () => {
-            const files = [...input.files].filter(supports);
-            if (!files.length) { if (input.files.length) toast("Choose a PNG, JPEG or WebP image.", true); return; }
+    let editing = false;
+    // Opens each file in the editor, then attaches the results through the
+    // normal paste path so metadata removal and anonymous names still run.
+    async function editFiles(files) {
+        if (editing) { toast("Finish editing the current image first.", true); return; }
+        editing = true;
+        try {
             const results = [];
             for (const [index, file] of files.entries()) {
                 const result = await review(file, { tool: "crop", index, total: files.length, queue: files });
                 if (result) results.push(result);
             }
             if (results.length && !window.Lowcord.privacy?.attach(results)) toast("The message box closed. Attach the images again.", true);
+        } finally { editing = false; }
+    }
+    function choose() {
+        const input = ui("input", { type: "file", accept: "image/png,image/jpeg,image/webp", multiple: "" });
+        input.addEventListener("change", () => {
+            const files = [...input.files].filter(supports);
+            if (!files.length) { if (input.files.length) toast("Choose a PNG, JPEG or WebP image.", true); return; }
+            void editFiles(files);
         });
         input.click();
     }
     extensions.addComposerAction({ id: "coverImages", order: 1, label: "Edit photos", path, run: choose });
-    window.Lowcord.imageCover = { supports, review, transform, untouched, open: choose };
+
+    // ----- Paste to edit: Cmd/Ctrl+Shift+V -----------------------------------
+    // The shortcut's own paste-and-match-style carries text only, so it is
+    // replaced by a real paste that privacy.js routes through the editor.
+    const composerSelector = '[class*="channelTextArea_"]';
+    const inComposer = target => target instanceof Element && Boolean(target.closest(composerSelector)) && !target.closest('[role="dialog"]');
+    const mac = /Mac/.test(navigator.platform);
+    let armed = 0;
+    window.addEventListener("keydown", event => {
+        if (event.repeat || event.altKey || !event.shiftKey || event.code !== "KeyV" || !(mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)) return;
+        const paste = window.__LOWCORD_NATIVE__?.paste;
+        if (!paste || !extensions.enabled("coverImages") || !inComposer(event.target)) return;
+        event.preventDefault(); event.stopImmediatePropagation();
+        armed = performance.now();
+        paste(false).catch(() => { armed = 0; });
+    }, true);
+    // Called by privacy.js for each composer paste. True when the editor
+    // should open for its images; text alone is pasted as plain text, as the
+    // shortcut normally does.
+    function claimPaste(event) {
+        if (!armed || performance.now() - armed > 2000) return false;
+        armed = 0;
+        const files = [...(event.clipboardData?.files ?? [])];
+        if (files.some(supports)) return true;
+        event.preventDefault(); event.stopImmediatePropagation();
+        if (files.length) toast("Only PNG, JPEG and WebP images can be edited.", true);
+        else void window.__LOWCORD_NATIVE__.paste(true);
+        return false;
+    }
+
+    // ----- Edit an image from the chat ---------------------------------------
+    // Right-click an image in a message, choose Edit image, and the edited copy
+    // is attached to the message box. Nothing is sent until you send it.
+    const menuId = "message-lowcord-edit-image";
+    const skipImages = '[class*="emoji"], [class*="avatar"], [class*="icon"], [class*="reaction"]';
+    function chatImage(target) {
+        const accessories = target instanceof Element ? target.closest('[id^="message-accessories-"]') : null;
+        if (!accessories || target.closest('[class*="reactions_"]')) return null;
+        for (let node = target; node && node !== accessories; node = node.parentElement) {
+            if (node.matches("video") || node.querySelector("video")) return null;
+            const images = (node.matches("img") ? [node] : [...node.querySelectorAll("img")]).filter(image => !image.matches(skipImages));
+            if (images.length > 1) return null;
+            // The full-size original when Discord links it, otherwise the preview.
+            const original = node.matches('a[class*="originalLink_"]') ? node : node.querySelector(':scope > a[class*="originalLink_"]');
+            if (original?.href && /^https?:/.test(original.href)) return original.href;
+            const source = images[0] && (images[0].currentSrc || images[0].src);
+            if (source && /^https?:/.test(source)) return source;
+        }
+        return null;
+    }
+    async function editFromChat(url) {
+        if (editing) { toast("Finish editing the current image first.", true); return; }
+        if (!document.querySelector(`${composerSelector} [role="textbox"], ${composerSelector} textarea`)) { toast("Open a chat you can send messages in first.", true); return; }
+        const download = window.__LOWCORD_NATIVE__?.downloadDroppedImage;
+        if (!download) return;
+        let result;
+        try { result = await download(url); } catch { result = { error: "download-failed" }; }
+        if (result?.error) {
+            toast(result.error === "too-large" ? "This image is over the 50 MB limit." : "Couldn't download this image.", true);
+            return;
+        }
+        const file = new File([result.data], result.name, { type: result.type });
+        if (!supports(file)) { toast("Only PNG, JPEG and WebP images can be edited.", true); return; }
+        await editFiles([file]);
+    }
+    function addMenuItem(menu, url) {
+        if (menu.querySelector(`#${menuId}`)) return;
+        const model = ["#message-copy-text", "#message-copy-link", '[role="menuitem"]:not([id*="quickreact"])']
+            .map(selector => menu.querySelector(selector)).find(Boolean);
+        if (!model) return;
+        const item = model.cloneNode(true);
+        item.id = menuId;
+        item.removeAttribute("aria-disabled");
+        // Shares media-gallery's menu-item styling and hover handling.
+        item.className = [...item.classList].filter(name => !/^(focused|disabled)_/.test(name)).join(" ") + " lowcord-copy-media";
+        const suffix = /^item(_\w+)$/.exec([...item.classList].find(name => /^item_/.test(name)) ?? "")?.[1];
+        const focusedClass = suffix ? `focused${suffix}` : "lowcord-copy-media-focused";
+        const highlight = value => { item.classList.toggle(focusedClass, value); menu.toggleAttribute("data-lowcord-media-hover", value); };
+        const label = "Edit image";
+        const text = item.querySelector('[data-text-variant], [class*="label_"]');
+        item.removeAttribute("aria-labelledby");
+        item.setAttribute("aria-label", label);
+        if (text) text.textContent = label; else item.textContent = label;
+        for (const node of item.querySelectorAll('[class*="subtext_"], [class*="hint_"]')) node.remove();
+        const svg = item.querySelector("svg");
+        if (svg) svg.innerHTML = `<path fill="currentColor" d="${path}"/>`;
+        const pick = event => {
+            event.preventDefault(); event.stopPropagation();
+            // Discord's layer closes on Escape.
+            document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true }));
+            void editFromChat(url);
+        };
+        item.addEventListener("click", pick);
+        item.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") pick(event); });
+        item.addEventListener("pointerenter", () => highlight(true));
+        item.addEventListener("pointerleave", () => highlight(false));
+        item.addEventListener("focus", () => highlight(true));
+        item.addEventListener("blur", () => highlight(false));
+        // After the copy items, which media-gallery may add before Copy Text later.
+        model.after(item);
+        const plain = getComputedStyle(item);
+        menu.style.setProperty("--lowcord-menu-item-bg", plain.backgroundColor);
+        menu.style.setProperty("--lowcord-menu-item-color", plain.color);
+    }
+    let menuRequest = 0;
+    window.addEventListener("contextmenu", event => {
+        const request = ++menuRequest;
+        document.getElementById(menuId)?.remove();
+        const url = extensions.enabled("coverImages") && chatImage(event.target);
+        if (!url) return;
+        // The menu renders within a few frames of the click.
+        let frames = 0;
+        const look = () => {
+            if (request !== menuRequest) return;
+            const menu = document.querySelector('#message[role="menu"]');
+            if (menu) addMenuItem(menu, url);
+            else if (++frames < 30) requestAnimationFrame(look);
+        };
+        requestAnimationFrame(() => requestAnimationFrame(look));
+    }, true);
+
+    window.Lowcord.imageCover = { supports, review, transform, untouched, open: choose, claimPaste, chatImage };
 })();

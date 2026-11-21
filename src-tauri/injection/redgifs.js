@@ -7,12 +7,14 @@
     const transfer = { queue: [], jobs: new Map(), sent: new Set(), nonces: new Map(), paused: false };
     const storageKey = 'lowcord.redgifs.saved.v1';
     const layoutKey = 'lowcord.redgifs.layout.v1';
-    const categories = ['videos', 'explore', 'creators', 'niches', 'favorites'];
-    const categoryNames = { videos: 'Trending', explore: 'Explore', creators: 'Creators', niches: 'Niches', favorites: 'Favorites' };
+    const categories = ['videos', 'tags', 'creators', 'niches', 'favorites'];
+    const categoryNames = { videos: 'Trending', tags: 'Tags', creators: 'Creators', niches: 'Niches', favorites: 'Favorites' };
     // Favorites holds two lists: saved clips and saved creators.
     const savedClips = state => state.mode === 'favorites' && !state.creator && state.favoriteKind === 'clips';
     const creatorList = state => !state.creator && (state.mode === 'creators' || (state.mode === 'favorites' && state.favoriteKind === 'creators'));
-    const directory = state => state.mode === 'niches' || creatorList(state);
+    // Tags list names; a chosen tag is held in state.niche with `tag: true`.
+    const tagList = state => state.mode === 'tags' && !state.niche && !state.creator;
+    const directory = state => state.mode === 'niches' || tagList(state) || creatorList(state);
     const queryKey = state => state.mode === 'favorites' ? `favorites-${state.favoriteKind}` : state.mode;
     // Collections are stored oldest first; show the newest saved first.
     const newest = list => list.slice().reverse();
@@ -65,7 +67,7 @@
     function pinned(state) {
         state.pins.replaceChildren(...saved.niches.map(niche => ui('button', { type: 'button',
             onClick: () => mode(state, 'videos', niche) }, `# ${niche.name}`)));
-        state.pins.hidden = state.mode === 'favorites' || state.mode === 'creators' || !saved.niches.length;
+        state.pins.hidden = state.mode === 'favorites' || state.mode === 'creators' || state.mode === 'tags' || !saved.niches.length;
     }
     const paths = {
         close: 'M6 6l12 12M18 6 6 18',
@@ -73,6 +75,7 @@
         play: 'm9 5 11 7-11 7Z',
         back: 'm14 6-6 6 6 6',
         niche: 'M9 3 7 21M17 3l-2 18M3 9h18M2 15h18',
+        tag: 'M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8ZM7.5 7.5h.01',
         creator: 'M20 21v-2a6 6 0 0 0-6-6h-4a6 6 0 0 0-6 6v2M16 6a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
         verified: 'm9 11 3 3L22 4M21 12v.9A10 10 0 1 1 15.1 3',
         star: 'm12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z',
@@ -340,10 +343,11 @@
         if (!alive(state)) return;
         if (value === 'favorites' && !creator) window.__LOWCORD_NATIVE__.redgifsCancel?.('browse').catch(() => {});
         if (!state.niche && !state.creator) state.queries[queryKey(state)] = state.input.value;
+        if (!creator) state.returnNiche = null;
         state.mode = value; state.niche = niche; state.creator = creator; state.favoriteKind = kind;
         state.input.value = niche || creator ? '' : state.queries[queryKey(state)] || '';
         state.input.placeholder = savedClips(state) ? 'Search saved videos' : value === 'favorites' && !creator ? 'Search saved creators'
-            : creatorList(state) ? 'Search creators' : value === 'niches' ? 'Search niches' : 'Search topics';
+            : creatorList(state) ? 'Search creators' : value === 'niches' ? 'Search niches' : value === 'tags' ? 'Search tags' : 'Search topics';
         for (const tab of state.tabs) { const selected = tab.dataset.mode === value; tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1; }
         state.grid.classList.toggle('lowcord-redgifs-niches', directory(state));
         state.grid.classList.toggle('lowcord-redgifs-favorites', savedClips(state));
@@ -353,6 +357,12 @@
         pinned(state); favoriteControls(state);
         state.results.setAttribute('aria-labelledby', `lowcord-redgifs-tab-${value}`);
         void search(state, true);
+    }
+    // A creator name on a video opens that creator's videos in the picker.
+    function openCreator(state, author) {
+        if (!alive(state) || state.creator?.id === author || !/^[a-z0-9_-]{1,100}$/i.test(author)) return;
+        state.returnNiche = state.niche;
+        mode(state, state.mode === 'niches' ? 'videos' : state.mode, null, { id: author, name: author });
     }
     function close() {
         const state = current;
@@ -375,7 +385,7 @@
         for (const job of [...transfer.jobs.values(), transfer.activeJob].filter(Boolean)) job.row = job.detail = job.action = job.remove = null;
         if (state.editor?.isConnected) state.editor.focus({ preventScroll: true });
     }
-    async function search(state, reset) {
+    async function search(state, reset, refresh = false) {
         if (!alive(state) || (state.loading && !reset)) return;
         const generation = ++state.generation;
         if (reset) {
@@ -385,20 +395,23 @@
             state.grid.replaceChildren(); state.windowStart = -1; state.windowEnd = -1;
             state.results.scrollTop = 0;
         }
-        const back = state.creator ? state.mode === 'favorites' ? 'Favorites' : 'Creators' : 'Niches';
+        const back = state.creator ? { favorites: 'Favorites', creators: 'Creators' }[state.mode] || state.returnNiche?.name || (state.mode === 'tags' ? 'Tags' : 'Trending')
+            : state.mode === 'tags' ? 'Tags' : 'Niches';
+        state.refresh.hidden = state.mode === 'favorites' && !state.creator;
         state.back.hidden = !state.niche && !state.creator;
         state.back.setAttribute('aria-label', `Back to ${back.toLowerCase()}`);
         state.back.lastChild.textContent = back;
         state.resultHeading.hidden = state.mode !== 'favorites' && state.mode !== 'creators' && !state.query && !state.niche && !state.creator;
-        state.grid.setAttribute('aria-label', directory(state) ? `RedGIFs ${state.mode === 'niches' ? 'niches' : 'creators'}` : 'RedGIFs videos');
+        state.grid.setAttribute('aria-label', directory(state) ? `RedGIFs ${state.mode === 'niches' ? 'niches' : tagList(state) ? 'tags' : 'creators'}` : 'RedGIFs videos');
         state.heading.textContent = state.niche?.name || state.creator?.name || state.creator?.id || (state.mode === 'favorites' ? 'Saved videos' : state.mode === 'creators'
             ? state.query ? `Creators for ${state.query}` : 'Trending creators' : state.mode === 'niches'
-            ? state.query ? `Niches for ${state.query}` : 'Popular niches'
+            ? state.query ? `Niches for ${state.query}` : 'Popular niches' : tagList(state)
+            ? state.query ? `Tags for ${state.query}` : 'Popular tags'
             : state.query ? `Videos for ${state.query}` : 'Trending videos');
         favoriteControls(state);
-        state.loading = true; state.more.disabled = true;
+        state.loading = true; state.more.disabled = true; state.refresh.disabled = true;
         state.results.setAttribute('aria-busy', 'true');
-        status(state, directory(state) ? state.mode === 'niches' ? 'Finding niches…' : 'Finding creators…' : 'Finding videos…');
+        status(state, directory(state) ? state.mode === 'niches' ? 'Finding niches…' : tagList(state) ? 'Finding tags…' : 'Finding creators…' : 'Finding videos…');
         try {
             const query = state.query.toLowerCase();
             const favorites = newest(savedClips(state) ? saved.favorites : saved.creators).filter(item => !query
@@ -407,12 +420,13 @@
             const result = savedClips(state) ? await favoritePage(state, favorites, generation)
                 : state.mode === 'favorites' && !state.creator ? { creators: favorites.slice(state.page * 24, (state.page + 1) * 24), more: (state.page + 1) * 24 < favorites.length }
                 : await window.__LOWCORD_NATIVE__.redgifsSearch(state.query, state.page + 1,
-                    { mode: state.creator ? 'creators' : state.mode, ...(state.niche ? { nicheId: state.niche.id } : {}), ...(state.creator ? { creator: state.creator.id } : {}) });
+                    { mode: state.creator ? 'creators' : state.mode, ...(state.niche ? state.niche.tag ? { tag: state.niche.id } : { nicheId: state.niche.id } : {}), ...(state.creator ? { creator: state.creator.id } : {}),
+                        ...(refresh && state.page === 0 ? { refresh: true } : {}) });
             if (!alive(state) || generation !== state.generation) return;
             if (result.error) throw new Error(result.error);
             state.page++;
             const ids = new Set(state.items.map(item => item.id));
-            for (const source of state.mode === 'niches' ? result.niches : directory(state) ? result.creators : result.items) {
+            for (const source of state.mode === 'niches' ? result.niches : tagList(state) ? result.tags : directory(state) ? result.creators : result.items) {
                 const item = { ...source };
                 if (ids.has(item.id)) continue;
                 ids.add(item.id); state.items.push(item);
@@ -422,14 +436,14 @@
             state.more.textContent = 'Load more';
             status(state, state.items.length ? '' : savedClips(state) ? state.query ? 'No saved videos match this search.' : 'No saved videos yet. Star a video to add it here.'
                 : state.mode === 'favorites' && !state.creator ? state.query ? 'No saved creators match this search.' : 'No saved creators yet. Star a creator to add them here.'
-                : state.mode === 'niches' ? 'No niches found. Try another topic.' : directory(state) ? 'No creators found. Try another name.' : 'No videos found. Try another topic or browse Niches.');
+                : state.mode === 'niches' ? 'No niches found. Try another topic.' : tagList(state) ? 'No tags found. Try another word.' : directory(state) ? 'No creators found. Try another name.' : 'No videos found. Try another topic or browse Niches.');
         } catch (error) {
             if (alive(state) && generation === state.generation) {
                 status(state, errorText(error.message)); state.more.hidden = false; state.more.textContent = 'Retry';
             }
         } finally {
             if (current === state && generation === state.generation) {
-                state.loading = false; state.more.disabled = false; state.results.setAttribute('aria-busy', 'false');
+                state.loading = false; state.more.disabled = false; state.refresh.disabled = false; state.results.setAttribute('aria-busy', 'false');
             }
         }
     }
@@ -478,16 +492,17 @@
             return item.button;
         }
         if (directory(state) || item.unavailable) {
-            const creator = state.mode === 'creators';
+            const creator = state.mode === 'creators', tag = tagList(state);
             const name = item.name || item.author || item.id;
             const detail = item.unavailable ? `${errorText(item.unavailable)} Click to retry.`
                 : [item.videos != null ? `${compact.format(item.videos)} videos` : null,
                     creator ? item.followers != null ? `${compact.format(item.followers)} followers` : null
                         : item.subscribers != null ? `${compact.format(item.subscribers)} members` : null].filter(Boolean).join(' · ');
             item.button = ui('button', { type: 'button', className: 'lowcord-redgifs-niche',
-                'aria-label': item.unavailable ? `Retry favorite ${name}` : `Browse ${creator ? 'creator' : 'niche'} ${name}`,
-                onClick: () => item.unavailable ? void search(state, true) : creator ? mode(state, 'creators', null, item) : mode(state, 'videos', item) },
-                ui('span', { className: 'lowcord-redgifs-niche-icon' }, icon(item.unavailable ? 'retry' : creator ? 'creator' : 'niche', 20)),
+                'aria-label': item.unavailable ? `Retry favorite ${name}` : `Browse ${creator ? 'creator' : tag ? 'tag' : 'niche'} ${name}`,
+                onClick: () => item.unavailable ? void search(state, true) : creator ? mode(state, 'creators', null, item)
+                    : tag ? mode(state, 'tags', { id: item.id, name: item.name, tag: true }) : mode(state, 'videos', item) },
+                ui('span', { className: 'lowcord-redgifs-niche-icon' }, icon(item.unavailable ? 'retry' : creator ? 'creator' : tag ? 'tag' : 'niche', 20)),
                 ui('span', { className: 'lowcord-redgifs-niche-copy' }, ui('strong', {}, `${name}${creator && item.verified ? ' · Verified' : ''}`), ui('span', {}, detail)),
                 icon('back', 16));
             return item.button;
@@ -505,7 +520,11 @@
             ui('span', { className: 'lowcord-redgifs-play' }, icon('play', 22)),
             item.timer,
             ui('span', { className: 'lowcord-redgifs-progress', 'aria-hidden': 'true' }),
-            ...(savedClips(state) ? [] : [ui('span', { className: 'lowcord-redgifs-author' }, item.author || 'Preview video')]));
+            ...(savedClips(state) ? [] : [ui('span', { className: 'lowcord-redgifs-author', 'aria-hidden': String(Boolean(item.author)) }, item.author ? '\u00a0' : 'Preview video')]));
+        const viewing = state.creator?.id === item.author;
+        item.authorLink = item.author && !viewing ? ui('button', { type: 'button', className: savedClips(state) ? 'lowcord-redgifs-favorite-author' : 'lowcord-redgifs-author-link',
+            title: `View @${item.author}`, 'aria-label': `View videos by ${item.author}`, onClick: () => openCreator(state, item.author) }, `@${item.author}`)
+            : savedClips(state) ? null : item.author ? ui('span', { className: 'lowcord-redgifs-author-link', 'data-current': '' }, `@${item.author}`) : null;
         item.button = button; syncTile(state, item); return button;
     }
     function renderWindow(state, force = false) {
@@ -535,7 +554,7 @@
             const item = state.items[i];
             if ((i < start || i >= end) && item.card) {
                 if (item.card.contains(document.activeElement)) state.results.focus({ preventScroll: true });
-                stopPreview(state, item); item.card.remove(); item.card = item.button = item.star = item.timer = null;
+                stopPreview(state, item); item.card.remove(); item.card = item.button = item.star = item.timer = item.authorLink = null;
             }
         }
         if (!state.topSpacer?.isConnected) {
@@ -549,10 +568,10 @@
             if (!item.card) {
                 const button = createCard(state, item);
                 item.saveKind = state.mode === 'niches' ? 'niches' : creators ? 'creators' : 'favorites';
-                item.star = ui('button', { type: 'button', className: 'lowcord-redgifs-star', onClick: () => toggleSaved(item.saveKind, item) });
+                item.star = tagList(state) ? null : ui('button', { type: 'button', className: 'lowcord-redgifs-star', onClick: () => toggleSaved(item.saveKind, item) });
                 updateStar(state, item);
                 item.card = ui('div', { className: `lowcord-redgifs-card${!favorites && (directory(state) || item.unavailable) ? ' lowcord-redgifs-niche-card' : ''}` },
-                    button, item.star, ...(favorites ? [ui('span', { className: 'lowcord-redgifs-favorite-author', title: item.author || item.id }, item.author ? `@${item.author}` : item.id)] : []));
+                    button, ...(item.star ? [item.star] : []), ...(item.authorLink ? [item.authorLink] : favorites ? [ui('span', { className: 'lowcord-redgifs-favorite-author', title: item.id }, item.id)] : []));
             }
             const row = Math.floor((start + index) / columns);
             item.card.style.height = `${offsets[row + 1] - offsets[row] - gap}px`;
@@ -585,7 +604,12 @@
                     : typeof value === 'number' ? value : value?.total ? value.loaded / value.total : value?.progress;
                 if (Number.isFinite(ratio)) progress(Math.max(0, Math.min(100, Math.round(ratio <= 1 ? ratio * 100 : ratio))));
             });
-            upload.on('complete', () => { progress(100); finish(); });
+            // Discord's uploader also emits 'complete' when an upload is
+            // cancelled; only a finished upload has a usable filename.
+            upload.on('complete', result => {
+                if (result instanceof Error || upload.isCancelled?.() || !upload.uploadedFilename) finish(new Error('upload-failed'));
+                else { progress(100); finish(); }
+            });
             upload.on('error', () => finish(new Error('upload-failed')));
             try { Promise.resolve(upload.upload()).catch(finish); } catch (error) { finish(error); }
         });
@@ -616,8 +640,68 @@
     }
     function retryJob(job) {
         if (working && transfer.activeJob === job) return;
-        job.abort = new AbortController(); job.phase = 'queued'; job.percent = 0;
+        job.abort = new AbortController(); job.phase = 'queued'; job.percent = 0; job.error = '';
         transfer.queue.push(job); queueStatus(); void pump();
+    }
+    // Discord's REST client rejects with its response ({ status, body }),
+    // not an Error. Network failures, rate limits and server errors can
+    // succeed on a retry; enforce_nonce makes reposting the same nonce safe.
+    const wait = (ms, signal) => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { signal.removeEventListener('abort', stop); resolve(); }, ms);
+        const stop = () => { clearTimeout(timer); reject(new Error('cancelled')); };
+        signal.addEventListener('abort', stop, { once: true });
+    });
+    const transient = error => !(error?.status >= 400 && error.status < 500) || error.status === 408 || error.status === 429;
+    function postedByNonce(job) {
+        // The gateway delivers our own message with its nonce even when the
+        // REST response was lost.
+        const messages = window.Lowcord.store('MessageStore')?.getMessages?.(job.channelId);
+        const list = messages?._array ?? messages?.toArray?.() ?? [];
+        return list.some(message => message?.nonce === job.nonce && message.state !== 'SEND_FAILED');
+    }
+    function rejection(error, job) {
+        const body = error?.body;
+        if (body?.captcha_key || body?.captcha_sitekey) return 'Discord wants a captcha. Send one message by hand, then retry.';
+        if (error?.status === 413 || body?.code === 40005) return 'Discord says this video is too large for this chat.';
+        if (body?.code === 20016) return 'Slowmode is on in this channel. Retry in a moment.';
+        if (body?.code === 50013 || body?.code === 50001) return 'You do not have permission to send files here.';
+        if (body?.code === 50007) return 'This user does not accept messages from you.';
+        // Checked by Discord against the recipient's sensitive-media setting
+        // (or their age); Discord's own upload button is refused the same way.
+        if (body?.code === 20009) return `${job.destination} can't receive explicit media from you. Their Discord settings block it, so Discord's own upload is blocked too.`;
+        const reason = typeof body?.message === 'string' ? body.message.slice(0, 120) : `HTTP ${error?.status ?? 'error'}`;
+        return `Discord rejected the video: ${reason}${body?.code ? ` (${body.code})` : ''}.`;
+    }
+    async function postMessage(job, upload) {
+        for (let attempt = 0; ; attempt++) {
+            job.abort.signal.throwIfAborted();
+            try {
+                await window.Lowcord.RestAPI.post({ url: `/channels/${job.channelId}/messages`, body: {
+                    channel_id: job.channelId, content: '', type: 0, sticker_ids: [], nonce: job.nonce, enforce_nonce: true,
+                    attachments: [{ id: '0', filename: upload.filename, uploaded_filename: upload.uploadedFilename }],
+                    allowed_mentions: { parse: [], replied_user: false },
+                    ...(job.reference ? { message_reference: job.reference } : {}),
+                } });
+                return;
+            } catch (error) {
+                if (postedByNonce(job)) return;
+                console.warn('[Lowcord] RedGIFs send failed', error?.status, error?.body ?? error);
+                const errors = JSON.stringify(error?.body?.errors ?? '');
+                // The replied-to message may have been deleted; send without it.
+                if (job.reference && error?.status === 400 && (errors.includes('message_reference') || [10008, 160002].includes(error.body?.code))) {
+                    job.reference = undefined; continue;
+                }
+                if (attempt >= 3 || !transient(error)) {
+                    if (error?.status >= 400 && error.status < 500 && !transient(error)) {
+                        const rejected = new Error('rejected'); rejected.detail = rejection(error, job); throw rejected;
+                    }
+                    throw error;
+                }
+                const after = Number(error?.body?.retry_after ?? error?.retryAfter);
+                await wait(Number.isFinite(after) && after > 0 ? Math.min(30_000, after * 1000) : 1000 * 2 ** attempt, job.abort.signal);
+                if (postedByNonce(job)) return;
+            }
+        }
     }
     function queueStatus() {
         const state = current;
@@ -686,16 +770,19 @@
                 transfer.activeJob = job; job.phase = 'preparing'; queueStatus();
                 let posting = false, handle;
                 try {
-                    let result = await window.__LOWCORD_NATIVE__.redgifsPrepare(job.key, job.limit);
-                    // Only refresh expired capabilities; ordinary clicks reuse
-                    // their search metadata without an extra API round trip.
-                    if (result.error === 'expired' && window.__LOWCORD_NATIVE__.redgifsResolve) {
-                        job.abort.signal.throwIfAborted();
-                        const fresh = await window.__LOWCORD_NATIVE__.redgifsResolve(job.id);
-                        job.abort.signal.throwIfAborted();
-                        if (fresh.error) throw new Error(fresh.error);
-                        job.key = fresh.key;
-                        result = await window.__LOWCORD_NATIVE__.redgifsPrepare(job.key, job.limit);
+                    // A recent upload survives a failed post; retry only reposts.
+                    let upload = job.upload && Date.now() - job.uploadedAt < 10 * 60_000 ? job.upload : null;
+                    if (!upload) {
+                        let result = await window.__LOWCORD_NATIVE__.redgifsPrepare(job.key, job.limit);
+                        // Only refresh expired capabilities; ordinary clicks reuse
+                        // their search metadata without an extra API round trip.
+                        if (result.error === 'expired' && window.__LOWCORD_NATIVE__.redgifsResolve) {
+                            job.abort.signal.throwIfAborted();
+                            const fresh = await window.__LOWCORD_NATIVE__.redgifsResolve(job.id);
+                            job.abort.signal.throwIfAborted();
+                            if (fresh.error) throw new Error(fresh.error);
+                            job.key = fresh.key;
+                            result = await window.__LOWCORD_NATIVE__.redgifsPrepare(job.key, job.limit);
                     }
                     handle = result.handle;
                     job.abort.signal.throwIfAborted();
@@ -707,17 +794,15 @@
                     if (!file.size || file.size >= job.limit) throw new Error('too-large');
                     await window.__LOWCORD_NATIVE__.redgifsRelease(handle); handle = undefined;
                     job.phase = 'uploading'; queueStatus();
-                    const upload = await uploadFile(file, job.channelId, job.abort.signal, percent => {
+                    upload = await uploadFile(file, job.channelId, job.abort.signal, percent => {
                         if (job.percent !== percent) { job.percent = percent; queueStatus(); }
                     });
+                    job.upload = upload; job.uploadedAt = Date.now();
+                    }
                     job.abort.signal.throwIfAborted();
                     posting = true; job.phase = 'posting'; queueStatus();
-                    await window.Lowcord.RestAPI.post({ url: `/channels/${job.channelId}/messages`, body: {
-                        channel_id: job.channelId, content: '', type: 0, sticker_ids: [], nonce: job.nonce, enforce_nonce: true,
-                        attachments: [{ id: '0', filename: upload.filename, uploaded_filename: upload.uploadedFilename }],
-                        allowed_mentions: { parse: [], replied_user: false },
-                        ...(job.reference ? { message_reference: job.reference } : {}),
-                    } });
+                    await postMessage(job, upload);
+                    job.upload = null;
                     transfer.sent.add(job.identity); transfer.jobs.delete(job.identity);
                     while (transfer.sent.size > 256) transfer.sent.delete(transfer.sent.values().next().value);
                     extensions.toast(`Video sent to ${job.destination}.`);
@@ -726,7 +811,10 @@
                     if (job.abort.signal.aborted) job.phase = 'cancelled';
                     else {
                         job.phase = 'failed';
-                        job.error = posting ? 'Could not confirm sending. Retry uses the same message nonce to avoid duplicates.'
+                        // A rejected post needs a fresh upload next time.
+                        if (error.message === 'rejected') job.upload = null;
+                        job.error = error.message === 'rejected' ? error.detail
+                            : posting ? 'Could not reach Discord to confirm sending. Retry will not post a duplicate.'
                             : error.message === 'upload-failed' ? 'Upload failed. Try again.' : errorText(error.message);
                         if (current) status(current, job.error);
                         extensions.toast(job.error, true);
@@ -764,7 +852,7 @@
         const tablist = ui('div', { className: 'lowcord-redgifs-tabs', role: 'tablist', 'aria-label': 'Search category' }, ...tabs);
         const heading = ui('span', { className: 'lowcord-redgifs-heading' });
         const back = ui('button', { type: 'button', className: 'lowcord-redgifs-back', 'aria-label': 'Back to niches', hidden: true,
-            onClick: () => mode(state, state.creator ? state.mode : 'niches') }, icon('back', 12), 'Niches');
+            onClick: () => { const niche = state.creator ? state.returnNiche : null; mode(state, state.creator || state.mode === 'tags' ? state.mode : 'niches', niche); } }, icon('back', 12), 'Niches');
         const favoriteKinds = ui('div', { className: 'lowcord-redgifs-segments', role: 'group', 'aria-label': 'Saved type', hidden: true },
             ...[['clips', 'Clips'], ['creators', 'Creators']].map(([kind, label]) => ui('button', { type: 'button', 'data-kind': kind, 'aria-pressed': String(kind === 'clips'),
                 onClick: () => { if (state.favoriteKind !== kind) mode(state, 'favorites', null, null, kind); } }, label, ' ', ui('span', {}))));
@@ -814,7 +902,9 @@
             resultHeading, pins, results, uploadStatus, statusNode, favoritesHelp, options);
         const header = ui('header', { className: 'lowcord-redgifs-titlebar', onPointerdown: event => beginGesture(state, event, 'move') },
             drag, ui('h2', {}, ui('span', {}, 'Red'), 'GIFs'), collapse, closeButton);
-        form.append(optionsButton);
+        const refresh = ui('button', { type: 'button', className: 'lowcord-redgifs-icon', 'aria-label': 'Refresh results', title: 'Refresh',
+            onClick: () => void search(state, true, true) }, icon('retry', 16));
+        form.append(refresh, optionsButton);
         const node = ui('section', { className: 'lowcord-redgifs', role: 'dialog', 'aria-label': 'RedGIFs picker',
             onPointerdown: event => {
                 if (!options.hidden && !options.contains(event.target) && !optionsButton.contains(event.target)) {
@@ -824,7 +914,7 @@
             onPointerup: event => { if (event.pointerId === state.gesture?.pointer) finishGesture(state, true); },
             onPointercancel: () => finishGesture(state, false),
             onLostpointercapture: () => finishGesture(state, true) }, header, body, resize);
-        const state = { node, input, searchButton, grid, more, video, status: statusNode,
+        const state = { node, input, searchButton, grid, more, refresh, returnNiche: null, video, status: statusNode,
             editor, channelId, query: '', page: 0, items: [], generation: 0, abort: new AbortController(),
             mode: 'videos', niche: null, creator: null, favoriteKind: 'clips', favoriteKinds, creatorSave, queries: {}, tabs, results, heading, back, queueStatus: uploadStatus,
             pins, pause, queueList, queueToggle, queueSummary, queueCount, resultHeading, favoritesHelp,

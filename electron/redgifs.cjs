@@ -21,6 +21,23 @@ function createRedgifs({ fetchPage = fetch, compress = compressVideo, tempRoot =
     const entries = new Map(), jobs = new Map(), browsing = new Map();
     const lifetime = new AbortController();
     const assets = new Map(), searches = new Map();
+    // The full tag list (~7.5k names, ~300 KB) is fetched once and filtered
+    // here, so typing in the Tags tab costs no extra API requests.
+    let tagList, tagListPending;
+    const validTag = value => typeof value === 'string' && /^[^\u0000-\u001f,]{1,100}$/.test(value) && value.trim() === value;
+    async function allTags(signal, refresh) {
+        if (!refresh && tagList && tagList.expires > Date.now()) return tagList.tags;
+        tagListPending ??= json('/v1/tags').then(result => {
+            if (!Array.isArray(result?.tags)) throw fail('invalid-response');
+            const tags = result.tags.filter(tag => validTag(tag?.name)).map(tag => ({ name: tag.name, lower: tag.name.toLowerCase(),
+                count: Number.isFinite(tag.count) && tag.count >= 0 ? tag.count : null })).sort((a, b) => (b.count ?? 0) - (a.count ?? 0));
+            tagList = { tags, expires: Date.now() + 6 * 3600_000 };
+            return tags;
+        }).finally(() => { tagListPending = undefined; });
+        const tags = await tagListPending;
+        signal.throwIfAborted();
+        return tags;
+    }
     const files = createMediaCache({ directory: tempRoot });
     const previews = createPreviewCache({ directory: tempRoot });
     let token, tokenPending;
@@ -88,14 +105,23 @@ function createRedgifs({ fetchPage = fetch, compress = compressVideo, tempRoot =
     async function search(owner, query = '', page = 1, options = {}) {
         if (typeof query !== 'string' || query.length > 200 || !Number.isInteger(page) || page < 1 || page > 1000) throw fail('invalid-search');
         if (!options || typeof options !== 'object' || Array.isArray(options)) throw fail('invalid-search');
-        const mode = options.mode ?? 'videos', nicheId = options.nicheId, creator = options.creator;
-        if (!['videos', 'explore', 'creators', 'niches'].includes(mode) || (nicheId != null && (mode !== 'videos' || typeof nicheId !== 'string'
+        const mode = options.mode ?? 'videos', nicheId = options.nicheId, creator = options.creator, tag = options.tag;
+        if (!['videos', 'tags', 'creators', 'niches'].includes(mode) || (tag != null && (mode !== 'tags' || !validTag(tag))) || (nicheId != null && (mode !== 'videos' || typeof nicheId !== 'string'
             || !/^[a-z0-9_-]{1,100}$/i.test(nicheId))) || (creator != null && (mode !== 'creators' || typeof creator !== 'string'
             || !/^[a-z0-9_-]{1,100}$/i.test(creator)))) throw fail('invalid-search');
         browsing.get(owner)?.abort();
         const controller = new AbortController(); browsing.set(owner, controller);
         try {
             const text = query.trim().replace(/^#/, '').trim();
+            if (mode === 'tags' && tag == null) {
+                // Names starting with the text come first, then other matches,
+                // each by popularity.
+                const all = await allTags(controller.signal, options.refresh === true), lower = text.toLowerCase();
+                const matches = lower ? [...all.filter(entry => entry.lower.startsWith(lower)),
+                    ...all.filter(entry => !entry.lower.startsWith(lower) && entry.lower.includes(lower))] : all;
+                return { tags: matches.slice((page - 1) * 24, page * 24).map(entry => ({ id: entry.name, name: entry.name, videos: entry.count })),
+                    more: page * 24 < matches.length };
+            }
             const params = new URLSearchParams({ count: '24', page: String(page) });
             let endpoint;
             if (mode === 'niches') {
@@ -119,13 +145,12 @@ function createRedgifs({ fetchPage = fetch, compress = compressVideo, tempRoot =
                 endpoint = '/v2/feeds/trending/popular';
             } else {
                 params.set('type', 'g'); params.set('order', 'trending');
-                if (mode === 'explore') params.set('verified', 'y');
-                if (text) params.set('tags', text);
+                if (tag ?? text) params.set('tags', tag ?? text);
                 endpoint = '/v2/gifs/search';
             }
             const cacheKey = `${endpoint}?${params}`;
             let cached = searches.get(cacheKey);
-            if (!cached || cached.expires < Date.now()) {
+            if (!cached || cached.expires < Date.now() || options.refresh === true) {
                 cached = { result: await json(cacheKey, controller.signal), expires: Date.now() + 60_000 };
             }
             controller.signal.throwIfAborted();
