@@ -63,6 +63,7 @@
     function show(video) {
         if (!enabled() || !eligible(video)) return;
         if (target === video) { schedule(); return; }
+        window.Lowcord.ensureStyle?.('pictureInPicture');
         hide(); target = video;
         button = extensions.ui('button', { type: 'button', className: 'lowcord-pip-button',
             onPointerdown: event => event.stopPropagation(),

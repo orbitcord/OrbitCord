@@ -11,6 +11,7 @@
         : /^video\//i.test(file.type) || /\.(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg|ts|mts|m2ts|wmv|flv|ogv)$/i.test(file.name) ? 'video'
         : /^image\/(?:png|apng|jpeg|webp|avif|bmp|tiff)$/i.test(file.type) || /\.(png|apng|jpe?g|webp|avif|bmp|tiff?)$/i.test(file.name) ? 'image' : null;
     function status(batch) {
+        window.Lowcord.ensureStyle?.('videoCompression');
         const { ui, toastBadge } = extensions();
         const title = ui('span', { className: 'lowcord-toast-title' }, 'Preparing media…');
         const detail = ui('span', { className: 'lowcord-toast-detail' }, `Under ${batch.limit / 1_000_000} MB`);

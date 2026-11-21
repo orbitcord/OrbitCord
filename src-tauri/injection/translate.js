@@ -79,6 +79,7 @@
     function render(row, id, entry) {
         const anchor = row.querySelector('[id^="message-content-"]');
         if (!anchor) return;
+        window.Lowcord.ensureStyle?.("mediaExtras");
         let node = anchor.nextElementSibling;
         if (!node?.classList.contains("lowcord-translation")) {
             node = ui("div", { className: "lowcord-translation" });
@@ -125,6 +126,7 @@
     function closePicker() { picker?.remove(); picker = undefined; }
     function pickLanguage({ title, action, initial, onPick, onChange }) {
         closePicker();
+        window.Lowcord.ensureStyle?.("mediaExtras");
         const select = ui("select", { className: "lowcord-translate-select", "aria-label": "Language" });
         const codes = new Set([...Object.keys(languages), initial]);
         for (const code of [...codes].sort((a, b) => nameOf(a).localeCompare(nameOf(b)))) select.append(ui("option", { value: code }, nameOf(code)));

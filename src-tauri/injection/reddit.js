@@ -634,6 +634,7 @@
         const editor = document.querySelector('[class*="channelTextArea_"] [contenteditable="true"][role="textbox"]');
         const channelId = selectedChannel();
         if (!editor || !channelId) { extensions.toast('Open a chat to browse Reddit.', true); return; }
+        window.Lowcord.ensureStyle?.('reddit');
         const state = { channelId, editor, mode: 'home', subreddit: null, query: '', after: null, items: [], ids: new Set(),
             generation: 0, pagesWithoutMedia: 0, layout: readLayout() };
         state.input = ui('input', { type: 'search', placeholder: 'Search posts', 'aria-label': 'Search Reddit', maxlength: '200' });

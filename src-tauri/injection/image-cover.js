@@ -74,6 +74,7 @@
     }
 
     function dialog(bitmap, name, { tool: startTool = "crop", index = 0, total = 1, queue = [], kind = "image", confirm = "Attach image", video = null } = {}) {
+        window.Lowcord.ensureStyle?.("privacy");
         return new Promise(resolve => {
             const restoreFocus = document.activeElement;
             const reduce = Math.min(1, Math.sqrt(previewArea / (bitmap.width * bitmap.height)));
@@ -818,6 +819,7 @@
             if (!media || media.querySelector(":scope > .lowcord-upload-edit")) continue;
             const id = cardId(card), file = uploads.find(item => item.id === id)?.item?.file;
             if (!(file instanceof File) || !(supports(file) || isVideo(file))) continue;
+            window.Lowcord.ensureStyle?.("privacy");
             const label = isVideo(file) ? "Edit video" : "Edit image";
             const button = ui("button", { type: "button", className: "lowcord-upload-edit", "aria-label": label, title: label,
                 onClick: event => { event.preventDefault(); event.stopPropagation(); void editUpload(cardId(card)); } });

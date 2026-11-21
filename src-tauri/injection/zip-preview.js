@@ -129,6 +129,7 @@
     function mount(card, attachment) {
         const next = card.nextElementSibling;
         if (next?.classList.contains("lowcord-zip") && next.dataset.attachment === attachment.id) return;
+        window.Lowcord.ensureStyle?.("mediaExtras");
         const bar = ui("div", { className: "lowcord-zip" });
         bar.dataset.attachment = attachment.id;
         const toggle = ui("button", { type: "button", className: "lowcord-zip-toggle", "aria-expanded": "false" }, "Show files");

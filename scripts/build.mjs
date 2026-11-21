@@ -1,7 +1,7 @@
 import { readFile, mkdir, copyFile, rename } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { build } from 'esbuild';
+import { build, transform } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import nativeTargets from './native-target.cjs';
 
@@ -53,21 +53,47 @@ export async function prepare(release = false, { platform = process.platform, ar
 export async function buildPreload({ sourceRoot = root, output = join(sourceRoot, '.lowcord'), release = false } = {}) {
     await mkdir(output, { recursive: true });
     const read = file => readFile(join(sourceRoot, 'src-tauri', 'injection', file), 'utf8');
-    const [boot, shim, discord, themes, extensions, chatCapture, massDelete, mediaGallery, dmQuickReply, background, gif, musicEmbeds, socialEmbeds, appearance, settings, themesCSS, appearanceCSS, uiCSS] = await Promise.all(
+    const minifyCSS = async css => release ? (await transform(css, { loader: 'css', minify: true })).code : css;
+    const minifyThemesCSS = async css => {
+        if (!release) return css;
+        // Preserve /* @theme <id> */ section markers that themes.js splits on.
+        const parts = css.split(/^\/\*\s*@theme\s+([\w -]+?)\s*\*\/\s*$/m);
+        const sections = [await minifyCSS(parts[0])];
+        for (let i = 1; i < parts.length; i += 2) {
+            sections.push(`\n/* @theme ${parts[i]} */\n${await minifyCSS(parts[i + 1])}`);
+        }
+        return sections.join('');
+    };
+    const [boot, shim, discord, themes, extensions, chatCapture, massDelete, mediaGallery, dmQuickReply, background, gif, musicEmbeds, socialEmbeds, appearance, settings, rawThemesCSS, rawAppearanceCSS, rawUiCSS] = await Promise.all(
         ['boot.js', 'shim.js', 'discord.js', 'themes.js', 'extensions.js', 'chat-capture.js', 'mass-delete.js', 'media-gallery.js', 'dm-quick-reply.js', 'background.js', 'gif.js', 'music-embeds.js', 'social-embeds.js', 'chat-appearance.js', 'settings.js', 'themes.css', 'chat-appearance.css', 'lowcord-ui.css'].map(read));
     // Static function body, serialized by Electron into the page's main world
     // synchronously at document start. No eval, script tag or CSP bypass.
     const socialLinks = await readFile(join(sourceRoot, 'electron', 'social-links.cjs'), 'utf8');
     const musicLinks = await readFile(join(sourceRoot, 'electron', 'music-links.cjs'), 'utf8');
-    const [redgifs, redgifsCSS] = await Promise.all(['redgifs.js', 'redgifs.css'].map(read));
-    const [reddit, redditCSS] = await Promise.all(['reddit.js', 'reddit.css'].map(read));
-    const [pictureInPicture, pictureInPictureCSS] = await Promise.all(['picture-in-picture.js', 'picture-in-picture.css'].map(read));
-    const [videoCompression, videoCompressionCSS] = await Promise.all(['video-compression.js', 'video-compression.css'].map(read));
-    const [mediaSources,mediaSourcesCSS]=await Promise.all(['media-sources.js','media-sources.css'].map(read));
+    const [redgifs, rawRedgifsCSS] = await Promise.all(['redgifs.js', 'redgifs.css'].map(read));
+    const [reddit, rawRedditCSS] = await Promise.all(['reddit.js', 'reddit.css'].map(read));
+    const [pictureInPicture, rawPictureInPictureCSS] = await Promise.all(['picture-in-picture.js', 'picture-in-picture.css'].map(read));
+    const [videoCompression, rawVideoCompressionCSS] = await Promise.all(['video-compression.js', 'video-compression.css'].map(read));
+    const [mediaSources, rawMediaSourcesCSS] = await Promise.all(['media-sources.js', 'media-sources.css'].map(read));
     const imageDrop = await read('image-drop.js');
     const extraScripts = await Promise.all(['split-messages.js', 'read-all.js', 'call-timer.js', 'online-friends.js', 'translate.js', 'spellcheck.js', 'quick-reactions.js', 'command-palette.js', 'embed-images.js', 'zip-preview.js', 'gif-captioner.js', 'tenor.js'].map(read));
-    const extraStyles = await Promise.all(['ui-extras.css', 'media-extras.css', 'gif-captioner.css'].map(read));
-    const [privacyCore, privacyMedia, privacy, privacyCSS, imageCover] = await Promise.all(['privacy-core.js', 'privacy-media.js', 'privacy.js', 'privacy.css', 'image-cover.js'].map(read));
+    const [rawUiExtrasCSS, rawMediaExtrasCSS, rawGifCaptionerCSS] = await Promise.all(['ui-extras.css', 'media-extras.css', 'gif-captioner.css'].map(read));
+    const [privacyCore, privacyMedia, privacy, rawPrivacyCSS, imageCover] = await Promise.all(['privacy-core.js', 'privacy-media.js', 'privacy.js', 'privacy.css', 'image-cover.js'].map(read));
+    const [themesCSS, appearanceCSS, uiCSS, privacyCSS, videoCompressionCSS, redgifsCSS, redditCSS, mediaSourcesCSS, pictureInPictureCSS, gifCaptionerCSS, mediaExtrasCSS] = await Promise.all([
+        minifyThemesCSS(rawThemesCSS),
+        minifyCSS(rawAppearanceCSS),
+        minifyCSS(`${rawUiCSS}\n${rawUiExtrasCSS}`),
+        minifyCSS(rawPrivacyCSS),
+        minifyCSS(rawVideoCompressionCSS),
+        minifyCSS(rawRedgifsCSS),
+        minifyCSS(rawRedditCSS),
+        minifyCSS(rawMediaSourcesCSS),
+        minifyCSS(rawPictureInPictureCSS),
+        minifyCSS(rawGifCaptionerCSS),
+        minifyCSS(rawMediaExtrasCSS),
+    ]);
+    const lazyStyles = { privacy: privacyCSS, videoCompression: videoCompressionCSS, redgifs: redgifsCSS, reddit: redditCSS,
+        mediaSources: mediaSourcesCSS, pictureInPicture: pictureInPictureCSS, gifCaptioner: gifCaptionerCSS, mediaExtras: mediaExtrasCSS };
     const contents = `const { contextBridge, ipcRenderer, webFrame } = require('electron');
 // The sleep page (a data: URL) gets no bridge or Discord hooks.
 if (process.isMainFrame && location.protocol !== 'data:') {
@@ -144,51 +170,37 @@ if (process.isMainFrame && location.protocol !== 'data:') {
             return () => ipcRenderer.removeListener('lowcord:accounts-changed', listener);
         },
     });
-    contextBridge.executeInMainWorld({ func: function initializeLowcord(themesCSS, chatAppearanceCSS, lowcordUiCSS) {
+    contextBridge.executeInMainWorld({ func: function initializeLowcord(themesCSS, chatAppearanceCSS, lowcordUiCSS, lazyStyles) {
         if (window.self !== window.top || window.__LOWCORD_INIT__) return;
         window.__LOWCORD_INIT__ = true;
         // The theme is applied first, before Discord paints anything.
-        ${boot}\n${shim}\n${discord}\n${themes}\nsetupLowcordThemes();\n${socialLinks}\n${musicLinks}\n${privacyCore}\n${privacyMedia}\n${privacy}\n${videoCompression}\n${extensions}\n${chatCapture}\n${imageCover}\n${massDelete}\n${mediaGallery}\n${dmQuickReply}\n${background}\n${gif}\n${musicEmbeds}\n${socialEmbeds}\n${appearance}\n
+        ${boot}\n${shim}\n${discord}
+        // Modal/picker/feature stylesheets stay out of the cascade until first use.
+        const loadedStyles = new Set();
+        window.Lowcord.ensureStyle = name => {
+            if (loadedStyles.has(name)) return;
+            const css = lazyStyles?.[name];
+            if (!css) return;
+            loadedStyles.add(name);
+            delete lazyStyles[name];
+            const node = document.createElement('style');
+            node.id = \`lowcord-style-\${name}\`;
+            node.textContent = css;
+            const mount = () => (document.head ?? document.documentElement).append(node);
+            if (document.head || document.documentElement) mount();
+            else document.addEventListener('DOMContentLoaded', mount, { once: true });
+        };
+        ${themes}\nsetupLowcordThemes();\n${socialLinks}\n${musicLinks}\n${privacyCore}\n${privacyMedia}\n${privacy}\n${videoCompression}\n${extensions}\n${chatCapture}\n${imageCover}\n${massDelete}\n${mediaGallery}\n${dmQuickReply}\n${background}\n${gif}\n${musicEmbeds}\n${socialEmbeds}\n${appearance}\n
         setupLowcordChatAppearance();
-        const privacyStyle = document.createElement('style');
-        privacyStyle.textContent = ${JSON.stringify(privacyCSS)};
-        if (document.documentElement) document.documentElement.append(privacyStyle);
-        else document.addEventListener('DOMContentLoaded', () => document.documentElement.append(privacyStyle), { once: true });
-        const compressionStyle = document.createElement('style');
-        compressionStyle.textContent = ${JSON.stringify(videoCompressionCSS)};
-        if (document.documentElement) document.documentElement.append(compressionStyle);
-        else document.addEventListener('DOMContentLoaded', () => document.documentElement.append(compressionStyle), { once: true });
-        const redgifsStyle = document.createElement('style');
-        redgifsStyle.textContent = ${JSON.stringify(redgifsCSS)};
-        if (document.documentElement) document.documentElement.append(redgifsStyle);
-        else document.addEventListener('DOMContentLoaded', () => document.documentElement.append(redgifsStyle), { once: true });
         ${redgifs}
-        const redditStyle = document.createElement('style');
-        redditStyle.textContent = ${JSON.stringify(redditCSS)};
-        if (document.documentElement) document.documentElement.append(redditStyle);
-        else document.addEventListener('DOMContentLoaded', () => document.documentElement.append(redditStyle), { once: true });
         ${reddit}
-        const sourcesStyle=document.createElement('style');
-        sourcesStyle.textContent=${JSON.stringify(mediaSourcesCSS)};
-        if(document.documentElement)document.documentElement.append(sourcesStyle);
-        else document.addEventListener('DOMContentLoaded',()=>document.documentElement.append(sourcesStyle),{once:true});
         ${mediaSources}
         ${imageDrop}
-        const pipStyle = document.createElement('style');
-        pipStyle.textContent = ${JSON.stringify(pictureInPictureCSS)};
-        if (document.documentElement) document.documentElement.append(pipStyle);
-        else document.addEventListener('DOMContentLoaded', () => document.documentElement.append(pipStyle), { once: true });
         ${pictureInPicture}
-        for (const css of ${JSON.stringify(extraStyles)}) {
-            const extraStyle = document.createElement('style');
-            extraStyle.textContent = css;
-            if (document.documentElement) document.documentElement.append(extraStyle);
-            else document.addEventListener('DOMContentLoaded', () => document.documentElement.append(extraStyle), { once: true });
-        }
         ${extraScripts.join('\n')}
         ${settings}\nsetupLowcordSettings();
         ${release ? '' : 'window.__LOWCORD_REPORT__();'}
-    }, args: [${JSON.stringify(themesCSS)}, ${JSON.stringify(appearanceCSS)}, ${JSON.stringify(uiCSS)}] });
+    }, args: [${JSON.stringify(themesCSS)}, ${JSON.stringify(appearanceCSS)}, ${JSON.stringify(uiCSS)}, ${JSON.stringify(lazyStyles)}] });
 }`;
     await build({ stdin: { contents, resolveDir: sourceRoot, sourcefile: 'lowcord-preload.js' }, bundle: true,
         platform: 'node', format: 'cjs', external: ['electron'], minify: release, outfile: join(output, 'preload.cjs') });

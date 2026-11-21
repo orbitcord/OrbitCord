@@ -268,6 +268,7 @@
     // `image` is gif.js's AnimatedImage for GIF/WebP sources, else null and
     // `blobUrl` is the clip's video.
     function dialog(blobUrl, image, reply) {
+        window.Lowcord.ensureStyle?.("gifCaptioner");
         return new Promise(resolve => {
             const restoreFocus = document.activeElement;
             let style = "bar", tip = { x: .3, y: .45 }, current, frame, stopped = false;
@@ -580,6 +581,7 @@
         if (result.hasAttribute("data-lowcord-gifcap") || !result.querySelector("video, img")) return;
         // Only results with a clip: trending category tiles are search shortcuts.
         if (!videoSource(result)) return;
+        window.Lowcord.ensureStyle?.("gifCaptioner");
         result.setAttribute("data-lowcord-gifcap", "");
         const button = ui("button", { type: "button", className: "lowcord-gifcap-btn", "aria-label": "Add a caption", title: "Add a caption" });
         button.append(glyph());

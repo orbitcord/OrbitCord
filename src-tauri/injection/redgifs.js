@@ -833,6 +833,7 @@
         const editor = document.querySelector('[class*="channelTextArea_"] [contenteditable="true"][role="textbox"]');
         const channelId = selectedChannel();
         if (!editor || !channelId) { extensions.toast('Open a chat to browse RedGIFs.', true); return; }
+        window.Lowcord.ensureStyle?.('redgifs');
         const input = ui('input', { type: 'search', placeholder: 'Search topics', 'aria-label': 'Search RedGIFs', maxlength: '200' });
         const searchButton = ui('button', { type: 'submit', className: 'lowcord-redgifs-search-submit', 'aria-label': 'Search', title: 'Search' }, icon('search', 15));
         const form = ui('form', { className: 'lowcord-redgifs-search', onSubmit: event => {

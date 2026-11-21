@@ -24,6 +24,7 @@
     function embed(card, attachment) {
         const next = card.nextElementSibling;
         if (next?.classList.contains("lowcord-embed-image") && next.dataset.attachment === attachment.id) return;
+        window.Lowcord.ensureStyle?.("mediaExtras");
         const image = ui("img", { alt: attachment.filename, loading: "lazy", decoding: "async", draggable: "false" });
         const button = ui("button", { type: "button", className: "lowcord-embed-image-button", "aria-label": `Open ${attachment.filename}`,
             onClick: () => open(attachment.url) }, image);

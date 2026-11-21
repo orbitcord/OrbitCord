@@ -261,6 +261,7 @@
         if(current){close();return;}if(!enabled())return;
         const channelId=selected(),channel=window.Lowcord.store('ChannelStore')?.getChannel?.(channelId);
         if(!channelId||!channel){extensions.toast('Open a DM or channel before browsing media.',true);return;}
+        window.Lowcord.ensureStyle?.('mediaSources');
         let saved={};try{saved=JSON.parse(localStorage.getItem('lowcord-media-sources-layout'))||{};}catch{}
         const picker={channelId,items:new Map(),tabs:[],editor:document.querySelector('[class*=channelTextArea_] [role=textbox], [class*=channelTextArea_] textarea')};for(const key of ['x','y','width','height'])if(Number.isFinite(saved[key]))picker[key]=saved[key];
         picker.node=ui('section','lowcord-media-sources');picker.node.setAttribute('role','dialog');picker.node.setAttribute('aria-label','Media sources picker');

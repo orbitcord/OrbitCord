@@ -161,6 +161,7 @@
             return;
         }
         lockReturnFocus = document.activeElement;
+        window.Lowcord.ensureStyle?.('privacy');
         const el = document.createElement('div');
         el.className = 'lowcord-lock'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-labelledby', 'lowcord-lock-title');
         // Inline so the cover holds before the stylesheet has loaded.
@@ -585,6 +586,7 @@
     const protectionCount = () => { const count = reportTotal(); return `${count.toLocaleString()} protection${count === 1 ? '' : 's'}`; };
     const bytes = value => value < 1024 ** 2 ? `${Math.round(value / 1024)} KB` : value < 1024 ** 3 ? `${Math.round(value / 1024 ** 2)} MB` : `${(value / 1024 ** 3).toFixed(1)} GB`;
     function SettingsPanel() {
+        window.Lowcord.ensureStyle?.('privacy');
         const R = window.Lowcord.React, h = R.createElement;
         const current = window.Lowcord.store('ChannelStore')?.getChannel?.(channelId());
         const [, rerender] = R.useState(0), [open, setOpen] = R.useState(null), [showReport, setShowReport] = R.useState(false), [error, setError] = R.useState('');
