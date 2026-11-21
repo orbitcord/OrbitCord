@@ -144,6 +144,18 @@
     .lowcord-privacy-facts > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
 
+/* Edit photos: the pencil on an image or video waiting in the message box. */
+[class*="mediaContainer_"]:has(> .lowcord-upload-edit) { position: relative; }
+.lowcord-upload-edit {
+    position: absolute; left: 6px; bottom: 6px; z-index: 1; display: grid; place-items: center; width: 28px; height: 28px; padding: 0;
+    border: 0; border-radius: 8px; background: rgb(0 0 0 / .6); color: #fff; cursor: pointer; opacity: .85;
+    transition: opacity .15s ease, background-color .15s ease;
+}
+.lowcord-upload-edit::before { content: ""; position: absolute; inset: -6px; }
+.lowcord-upload-edit:hover, .lowcord-upload-edit:focus-visible { opacity: 1; background: rgb(0 0 0 / .8); }
+.lowcord-upload-edit:focus-visible { outline: 2px solid var(--focus-primary, #00a8fc); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .lowcord-upload-edit { transition: none; } }
+
 /* Edit photos (image-cover.js): image on the left, tools in a side panel. */
 .lowcord-edit-preview {
     display: grid; grid-template-columns: minmax(0, 1fr) 232px; width: min(1040px, 100%); height: min(680px, calc(100vh - 48px)); overflow: hidden;
@@ -156,6 +168,52 @@
    with a tall (rotated) photo, so max-height had nothing fixed to resolve against. */
 .lowcord-edit-stage { position: relative; flex: 1 1 auto; min-height: 0; }
 .lowcord-edit-stage canvas { position: absolute; inset: 0; margin: auto; display: block; max-width: calc(100% - 48px); max-height: calc(100% - 48px); width: auto; height: auto; touch-action: none; }
+/* Video timeline, after QuickTime's trim bar: each clip a filmstrip in a
+   yellow frame whose ends are dragged, trimmed parts dimmed, one playhead. */
+.lowcord-trim { flex: none; display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-top: 1px solid var(--border-subtle, rgb(255 255 255 / .06)); }
+.lowcord-trim-button { flex: none; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 8px; background: rgb(255 255 255 / .08); color: var(--text-normal, #dbdee1); cursor: pointer; transition: background-color .15s ease, color .15s ease; }
+.lowcord-trim-button:hover { background: rgb(255 255 255 / .14); }
+.lowcord-trim-button[aria-pressed="true"] { background: rgb(253 210 8 / .16); color: #fdd208; }
+.lowcord-trim-button:focus-visible, .lowcord-trim-handle:focus-visible { outline: 2px solid var(--focus-primary, #00a8fc); outline-offset: 2px; }
+.lowcord-trim-track { position: relative; display: flex; gap: 22px; flex: 1 1 auto; min-width: 0; height: 48px; margin: 0 18px 0 22px; cursor: pointer; touch-action: none; user-select: none; }
+.lowcord-trim-segment { position: relative; flex: 1 1 0; min-width: 36px; border-radius: 7px; background: #000; }
+.lowcord-trim-film { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 7px; }
+.lowcord-trim-shade { position: absolute; top: 0; bottom: 0; background: rgb(0 0 0 / .62); }
+.lowcord-trim-shade.is-start { left: 0; border-radius: 7px 0 0 7px; }
+.lowcord-trim-shade.is-end { right: 0; border-radius: 0 7px 7px 0; }
+.lowcord-trim-frame {
+    position: absolute; top: -4px; bottom: -4px; box-sizing: border-box; border-block: 4px solid #fdd208; border-radius: 4px;
+    box-shadow: 0 1px 6px rgb(0 0 0 / .45); pointer-events: none;
+}
+.lowcord-trim-segment:not(.is-current) .lowcord-trim-frame { opacity: .7; }
+.lowcord-trim-handle {
+    position: absolute; top: -4px; bottom: -4px; width: 14px; display: grid; place-items: center;
+    background: linear-gradient(#ffe45c, #fdd208 45%, #f2c400); box-shadow: inset 0 1px 0 rgb(255 255 255 / .5), 0 1px 4px rgb(0 0 0 / .4);
+    cursor: ew-resize; pointer-events: auto; transition: filter .12s ease;
+}
+.lowcord-trim-handle.is-start { left: -14px; border-radius: 8px 2px 2px 8px; }
+.lowcord-trim-handle.is-end { right: -14px; border-radius: 2px 8px 8px 2px; }
+.lowcord-trim-handle:hover, .lowcord-trim-handle:active { filter: brightness(1.08) saturate(1.1); }
+/* A chevron pointing outwards, the way each end can be pulled. */
+.lowcord-trim-handle::after { content: ""; width: 5px; height: 5px; border: solid rgb(60 44 0 / .75); border-width: 0 0 2px 2px; border-radius: 1px; }
+.lowcord-trim-handle.is-start::after { transform: translateX(1px) rotate(45deg); }
+.lowcord-trim-handle.is-end::after { transform: translateX(-1px) rotate(-135deg); }
+/* A wider grab area than the visible grip. */
+.lowcord-trim-handle::before { content: ""; position: absolute; inset: -4px -6px; }
+.lowcord-trim-head { position: absolute; z-index: 1; top: -8px; bottom: -8px; width: 3px; margin-left: -1.5px; border-radius: 2px; background: #fff; box-shadow: 0 0 0 1px rgb(0 0 0 / .35), 0 1px 3px rgb(0 0 0 / .5); pointer-events: none; }
+.lowcord-trim-time { flex: none; min-width: 7.5em; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-muted, #949ba4); text-align: right; }
+@media (prefers-reduced-motion: reduce) { .lowcord-trim-button, .lowcord-trim-handle { transition: none; } }
+.lowcord-clip-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.lowcord-clip-list li { display: flex; align-items: center; gap: 2px; border-radius: 6px; }
+.lowcord-clip-list li.is-current { background: var(--background-modifier-selected, rgb(255 255 255 / .08)); }
+.lowcord-clip-pick { display: flex; flex: 1 1 auto; min-width: 0; align-items: center; gap: 8px; padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: var(--text-normal, #dbdee1); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.lowcord-clip-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lowcord-clip-length { flex: none; font-variant-numeric: tabular-nums; color: var(--text-muted, #949ba4); }
+.lowcord-clip-move { flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--text-muted, #949ba4); font: inherit; cursor: pointer; }
+.lowcord-clip-move:hover:not(:disabled), .lowcord-clip-pick:hover { background: var(--background-modifier-hover, rgb(255 255 255 / .06)); color: var(--text-normal, #dbdee1); }
+.lowcord-clip-move:disabled { opacity: .35; cursor: default; }
+.lowcord-clip-add { flex-wrap: wrap; }
+.lowcord-clip-add .lowcord-edit-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lowcord-edit-strip { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border-subtle, rgb(255 255 255 / .06)); }
 .lowcord-edit-strip img { width: 44px; height: 32px; object-fit: cover; border-radius: 4px; opacity: .45; }
 .lowcord-edit-strip img.is-done { opacity: .7; }
@@ -165,7 +223,7 @@
 .lowcord-edit-panel header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .lowcord-edit-panel h2 { margin: 0; font-size: 16px; line-height: 20px; font-weight: 600; color: var(--header-primary, #f2f3f5); }
 .lowcord-edit-panel .lowcord-settings-close { flex: none; margin: -4px -6px -4px 0; }
-.lowcord-edit-section { display: grid; gap: 8px; }
+.lowcord-edit-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .lowcord-edit-section h3 { margin: 0; font-size: 12px; line-height: 16px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--text-muted, #949ba4); }
 .lowcord-edit-section p { margin: 0; font-size: 13px; line-height: 18px; color: var(--text-muted, #949ba4); }
 .lowcord-edit-ratios { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }

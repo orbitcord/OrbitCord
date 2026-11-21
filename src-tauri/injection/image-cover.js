@@ -17,6 +17,10 @@
         undo: "M9 14l-4 -4l4 -4M5 10h11a4 4 0 1 1 0 8h-1",
         redo: "M15 14l4 -4l-4 -4M19 10h-11a4 4 0 1 0 0 8h1",
         compare: "M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6",
+        play: "M7 4v16l13 -8z",
+        pause: "M6 5h4v14h-4zM14 5h4v14h-4z",
+        sound: "M15 8a5 5 0 0 1 0 8M17.7 5a9 9 0 0 1 0 14M6 15h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l3.5 -4.5a.8 .8 0 0 1 1.5 .5v14a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5",
+        muted: "M6 15h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l3.5 -4.5a.8 .8 0 0 1 1.5 .5v14a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5M16 10l4 4m0 -4l-4 4",
     };
     const types = /^image\/(?:png|jpeg|webp)$/;
     // Chromium refuses canvases larger than ~268M pixels; the preview stays small.
@@ -69,7 +73,7 @@
         return { x: (edit.width - width) / 2, y: (edit.height - height) / 2, width, height };
     }
 
-    function dialog(bitmap, name, { tool: startTool = "crop", index = 0, total = 1, queue = [] } = {}) {
+    function dialog(bitmap, name, { tool: startTool = "crop", index = 0, total = 1, queue = [], kind = "image", confirm = "Attach image", video = null } = {}) {
         return new Promise(resolve => {
             const restoreFocus = document.activeElement;
             const reduce = Math.min(1, Math.sqrt(previewArea / (bitmap.width * bitmap.height)));
@@ -85,6 +89,8 @@
             };
             // ~12 CSS pixels in image units, for grabbing crop handles.
             const tolerance = () => 12 * edit.width / Math.max(1, canvas.getBoundingClientRect().width);
+            // A video session draws its current frame in place of the still.
+            const draw = () => video ? video.draw(context) : context.drawImage(bitmap, 0, 0);
             const handles = rect => {
                 const { x, y, width: w, height: h } = rect, list = [["nw", x, y], ["ne", x + w, y], ["sw", x, y + h], ["se", x + w, y + h]];
                 if (!ratio) list.push(["n", x + w / 2, y], ["s", x + w / 2, y + h], ["w", x, y + h / 2], ["e", x + w, y + h / 2]);
@@ -95,11 +101,11 @@
                     // Hold to compare: the untouched original, at its own shape.
                     canvas.width = Math.max(1, Math.round(bitmap.width * reduce)); canvas.height = Math.max(1, Math.round(bitmap.height * reduce));
                     context.setTransform(reduce, 0, 0, reduce, 0, 0);
-                    context.drawImage(bitmap, 0, 0);
+                    draw();
                     return;
                 }
                 context.setTransform(new DOMMatrix([reduce, 0, 0, reduce, 0, 0]).multiply(edit.matrix));
-                context.drawImage(bitmap, 0, 0);
+                draw();
                 context.setTransform(reduce, 0, 0, reduce, 0, 0);
                 context.fillStyle = fill;
                 const boxes = drag?.kind === "box" ? [...edit.boxes, drag.box] : edit.boxes;
@@ -238,13 +244,16 @@
             };
             canvas.addEventListener("pointerup", release);
             canvas.addEventListener("pointercancel", release);
-            const finish = value => { document.removeEventListener("keydown", onKey, true); backdrop.remove(); for (const url of urls) URL.revokeObjectURL(url); restoreFocus?.focus?.(); resolve(value); };
+            const finish = value => { video?.pause(); document.removeEventListener("keydown", onKey, true); backdrop.remove(); for (const url of urls) URL.revokeObjectURL(url); restoreFocus?.focus?.(); resolve(value); };
             const onKey = event => {
                 if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); finish(null); return; }
+                if (video && event.key === " " && !(event.target instanceof HTMLButtonElement) && event.target.getAttribute?.("role") !== "slider") {
+                    event.preventDefault(); event.stopImmediatePropagation(); video.toggle(); return;
+                }
                 if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
                     event.preventDefault(); event.stopImmediatePropagation(); (event.shiftKey ? redo : undo).click(); return;
                 }
-                if (event.key === "Enter" && !event.shiftKey && !(event.target instanceof HTMLButtonElement)) {
+                if (event.key === "Enter" && !event.shiftKey && !(event.target instanceof HTMLButtonElement) && event.target.getAttribute?.("role") !== "slider") {
                     event.preventDefault(); event.stopImmediatePropagation(); finish(edit); return;
                 }
                 if (event.key === "Tab") {
@@ -296,22 +305,24 @@
                 ui("span", {}, `${index + 1} of ${total}`)) : null;
             const panel = ui("section", { className: "lowcord-edit-preview", role: "dialog", "aria-modal": "true", "aria-labelledby": "lowcord-cover-title" },
                 ui("div", { className: "lowcord-edit-main" },
-                    ui("div", { className: "lowcord-edit-stage" }, canvas), strip),
+                    ui("div", { className: "lowcord-edit-stage" }, canvas), strip, video?.timeline),
                 ui("aside", { className: "lowcord-edit-panel" },
-                    ui("header", {}, ui("h2", { id: "lowcord-cover-title" }, many ? `Edit image ${index + 1} of ${total}` : "Edit image"), closeButton),
+                    ui("header", {}, ui("h2", { id: "lowcord-cover-title" }, many ? `Edit ${kind} ${index + 1} of ${total}` : `Edit ${kind}`), closeButton),
                     ui("div", { className: "lowcord-edit-historybar", role: "group", "aria-label": "History" }, ui("span", {}, undo, redo, compare), reset),
                     section("Crop", ui("div", { className: "lowcord-edit-ratios" }, ...ratioButtons)),
                     section("Rotate and flip", ui("div", { className: "lowcord-edit-icons" },
                         toolButton("rotateLeft", "Left", "Rotate left"), toolButton("rotateRight", "Right", "Rotate right"),
                         toolButton("flipH", "Mirror", "Flip horizontally"), toolButton("flipV", "Flip", "Flip vertically"))),
                     section("Cover", ui("p", {}, "Drag over names, faces or anything else to hide it."), ui("div", { className: "lowcord-edit-row" }, coverButton, clear)),
+                    ...(video?.sections(section, button) ?? []),
                     ui("div", { className: "lowcord-edit-footer" },
                         status,
-                        ui("button", { type: "button", className: "lowcord-button lowcord-button-primary", onClick: () => finish(edit) }, "Attach image"),
+                        ui("button", { type: "button", className: "lowcord-button lowcord-button-primary", onClick: () => finish(edit) }, confirm),
                         ui("button", { type: "button", className: "lowcord-button lowcord-edit-skip", onClick: () => finish(null) }, many ? "Skip this photo" : "Cancel"))));
             const backdrop = ui("div", { className: "lowcord-capture-preview-backdrop lowcord-edit-backdrop" }, panel);
             size();
             document.body.append(backdrop);
+            video?.attach(paint);
             paint();
             // Handles are sized in CSS pixels, so repaint once the canvas has its laid-out size.
             requestAnimationFrame(paint);
@@ -408,96 +419,421 @@
         return false;
     }
 
-    // ----- Edit an image from the chat ---------------------------------------
-    // Right-click an image in a message, choose Edit image, and the edited copy
-    // is attached to the message box. Nothing is sent until you send it.
-    const menuId = "message-lowcord-edit-image";
-    const skipImages = '[class*="emoji"], [class*="avatar"], [class*="icon"], [class*="reaction"]';
-    function chatImage(target) {
-        const accessories = target instanceof Element ? target.closest('[id^="message-accessories-"]') : null;
-        if (!accessories || target.closest('[class*="reactions_"]')) return null;
-        for (let node = target; node && node !== accessories; node = node.parentElement) {
-            if (node.matches("video") || node.querySelector("video")) return null;
-            const images = (node.matches("img") ? [node] : [...node.querySelectorAll("img")]).filter(image => !image.matches(skipImages));
-            if (images.length > 1) return null;
-            // The full-size original when Discord links it, otherwise the preview.
-            const original = node.matches('a[class*="originalLink_"]') ? node : node.querySelector(':scope > a[class*="originalLink_"]');
-            if (original?.href && /^https?:/.test(original.href)) return original.href;
-            const source = images[0] && (images[0].currentSrc || images[0].src);
-            if (source && /^https?:/.test(source)) return source;
-        }
-        return null;
-    }
-    async function editFromChat(url) {
-        if (editing) { toast("Finish editing the current image first.", true); return; }
-        if (!document.querySelector(`${composerSelector} [role="textbox"], ${composerSelector} textarea`)) { toast("Open a chat you can send messages in first.", true); return; }
-        const download = window.__LOWCORD_NATIVE__?.downloadDroppedImage;
-        if (!download) return;
-        let result;
-        try { result = await download(url); } catch { result = { error: "download-failed" }; }
-        if (result?.error) {
-            toast(result.error === "too-large" ? "This image is over the 50 MB limit." : "Couldn't download this image.", true);
-            return;
-        }
-        const file = new File([result.data], result.name, { type: result.type });
-        if (!supports(file)) { toast("Only PNG, JPEG and WebP images can be edited.", true); return; }
-        await editFiles([file]);
-    }
-    function addMenuItem(menu, url) {
-        if (menu.querySelector(`#${menuId}`)) return;
-        const model = ["#message-copy-text", "#message-copy-link", '[role="menuitem"]:not([id*="quickreact"])']
-            .map(selector => menu.querySelector(selector)).find(Boolean);
-        if (!model) return;
-        const item = model.cloneNode(true);
-        item.id = menuId;
-        item.removeAttribute("aria-disabled");
-        // Shares media-gallery's menu-item styling and hover handling.
-        item.className = [...item.classList].filter(name => !/^(focused|disabled)_/.test(name)).join(" ") + " lowcord-copy-media";
-        const suffix = /^item(_\w+)$/.exec([...item.classList].find(name => /^item_/.test(name)) ?? "")?.[1];
-        const focusedClass = suffix ? `focused${suffix}` : "lowcord-copy-media-focused";
-        const highlight = value => { item.classList.toggle(focusedClass, value); menu.toggleAttribute("data-lowcord-media-hover", value); };
-        const label = "Edit image";
-        const text = item.querySelector('[data-text-variant], [class*="label_"]');
-        item.removeAttribute("aria-labelledby");
-        item.setAttribute("aria-label", label);
-        if (text) text.textContent = label; else item.textContent = label;
-        for (const node of item.querySelectorAll('[class*="subtext_"], [class*="hint_"]')) node.remove();
-        const svg = item.querySelector("svg");
-        if (svg) svg.innerHTML = `<path fill="currentColor" d="${path}"/>`;
-        const pick = event => {
-            event.preventDefault(); event.stopPropagation();
-            // Discord's layer closes on Escape.
-            document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true }));
-            void editFromChat(url);
-        };
-        item.addEventListener("click", pick);
-        item.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") pick(event); });
-        item.addEventListener("pointerenter", () => highlight(true));
-        item.addEventListener("pointerleave", () => highlight(false));
-        item.addEventListener("focus", () => highlight(true));
-        item.addEventListener("blur", () => highlight(false));
-        // After the copy items, which media-gallery may add before Copy Text later.
-        model.after(item);
-        const plain = getComputedStyle(item);
-        menu.style.setProperty("--lowcord-menu-item-bg", plain.backgroundColor);
-        menu.style.setProperty("--lowcord-menu-item-color", plain.color);
-    }
-    let menuRequest = 0;
-    window.addEventListener("contextmenu", event => {
-        const request = ++menuRequest;
-        document.getElementById(menuId)?.remove();
-        const url = extensions.enabled("coverImages") && chatImage(event.target);
-        if (!url) return;
-        // The menu renders within a few frames of the click.
-        let frames = 0;
-        const look = () => {
-            if (request !== menuRequest) return;
-            const menu = document.querySelector('#message[role="menu"]');
-            if (menu) addMenuItem(menu, url);
-            else if (++frames < 30) requestAnimationFrame(look);
-        };
-        requestAnimationFrame(() => requestAnimationFrame(look));
-    }, true);
+    // ----- Edit button on attachments waiting in the message box --------------
+    // Each image or video card gets a small pencil at its bottom left. The
+    // edited file replaces the original in place, keeping its position,
+    // spoiler and description, through Discord's own upload actions.
+    const uploadStore = () => window.Lowcord.store("UploadAttachmentStore");
+    const channelId = () => window.Lowcord.store("SelectedChannelStore")?.getChannelId?.();
+    let uploadActions;
+    const actions = () => uploadActions ??= window.Lowcord.find(module => typeof module?.setFile === "function"
+        && typeof module.setUploads === "function" && typeof module.update === "function" && typeof module.remove === "function");
+    const videoTypes = /^video\/(?:mp4|quicktime|webm|x-matroska|x-m4v)$/i;
+    const isVideo = file => videoTypes.test(file.type) || /\.(?:mp4|m4v|mov|webm|mkv)$/i.test(file.name);
+    const cardId = card => card.getAttribute("data-list-item-id")?.replace(/^attachments___/, "");
 
-    window.Lowcord.imageCover = { supports, review, transform, untouched, open: choose, claimPaste, chatImage };
+    async function replaceUpload(channel, upload, file) {
+        const store = uploadStore(), creators = actions();
+        if (!store || !creators) throw new Error("uploader");
+        const before = store.getUploads(channel, 0).map(item => item.id);
+        if (!before.includes(upload.id)) throw new Error("gone");
+        const { spoiler, description } = upload;
+        creators.setFile({ file: { file, platform: 1 }, channelId: channel, id: upload.id, draftType: 0 });
+        // Discord adds the new file at the end; put it back where the old one was.
+        const now = store.getUploads(channel, 0), fresh = now.find(item => !before.includes(item.id));
+        if (!fresh) return;
+        const order = before.map(id => id === upload.id ? fresh : now.find(item => item.id === id)).filter(Boolean);
+        if (order.length === now.length) creators.setUploads({ uploads: order, channelId: channel, draftType: 0 });
+        if (spoiler || description) creators.update(channel, fresh.id, 0, { spoiler, description, filename: fresh.filename });
+    }
+
+    // Rotation, flips, cover boxes, crop, trims and sound as numbers for the
+    // native encoder. Electron builds the FFmpeg filter itself; nothing here is
+    // a filter string.
+    function videoFilters(edit, { clips, mute }) {
+        const { a, b, c, d } = edit.matrix, key = [a, b, c, d].map(Math.round).join();
+        const turns = { "1,0,0,1": [null, false, false], "-1,0,0,1": [null, true, false], "1,0,0,-1": [null, false, true], "-1,0,0,-1": [null, true, true],
+            "0,1,-1,0": [1, false, false], "0,-1,1,0": [2, false, false], "0,1,1,0": [0, false, false], "0,-1,-1,0": [3, false, false] }[key];
+        if (!turns) throw new Error("matrix");
+        const whole = rect => ({ x: Math.max(0, Math.round(rect.x)), y: Math.max(0, Math.round(rect.y)), width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) });
+        const time = value => Math.round(value * 1000) / 1000;
+        return { transpose: turns[0], hflip: turns[1], vflip: turns[2], width: edit.width, height: edit.height, mute,
+            crop: whole(clampRect(cropOf(edit), edit.width, edit.height)), boxes: edit.boxes.map(box => whole(clampRect(box, edit.width, edit.height))).filter(box => box.width && box.height),
+            clips: clips.map(clip => ({ start: time(clip.start), end: time(clip.end) })) };
+    }
+
+    // ----- Video session: playback, trim, sound and joined clips --------------
+    // Like the trim bar in QuickTime and Photos: a filmstrip with a yellow frame
+    // whose ends are dragged to trim, a white playhead and a play button. Later
+    // clips are fitted into the first clip's frame, as the encoder does.
+    const maxClips = 5, minLength = .5;
+    const clock = time => { const minutes = Math.floor(time / 60), rest = time - minutes * 60; return `${minutes}:${rest.toFixed(1).padStart(4, "0")}`; };
+    async function loadClip(file, uploadId = null) {
+        const url = URL.createObjectURL(file), video = document.createElement("video");
+        video.preload = "auto"; video.playsInline = true; video.src = url;
+        try {
+            await new Promise((resolve, reject) => { video.onloadeddata = resolve; video.onerror = () => reject(new Error("decode")); });
+            if (!Number.isFinite(video.duration) || video.duration <= 0 || !video.videoWidth) throw new Error("decode");
+        } catch (error) { video.removeAttribute("src"); video.load(); URL.revokeObjectURL(url); throw error; }
+        return { file, uploadId, url, video, duration: video.duration, start: 0, end: video.duration, film: null };
+    }
+    async function videoSession(file, uploadId, attached = []) {
+        const clips = [await loadClip(file, uploadId)];
+        const width = clips[0].video.videoWidth, height = clips[0].video.videoHeight;
+        let current = 0, mute = false, playing = false, frame = 0, repaint = () => {}, sectionHelpers = null;
+        const active = () => clips[current];
+        const watchClip = clip => clip.video.addEventListener("seeked", () => { if (clip === active() && !playing) { repaint(); place(); } });
+        watchClip(clips[0]);
+
+        function draw(context) {
+            const { video } = active(), scale = Math.min(width / video.videoWidth, height / video.videoHeight);
+            const w = video.videoWidth * scale, h = video.videoHeight * scale;
+            context.fillStyle = "#000"; context.fillRect(0, 0, width, height);
+            context.drawImage(video, (width - w) / 2, (height - h) / 2, w, h);
+        }
+        function loop() {
+            if (!playing) return;
+            const clip = active();
+            if (clip.video.ended || clip.video.currentTime >= clip.end - .03) {
+                clip.video.pause();
+                if (current + 1 < clips.length) { current++; startClip(); }
+                else { playing = false; current = 0; active().video.currentTime = active().start; render(); return; }
+            }
+            repaint(); place();
+            frame = requestAnimationFrame(loop);
+        }
+        function startClip() {
+            const clip = active();
+            clip.video.muted = mute;
+            if (clip.video.currentTime < clip.start || clip.video.currentTime >= clip.end - .05) clip.video.currentTime = clip.start;
+            clip.video.play().catch(() => { playing = false; render(); });
+            render();
+        }
+        function play() {
+            // From the end of a clip, carry on into the next; from the very end, start over.
+            const clip = active();
+            if (clip.video.currentTime >= clip.end - .05) {
+                current = current + 1 < clips.length ? current + 1 : 0;
+                active().video.currentTime = active().start;
+            }
+            playing = true; startClip(); cancelAnimationFrame(frame); frame = requestAnimationFrame(loop);
+        }
+        function pause() { playing = false; cancelAnimationFrame(frame); for (const clip of clips) clip.video.pause(); render(); }
+        const toggle = () => playing ? pause() : play();
+        function select(index) {
+            if (index === current) return;
+            pause(); current = index;
+            const clip = active();
+            if (clip.video.currentTime < clip.start || clip.video.currentTime > clip.end) clip.video.currentTime = clip.start;
+            render(); repaint();
+        }
+
+        // ----- Timeline -----
+        // Every clip sits end to end, sized by its length, each with its own
+        // yellow trim frame; one playhead runs across them all.
+        const playButton = ui("button", { type: "button", className: "lowcord-trim-button", onClick: toggle });
+        const muteButton = ui("button", { type: "button", className: "lowcord-trim-button", "aria-label": "Mute", "aria-pressed": "false",
+            onClick: () => { mute = !mute; for (const clip of clips) clip.video.muted = mute; render(); } });
+        const head = ui("div", { className: "lowcord-trim-head", "aria-hidden": "true" });
+        const track = ui("div", { className: "lowcord-trim-track" }, head);
+        const times = ui("span", { className: "lowcord-trim-time", "aria-live": "off" });
+        const timeline = ui("div", { className: "lowcord-trim", role: "group", "aria-label": "Timeline" }, playButton, muteButton, track, times);
+        let segments = [], layout = "";
+        function buildSegments() {
+            const key = clips.map(clip => clip.url).join();
+            if (key === layout) return;
+            layout = key;
+            for (const segment of segments) segment.node.remove();
+            segments = clips.map((clip, index) => {
+                const suffix = clips.length > 1 ? `, clip ${index + 1}` : "";
+                const handle = edge => ui("div", { className: `lowcord-trim-handle is-${edge}`, role: "slider", tabindex: "0",
+                    "aria-label": `${edge === "start" ? "Trim start" : "Trim end"}${suffix}`, "aria-valuemin": "0" });
+                const start = handle("start"), end = handle("end");
+                const film = ui("canvas", { className: "lowcord-trim-film", "aria-hidden": "true" });
+                const shadeStart = ui("div", { className: "lowcord-trim-shade is-start" }), shadeEnd = ui("div", { className: "lowcord-trim-shade is-end" });
+                const bracket = ui("div", { className: "lowcord-trim-frame" }, start, end);
+                const node = ui("div", { className: "lowcord-trim-segment" }, film, shadeStart, shadeEnd, bracket);
+                node.style.flexGrow = String(clip.duration);
+                for (const [element, edge] of [[start, "start"], [end, "end"]]) element.addEventListener("keydown", event => {
+                    const step = event.shiftKey ? 1 : .1, now = clip[edge];
+                    const next = { ArrowLeft: now - step, ArrowDown: now - step, ArrowRight: now + step, ArrowUp: now + step, Home: 0, End: clip.duration }[event.key];
+                    if (next === undefined) return;
+                    event.preventDefault(); event.stopPropagation(); pause(); focusClip(clips.indexOf(clip)); setEdge(clip, edge, next);
+                });
+                track.insertBefore(node, head);
+                return { clip, node, film, shadeStart, shadeEnd, bracket, start, end };
+            });
+        }
+        const percent = (clip, time) => `${time / clip.duration * 100}%`;
+        const lengthOf = clip => clip.end - clip.start;
+        function place() {
+            for (const { clip, node, shadeStart, shadeEnd, bracket, start, end } of segments) {
+                shadeStart.style.width = percent(clip, clip.start);
+                shadeEnd.style.width = percent(clip, clip.duration - clip.end);
+                bracket.style.left = percent(clip, clip.start);
+                bracket.style.right = percent(clip, clip.duration - clip.end);
+                node.classList.toggle("is-current", clip === active() && clips.length > 1);
+                for (const [element, value] of [[start, clip.start], [end, clip.end]]) {
+                    element.setAttribute("aria-valuemax", clip.duration.toFixed(1)); element.setAttribute("aria-valuenow", value.toFixed(1));
+                    element.setAttribute("aria-valuetext", clock(value));
+                }
+            }
+            const clip = active(), segment = segments.find(item => item.clip === clip);
+            const time = Math.max(clip.start, Math.min(clip.end, clip.video.currentTime));
+            if (segment) head.style.left = `${segment.node.offsetLeft + time / clip.duration * segment.node.offsetWidth}px`;
+            const total = clips.reduce((sum, item) => sum + lengthOf(item), 0);
+            const before = clips.slice(0, current).reduce((sum, item) => sum + lengthOf(item), 0);
+            times.textContent = `${clock(before + time - clip.start)} / ${clock(total)}`;
+        }
+        function focusClip(index) {
+            if (index === current) return;
+            current = index;
+            renderClips();
+        }
+        function setEdge(clip, edge, time) {
+            if (edge === "start") clip.start = Math.max(0, Math.min(time, clip.end - minLength));
+            else clip.end = Math.min(clip.duration, Math.max(time, clip.start + minLength));
+            // Show the frame at the edge being moved, as QuickTime does.
+            clip.video.currentTime = edge === "start" ? clip.start : Math.max(clip.start, clip.end - .05);
+            place(); renderClips();
+        }
+        // The clip and time under the pointer, kept inside that clip's trim.
+        function pointAt(event, only) {
+            const list = only ? segments.filter(item => item.clip === only) : segments;
+            let segment = list.find(item => { const rect = item.node.getBoundingClientRect(); return event.clientX >= rect.left && event.clientX <= rect.right; });
+            if (!segment) segment = list.reduce((best, item) => {
+                const rect = item.node.getBoundingClientRect(), distance = Math.min(Math.abs(event.clientX - rect.left), Math.abs(event.clientX - rect.right));
+                return !best || distance < best.distance ? { item, distance } : best;
+            }, null).item;
+            const rect = segment.node.getBoundingClientRect();
+            return { segment, time: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) * segment.clip.duration };
+        }
+        let dragging = null;
+        track.addEventListener("pointerdown", event => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            pause();
+            track.setPointerCapture(event.pointerId);
+            const grip = event.target.closest?.(".lowcord-trim-handle");
+            const segment = grip ? segments.find(item => item.start === grip || item.end === grip) : pointAt(event).segment;
+            focusClip(clips.indexOf(segment.clip));
+            if (grip) { dragging = { clip: segment.clip, edge: grip === segment.start ? "start" : "end" }; grip.focus(); return; }
+            dragging = { clip: null };
+            seekTo(event);
+        });
+        function seekTo(event) {
+            const { segment, time } = pointAt(event);
+            const index = clips.indexOf(segment.clip);
+            if (index !== current) { focusClip(index); repaint(); }
+            segment.clip.video.currentTime = Math.max(segment.clip.start, Math.min(segment.clip.end, time));
+            place();
+        }
+        track.addEventListener("pointermove", event => {
+            if (!dragging) return;
+            if (!dragging.clip) { seekTo(event); return; }
+            setEdge(dragging.clip, dragging.edge, pointAt(event, dragging.clip).time);
+        });
+        const drop = () => { dragging = null; };
+        track.addEventListener("pointerup", drop); track.addEventListener("pointercancel", drop);
+        // Frames across each clip, drawn from a second player so playback is
+        // never interrupted, and redrawn only when the clip's width changes.
+        async function filmstrip(segment) {
+            const { clip, film, node } = segment, ratio = devicePixelRatio || 1;
+            const w = Math.max(1, Math.round(node.offsetWidth * ratio)), h = Math.max(1, Math.round(node.offsetHeight * ratio));
+            if (clip.film?.width === w && clip.film?.height === h) { paintFilm(segment); return; }
+            const canvas = new OffscreenCanvas(w, h), context = canvas.getContext("2d");
+            clip.film = canvas;
+            const probe = document.createElement("video");
+            probe.muted = true; probe.preload = "auto"; probe.src = clip.url;
+            try {
+                await new Promise((resolve, reject) => { probe.onloadeddata = resolve; probe.onerror = reject; });
+                const cell = h * probe.videoWidth / probe.videoHeight, count = Math.max(1, Math.ceil(w / cell));
+                for (let index = 0; index < count; index++) {
+                    if (clip.film !== canvas || !timeline.isConnected) break;
+                    await new Promise(resolve => { probe.onseeked = resolve; probe.currentTime = Math.min(clip.duration - .01, (index + .5) * clip.duration / count); });
+                    context.drawImage(probe, index * cell, 0, cell, h);
+                    paintFilm(segment);
+                }
+            } catch {} finally { probe.removeAttribute("src"); probe.load(); }
+        }
+        function paintFilm({ clip, film }) {
+            if (!clip.film) return;
+            if (film.width !== clip.film.width || film.height !== clip.film.height) { film.width = clip.film.width; film.height = clip.film.height; }
+            film.getContext("2d").drawImage(clip.film, 0, 0);
+        }
+        const resize = new ResizeObserver(() => { for (const segment of segments) void filmstrip(segment); place(); });
+        resize.observe(track);
+
+        // ----- Clips section -----
+        const clipList = ui("ol", { className: "lowcord-clip-list" });
+        const addRow = ui("div", { className: "lowcord-edit-row lowcord-clip-add" });
+        async function addClip(fileToAdd, id = null) {
+            if (clips.length >= maxClips) return;
+            try { const clip = await loadClip(fileToAdd, id); watchClip(clip); clips.push(clip); }
+            catch { toast(`Couldn't open ${fileToAdd.name}. It wasn't added.`, true); }
+            render();
+        }
+        function chooseClips() {
+            const input = ui("input", { type: "file", accept: "video/mp4,video/quicktime,video/webm,video/x-matroska,.mkv,.mov,.m4v", multiple: "" });
+            input.addEventListener("change", async () => { for (const picked of [...input.files].filter(isVideo)) await addClip(picked); });
+            input.click();
+        }
+        function renderClips() {
+            if (!sectionHelpers) return;
+            const { button } = sectionHelpers;
+            clipList.replaceChildren(...clips.map((clip, index) => ui("li", { className: index === current ? "is-current" : "" },
+                button("", { className: "lowcord-clip-pick", title: clip.file.name, "aria-current": index === current ? "true" : "false", onClick: () => select(index) },
+                    ui("span", { className: "lowcord-clip-name" }, `${index + 1}. ${clip.file.name}`), ui("span", { className: "lowcord-clip-length" }, clock(clip.end - clip.start))),
+                ...(clips.length > 1 ? [
+                    button("↑", { className: "lowcord-clip-move", "aria-label": `Move ${clip.file.name} earlier`, disabled: index === 0 || undefined,
+                        onClick: () => { const keep = active(); clips.splice(index - 1, 0, clips.splice(index, 1)[0]); current = clips.indexOf(keep); render(); } }),
+                    button("↓", { className: "lowcord-clip-move", "aria-label": `Move ${clip.file.name} later`, disabled: index === clips.length - 1 || undefined,
+                        onClick: () => { const keep = active(); clips.splice(index + 1, 0, clips.splice(index, 1)[0]); current = clips.indexOf(keep); render(); } }),
+                    button("×", { className: "lowcord-clip-move", "aria-label": `Remove ${clip.file.name} from the video`,
+                        onClick: () => { pause(); const keep = active(); const [gone] = clips.splice(index, 1); release(gone); current = Math.max(0, clips.indexOf(keep)); render(); repaint(); } }),
+                ] : []))));
+            const spare = attached.filter(item => !clips.some(clip => clip.uploadId === item.uploadId));
+            addRow.replaceChildren(...(clips.length < maxClips ? [
+                ...spare.map(item => button(`Add ${item.file.name}`, { className: "lowcord-edit-chip", title: "Join this attached video", onClick: () => void addClip(item.file, item.uploadId) })),
+                button("Add clip…", { className: "lowcord-edit-chip", onClick: chooseClips }),
+            ] : [ui("p", {}, `Up to ${maxClips} clips.`)]));
+        }
+        function render() {
+            const label = playing ? "Pause" : "Play";
+            playButton.replaceChildren(icon(playing ? "pause" : "play", 18));
+            playButton.setAttribute("aria-label", `${label} (Space)`); playButton.title = `${label} (Space)`;
+            muteButton.replaceChildren(icon(mute ? "muted" : "sound", 18));
+            muteButton.setAttribute("aria-pressed", String(mute));
+            muteButton.title = mute ? "Sound off: the video is sent without audio" : "Mute: send the video without audio";
+            buildSegments(); place(); renderClips();
+            for (const segment of segments) void filmstrip(segment);
+        }
+        const release = clip => { clip.video.pause(); clip.video.removeAttribute("src"); clip.video.load(); URL.revokeObjectURL(clip.url); clip.film = null; };
+        return {
+            frame: { width, height }, timeline, draw, toggle, pause,
+            attach(paint) { repaint = paint; render(); requestAnimationFrame(render); },
+            sections(section, button) {
+                sectionHelpers = { button };
+                renderClips();
+                return [section("Clips", ui("p", {}, "Clips play and are sent in this order, as one video. Drag each clip's yellow ends to trim it."), clipList, addRow)];
+            },
+            changed: () => mute || clips.length > 1 || clips[0].uploadId !== uploadId || clips.some(clip => clip.start > .05 || clip.end < clip.duration - .05),
+            state: () => ({ mute, clips: clips.map(({ file, uploadId: id, start, end }) => ({ file, uploadId: id, start, end })) }),
+            close() { pause(); resize.disconnect(); for (const clip of clips) release(clip); },
+        };
+    }
+    const chunk = 1024 * 1024;
+    async function native(action, ...args) {
+        const result = await window.__LOWCORD_NATIVE__.videoCompression(action, ...args);
+        if (result?.error) throw Object.assign(new Error(result.error), { code: result.error });
+        return result;
+    }
+    async function encodeVideo(files, filters, status) {
+        let id;
+        const total = files.reduce((sum, file) => sum + file.size, 0);
+        try {
+            ({ id } = await native("begin", { sizes: files.map(file => file.size), kind: "edit", edit: filters }));
+            let sent = 0;
+            for (const file of files) for (let offset = 0; offset < file.size; offset += chunk) {
+                const bytes = new Uint8Array(await file.slice(offset, offset + chunk).arrayBuffer());
+                await native("append", id, bytes);
+                sent += bytes.length;
+                status.update("Editing video…", `Copying ${Math.round(sent / total * 100)}%`);
+            }
+            status.update("Editing video…", "Encoding. Longer videos take a while.");
+            const result = await native("finish", id);
+            const parts = [];
+            for (let offset = 0; offset < result.size; offset += chunk) parts.push(new Blob([await native("read", id, offset)]));
+            return new File(parts, files[0].name.replace(/\.[^.]*$/, "") + ".mp4", { type: "video/mp4", lastModified: 0 });
+        } finally { if (id) await native("cancel", id).catch(() => {}); }
+    }
+    function videoError(error) {
+        if (error.code === "ffmpeg-missing") return "Install FFmpeg and restart OrbitCord to edit videos. Your video is unchanged.";
+        if (error.code === "unsupported-duration") return "Couldn't read this video, or it's longer than six hours. Your video is unchanged.";
+        if (error.code === "encode-timeout") return "Editing this video took too long. Your video is unchanged.";
+        if (error.code === "busy") return "Another video is still being prepared. Try again when it's done.";
+        return "Couldn't edit this video. Your video is unchanged.";
+    }
+
+    // Video compression's size target for the open chat; unchanged when that
+    // extension is off or the file already fits.
+    const fitToChat = async file => await window.Lowcord.videoCompression?.fit?.(file) ?? file;
+    async function editUpload(uploadId) {
+        if (editing) { toast("Finish editing the current file first.", true); return; }
+        const channel = channelId(), upload = uploadStore()?.getUploads?.(channel, 0)?.find(item => item.id === uploadId);
+        const file = upload?.item?.file;
+        if (!(file instanceof File)) return;
+        editing = true;
+        let bitmap, status;
+        try {
+            if (isVideo(file)) {
+                if (!window.__LOWCORD_NATIVE__?.videoCompression) return;
+                // Other videos waiting in this message can be joined to this one.
+                const attached = uploadStore().getUploads(channel, 0)
+                    .filter(item => item.id !== uploadId && item.item?.file instanceof File && isVideo(item.item.file))
+                    .map(item => ({ uploadId: item.id, file: item.item.file }));
+                let session;
+                try { session = await videoSession(file, uploadId, attached); }
+                catch { toast("Couldn't open this video for editing.", true); return; }
+                let edit, state;
+                try {
+                    edit = await dialog(session.frame, file.name, { kind: "video", confirm: "Save video", video: session });
+                    state = session.state();
+                } finally { session.close(); }
+                if (!edit || untouched(edit) && !session.changed()) return;
+                status = extensions.progress("Editing video…", "Preparing");
+                let edited;
+                try { edited = await encodeVideo(state.clips.map(clip => clip.file), videoFilters(edit, state), status); }
+                catch (error) { toast(videoError(error), true); return; }
+                if (channelId() !== channel) { toast("You switched chats, so the video wasn't changed.", true); return; }
+                // Shrunk to this chat's upload limit, as a newly attached video would be.
+                status.end(); status = null;
+                edited = await fitToChat(edited);
+                if (channelId() !== channel) { toast("You switched chats, so the video wasn't changed.", true); return; }
+                await replaceUpload(channel, upload, edited);
+                // Joined clips become part of this video, so their own attachments go.
+                const joined = state.clips.filter(clip => clip.uploadId && clip.uploadId !== uploadId).map(clip => clip.uploadId);
+                for (const id of joined) actions().remove(channel, id, 0);
+                if (edit.boxes.length) window.Lowcord.privacy?.count("covered");
+                toast(joined.length ? `${joined.length + 1} clips joined into one video.` : "Video edited.", false, 1800);
+                return;
+            }
+            if (!supports(file)) { toast("Only PNG, JPEG and WebP images and MP4, MOV, WebM and MKV videos can be edited.", true); return; }
+            const result = await review(file, { tool: "crop", confirm: "Save image" });
+            if (!result || result === file) return;
+            const fitted = await fitToChat(result);
+            if (channelId() !== channel) { toast("You switched chats, so the image wasn't changed.", true); return; }
+            await replaceUpload(channel, upload, fitted);
+        } catch { toast("Couldn't replace the attachment. It's unchanged.", true); }
+        finally { bitmap?.close(); status?.end?.(); editing = false; }
+    }
+    // Discord's pencil icon, outlined to sit apart from its own action bar.
+    const editIcon = "M4 20h4l10.5-10.5a2.83 2.83 0 0 0-4-4L4 16v4M13.5 6.5l4 4";
+    function decorate() {
+        if (!extensions.enabled("coverImages")) return;
+        const channel = channelId(), uploads = uploadStore()?.getUploads?.(channel, 0);
+        if (!Array.isArray(uploads)) return;
+        for (const card of document.querySelectorAll('[class*="channelTextArea_"] li[data-list-item-id^="attachments___"]')) {
+            const media = card.querySelector('[class*="mediaContainer_"]');
+            if (!media || media.querySelector(":scope > .lowcord-upload-edit")) continue;
+            const id = cardId(card), file = uploads.find(item => item.id === id)?.item?.file;
+            if (!(file instanceof File) || !(supports(file) || isVideo(file))) continue;
+            const label = isVideo(file) ? "Edit video" : "Edit image";
+            const button = ui("button", { type: "button", className: "lowcord-upload-edit", "aria-label": label, title: label,
+                onClick: event => { event.preventDefault(); event.stopPropagation(); void editUpload(cardId(card)); } });
+            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("width", "16"); svg.setAttribute("height", "16"); svg.setAttribute("aria-hidden", "true");
+            svg.innerHTML = `<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="${editIcon}"/>`;
+            button.append(svg);
+            media.append(button);
+        }
+    }
+    window.Lowcord.onDomChange(records => { if (window.Lowcord.domChanged(records, 'li[data-list-item-id^="attachments___"]')) decorate(); });
+    window.addEventListener(extensions.changeEvent, () => {
+        if (extensions.enabled("coverImages")) decorate();
+        else for (const button of document.querySelectorAll(".lowcord-upload-edit")) button.remove();
+    });
+    decorate();
+
+    window.Lowcord.imageCover = { supports, review, transform, untouched, open: choose, claimPaste, videoFilters, editUpload };
 })();

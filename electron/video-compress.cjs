@@ -204,4 +204,85 @@ async function compressGif(input, directory, limit, signal) {
     } finally { if (waiting.length) waiting.shift().resolve(); else encoding = false; }
 }
 
-module.exports = { compressVideo, compressImage, compressGif };
+// Edit photos for videos: trim and join up to five clips, fit each into the
+// first clip's frame, rotate or flip, black out cover boxes, crop, and
+// optionally drop the sound. The page sends numbers only; every filter string
+// is built and checked here.
+const MAX_CLIPS = 5;
+const integer = (value, min, max) => Number.isSafeInteger(value) && value >= min && value <= max;
+const seconds = value => Number.isFinite(value) && value >= 0 && value <= 21_600;
+const even = value => Math.max(2, value - value % 2);
+// Checks an edit and returns it with the frame rounded to even sizes, as H.264
+// in 4:2:0 needs; crop and boxes are clamped to that frame.
+function checkEdit(edit, clipCount) {
+    if (!edit || typeof edit !== 'object') throw failure('invalid-edit');
+    const { transpose, hflip, vflip, width, height, crop, boxes, mute = false, clips } = edit;
+    if (!(transpose === null || integer(transpose, 0, 3)) || typeof hflip !== 'boolean' || typeof vflip !== 'boolean' || typeof mute !== 'boolean'
+        || !integer(width, 2, 16384) || !integer(height, 2, 16384) || !Array.isArray(boxes) || boxes.length > 64
+        || !Array.isArray(clips) || clips.length < 1 || clips.length > MAX_CLIPS || (clipCount !== undefined && clips.length !== clipCount)) throw failure('invalid-edit');
+    for (const clip of clips) if (!clip || !seconds(clip.start) || !seconds(clip.end) || clip.end - clip.start < .1) throw failure('invalid-edit');
+    const rect = value => {
+        if (!value || !integer(value.x, 0, width - 1) || !integer(value.y, 0, height - 1)
+            || !integer(value.width, 1, width - value.x) || !integer(value.height, 1, height - value.y)) throw failure('invalid-edit');
+        return value;
+    };
+    const frame = { width: even(width), height: even(height) };
+    const fit = value => ({ x: Math.min(value.x, frame.width - 1), y: Math.min(value.y, frame.height - 1),
+        width: Math.max(1, Math.min(value.width, frame.width - Math.min(value.x, frame.width - 1))),
+        height: Math.max(1, Math.min(value.height, frame.height - Math.min(value.y, frame.height - 1))) });
+    return { transpose, hflip, vflip, mute, frame, crop: fit(rect(crop)), boxes: boxes.map(rect).map(fit),
+        clips: clips.map(({ start, end }) => ({ start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000 })) };
+}
+// The filter for the joined clips. `audio` says which clips have sound.
+function editGraph(edit, audio) {
+    const { transpose, hflip, vflip, mute, frame, crop, boxes, clips } = edit;
+    // Clips are fitted in the source orientation, before any turn.
+    const source = transpose === null ? frame : { width: frame.height, height: frame.width };
+    const sound = !mute && audio.some(Boolean), many = clips.length > 1, parts = [], joined = [];
+    clips.forEach((clip, index) => {
+        parts.push(`[${index}:v]scale=${source.width}:${source.height}:force_original_aspect_ratio=decrease,pad=${source.width}:${source.height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1${many ? ',fps=30' : ''},format=yuv420p[v${index}]`);
+        joined.push(`[v${index}]`);
+        if (!sound) return;
+        parts.push(audio[index] ? `[${index}:a]aresample=48000,aformat=channel_layouts=stereo,asetpts=PTS-STARTPTS[a${index}]`
+            : `anullsrc=r=48000:cl=stereo,atrim=duration=${(clip.end - clip.start).toFixed(3)}[a${index}]`);
+        joined.push(`[a${index}]`);
+    });
+    parts.push(`${joined.join('')}concat=n=${clips.length}:v=1:a=${sound ? 1 : 0}[joined${sound ? '][sound' : ''}]`);
+    const filters = [];
+    if (transpose !== null) filters.push(`transpose=${transpose}`);
+    if (hflip) filters.push('hflip');
+    if (vflip) filters.push('vflip');
+    for (const box of boxes) filters.push(`drawbox=x=${box.x}:y=${box.y}:w=${box.width}:h=${box.height}:color=black:t=fill`);
+    filters.push(`crop=${even(crop.width)}:${even(crop.height)}:${crop.x}:${crop.y}`, 'setsar=1', 'format=yuv420p');
+    parts.push(`[joined]${filters.join(',')}[out]`);
+    return { graph: parts.join(';'), sound };
+}
+async function editVideo(inputs, directory, signal, edit) {
+    const checked = checkEdit(edit, inputs.length);
+    await acquire(signal);
+    try {
+        signal?.throwIfAborted();
+        const command = await findFFmpeg(signal);
+        const demux = ['-format_whitelist', 'mov,matroska,webm'];
+        const audio = [];
+        for (const [index, input] of inputs.entries()) {
+            const probe = await run(command, ['-hide_banner', '-nostdin', '-protocol_whitelist', 'file', ...demux, '-i', input], signal, 10_000);
+            const match = /Duration: (\d+):(\d+):([\d.]+)/.exec(probe.diagnostic);
+            const length = match ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) : NaN;
+            if (!Number.isFinite(length) || length <= 0 || length > 21_600 || checked.clips[index].start >= length) throw failure('unsupported-duration');
+            audio.push(/Stream #\d+:\d+[^:]*: Audio:/.test(probe.diagnostic));
+        }
+        const { graph, sound } = editGraph(checked, audio);
+        const output = join(directory, 'edited.mp4');
+        const sources = checked.clips.flatMap((clip, index) => ['-ss', clip.start.toFixed(3), '-t', (clip.end - clip.start).toFixed(3), ...demux, '-i', inputs[index]]);
+        const result = await run(command, ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+            '-protocol_whitelist', 'file', '-threads', '2', ...sources,
+            '-filter_complex', graph, '-filter_complex_threads', '1', '-map', '[out]', ...(sound ? ['-map', '[sound]', '-c:a', 'aac', '-b:a', '160000'] : ['-an']),
+            '-sn', '-dn', '-map_metadata', '-1',
+            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-threads', '2', '-movflags', '+faststart', output], signal, 1_800_000);
+        if (result.code !== 0) throw failure('encode-failed');
+        return output;
+    } finally { if (waiting.length) waiting.shift().resolve(); else encoding = false; }
+}
+
+module.exports = { compressVideo, compressImage, compressGif, editVideo, checkEdit, editGraph, MAX_CLIPS };

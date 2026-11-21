@@ -25,7 +25,8 @@ async function setup(page) {
             listeners.set(name, new Set()); store.addChangeListener = callback => listeners.get(name).add(callback);
         }
         const dispatcher = { dispatch() {}, subscribe: (name, callback) => { if (!callbacks.has(name)) callbacks.set(name, new Set()); callbacks.get(name).add(callback); }, unsubscribe() {} };
-        webpackChunkdiscord_app[0][2]({ c: { privacy: { exports: { ...stores, dispatcher } } } });
+        f.modules = { privacy: { exports: { ...stores, dispatcher } } };
+        webpackChunkdiscord_app[0][2]({ c: f.modules });
         const composer = document.querySelector('.channelTextArea_test');
         const editor = document.createElement('textarea'); editor.setAttribute('aria-label', 'Private draft'); editor.value = 'Keep this draft';
         composer.append(editor);
@@ -349,38 +350,183 @@ test('Cmd/Ctrl+Shift+V pastes an image into the editor, and pastes text as plain
     await expect.poll(() => page.evaluate(() => editFixture.pastes)).toEqual([false, false, true]);
     await expect(canvas).toHaveCount(0);
 });
-test('right-clicking an image in the chat offers Edit image and attaches the edited copy', async ({ page }) => {
-    await setup(page); await editBridge(page);
+// Discord's draft attachments: a store, its upload actions and the cards it
+// renders. setFile adds the new file at the end, as Discord's does.
+async function uploadFixture(page) {
     await page.evaluate(() => {
-        document.body.insertAdjacentHTML('beforeend', `<ol style="position:fixed;top:0;left:300px;z-index:50;margin:0;list-style:none">
-            <li id="chat-messages-10-1"><div id="message-accessories-1">
-                <div class="imageWrapper_test" id="photo" style="width:120px;height:80px;position:relative">
-                    <a class="originalLink_test" href="https://cdn.discordapp.com/attachments/1/2/photo.png?ex=1" style="position:absolute;inset:0"></a>
-                    <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" style="width:120px;height:80px"></div>
-                <div class="wrapper_test" id="clip"><video width="120" height="60"></video></div>
-            </div></li></ol>`);
-        window.addEventListener('contextmenu', event => {
-            event.preventDefault();
-            requestAnimationFrame(() => {
-                document.querySelector('#message')?.remove();
-                document.body.insertAdjacentHTML('beforeend', `<div id="message" role="menu" style="position:fixed;top:200px;left:300px;z-index:60;background:#111">
-                    <div class="item_test" role="menuitem" id="message-copy-text" tabindex="-1"><svg width="24" height="24"></svg><span data-text-variant="text-sm/medium">Copy Text</span></div></div>`);
-            });
-        });
-        document.addEventListener('keydown', event => { if (event.key === 'Escape') document.querySelector('#message')?.remove(); });
+        const f = privacyFixture, uploads = [];
+        let next = 1;
+        const emit = () => { render(); f.emit('UploadAttachmentStore'); };
+        const add = file => uploads.push({ id: `upload${next++}`, filename: file.name, item: { file, platform: 1 }, spoiler: false, description: null });
+        const UploadAttachmentStore = { getUploads: id => id === f.selected ? uploads : [] };
+        const actions = {
+            addFile: ({ file }) => { add(file.file); emit(); },
+            setFile: ({ file, id }) => { const at = uploads.findIndex(item => item.id === id); uploads.splice(at, 1); add(file.file); emit(); },
+            setUploads: ({ uploads: list }) => { uploads.splice(0, uploads.length, ...list); emit(); },
+            update: (channel, id, draft, { spoiler, description }) => { Object.assign(uploads.find(item => item.id === id), { spoiler, description }); emit(); },
+            remove: (channel, id) => { uploads.splice(uploads.findIndex(item => item.id === id), 1); emit(); },
+        };
+        const Store = class {}; Store.displayName = 'UploadAttachmentStore'; Object.setPrototypeOf(UploadAttachmentStore, Store.prototype);
+        UploadAttachmentStore.addChangeListener = () => {};
+        f.modules.uploads = { exports: { UploadAttachmentStore, actions } };
+        const list = document.createElement('ul'); list.className = 'channelAttachmentArea_test';
+        document.querySelector('.channelTextArea_test').prepend(list);
+        function render() {
+            list.replaceChildren(...uploads.map(upload => {
+                const card = document.createElement('li');
+                card.setAttribute('data-list-item-id', `attachments___${upload.id}`);
+                card.innerHTML = `<div class="uploadContainer_test"><div class="mediaContainer_test" style="width:160px;height:100px"><img class="media_test" alt=""></div>
+                    <div class="filename_test">${upload.filename}</div><div class="actionBar_test" aria-label="Upload Attachment Utilities"></div></div>`;
+                card.querySelector('img').src = URL.createObjectURL(upload.item.file);
+                return card;
+            }));
+        }
+        window.uploadFixture = { uploads, actions };
     });
-    const item = page.locator('#message').getByRole('menuitem', { name: 'Edit image' });
-    await page.locator('#clip').click({ button: 'right' });
-    await expect(page.locator('#message')).toBeVisible();
-    await expect(item).toHaveCount(0);
-    await page.locator('#photo').click({ button: 'right' });
-    await item.click();
-    await expect(page.locator('#message')).toHaveCount(0);
+}
+test('the pencil on an attached image edits it in place, keeping its place, spoiler and description', async ({ page }) => {
+    await setup(page); await uploadFixture(page);
+    const png = await whitePng(page);
+    await page.evaluate(png => {
+        for (const name of ['first.png', 'second.png', 'notes.pdf']) uploadFixture.actions.addFile({ file: { file: new File([new Uint8Array(png)], name, { type: name.endsWith('pdf') ? 'application/pdf' : 'image/png' }) } });
+        uploadFixture.actions.update('10', 'upload2', 0, { spoiler: true, description: 'Alt text' });
+    }, png);
+    const buttons = page.getByRole('button', { name: 'Edit image' });
+    // Only images and videos get the pencil.
+    await expect(buttons).toHaveCount(2);
+    await buttons.nth(1).click();
     await expect(page.locator('.lowcord-edit-stage canvas')).toBeVisible();
     await page.getByRole('button', { name: 'Rotate left' }).click();
-    await page.getByRole('button', { name: 'Attach image' }).click();
-    await expect.poll(() => page.evaluate(() => editFixture.arrived.length)).toBe(1);
-    expect(await page.evaluate(async () => { const bitmap = await createImageBitmap(editFixture.arrived[0]); return [bitmap.width, bitmap.height]; })).toEqual([100, 200]);
+    await page.getByRole('button', { name: 'Save image' }).click();
+    await expect.poll(() => page.evaluate(() => uploadFixture.uploads.map(item => `${item.id} ${item.filename}`))).toEqual(['upload1 first.png', 'upload4 second.png', 'upload3 notes.pdf']);
+    expect(await page.evaluate(async () => {
+        const upload = uploadFixture.uploads[1], bitmap = await createImageBitmap(upload.item.file);
+        return [upload.id, upload.spoiler, upload.description, bitmap.width, bitmap.height];
+    })).toEqual(['upload4', true, 'Alt text', 100, 200]);
+    // The re-rendered card gets its pencil back; cancelling changes nothing.
+    await expect(buttons).toHaveCount(2);
+    await buttons.first().click();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    expect(await page.evaluate(() => uploadFixture.uploads.map(item => item.id))).toEqual(['upload1', 'upload4', 'upload3']);
+    await page.evaluate(() => Lowcord.extensions.set('coverImages', false));
+    await expect(buttons).toHaveCount(0);
+});
+// Stands in for the native video job; records what the page sends.
+async function videoBridge(page, files) {
+    const webm = [...readFileSync('tests/fixtures/media/sample.webm')];
+    await page.evaluate(([webm, files]) => {
+        window.videoJobs = [];
+        window.__LOWCORD_NATIVE__ = { videoCompression: async (action, ...args) => {
+            videoJobs.push([action, action === 'append' ? args[1].byteLength : args[0]]);
+            if (action === 'begin') return { id: 'job1' };
+            if (action === 'finish') return { size: 16, type: 'video/mp4', extension: 'mp4' };
+            if (action === 'read') return new Uint8Array(16).fill(7);
+            return null;
+        } };
+        for (const name of files) uploadFixture.actions.addFile({ file: { file: new File([new Uint8Array(webm)], name, { type: 'video/webm' }) } });
+    }, [webm, files]);
+    return webm.length;
+}
+test('the pencil on an attached video sends its crop as numbers and swaps in the encoded MP4', async ({ page }) => {
+    await setup(page); await uploadFixture(page);
+    const size = await videoBridge(page, ['clip.webm']);
+    await page.getByRole('button', { name: 'Edit video' }).click();
+    await expect(page.getByRole('heading', { name: 'Edit video' })).toBeVisible();
+    await page.getByRole('button', { name: 'Square' }).click();
+    await page.getByRole('button', { name: 'Rotate right' }).click();
+    await page.getByRole('button', { name: 'Save video' }).click();
+    await expect.poll(() => page.evaluate(() => uploadFixture.uploads[0]?.filename)).toBe('clip.mp4');
+    const begin = await page.evaluate(() => videoJobs[0]);
+    expect(begin[0]).toBe('begin');
+    expect(begin[1]).toMatchObject({ kind: 'edit', sizes: [size], edit: { transpose: 1, hflip: false, vflip: false, width: 90, height: 160, boxes: [], mute: false } });
+    expect(begin[1].edit.crop).toEqual({ x: 0, y: 35, width: 90, height: 90 });
+    expect(begin[1].edit.clips).toEqual([{ start: 0, end: 2.028 }]);
+    expect(await page.evaluate(() => videoJobs.map(([action]) => action))).toEqual(['begin', 'append', 'finish', 'read', 'cancel']);
+    expect(await page.evaluate(() => [uploadFixture.uploads[0].item.file.type, uploadFixture.uploads[0].item.file.size])).toEqual(['video/mp4', 16]);
+});
+test('an edited video over the chat limit is compressed to fit, as an attached one would be', async ({ page }) => {
+    await setup(page); await uploadFixture(page);
+    // A direct message: the 20 MB limit.
+    await page.evaluate(() => { privacyFixture.selected = '30'; });
+    await videoBridge(page, ['clip.webm']);
+    await page.evaluate(() => {
+        const jobs = new Map();
+        __LOWCORD_NATIVE__.videoCompression = async (action, ...args) => {
+            videoJobs.push([action, action === 'append' ? args[1].byteLength : args[0]]);
+            if (action === 'begin') { const id = `job${jobs.size + 1}`; jobs.set(id, args[0]); return { id }; }
+            const job = jobs.get(args[0]);
+            // The edit comes out at 21 MB; compression brings it to 16 bytes.
+            const size = job.kind === 'edit' ? 21_000_000 : 16;
+            if (action === 'finish') return { size, type: 'video/mp4', extension: 'mp4' };
+            if (action === 'read') return new Uint8Array(Math.min(1024 * 1024, size - args[1])).fill(job.kind === 'edit' ? 1 : 2);
+            return null;
+        };
+    });
+    await page.getByRole('button', { name: 'Edit video' }).click();
+    await page.getByRole('button', { name: 'Mute' }).click();
+    await page.getByRole('button', { name: 'Save video' }).click();
+    await expect.poll(() => page.evaluate(() => uploadFixture.uploads[0]?.item.file.size)).toBe(16);
+    const begins = await page.evaluate(() => videoJobs.filter(([action]) => action === 'begin').map(([, options]) => options));
+    expect(begins.map(options => options.kind)).toEqual(['edit', 'video']);
+    expect(begins[0].edit.mute).toBe(true);
+    expect(begins[1]).toMatchObject({ size: 21_000_000, limit: 20_000_000 });
+    expect(await page.evaluate(() => uploadFixture.uploads[0].filename)).toBe('clip.mp4');
+});
+test('a video is trimmed with the yellow handles, can be muted, and plays in the editor', async ({ page }, info) => {
+    await setup(page); await uploadFixture(page);
+    await videoBridge(page, ['clip.webm']);
+    await page.getByRole('button', { name: 'Edit video' }).click();
+    const start = page.getByRole('slider', { name: 'Trim start' }), end = page.getByRole('slider', { name: 'Trim end' });
+    await expect(start).toHaveAttribute('aria-valuenow', '0.0');
+    await expect(end).toHaveAttribute('aria-valuenow', '2.0');
+    // Keyboard: Shift moves a second; plain arrows a tenth. The ends keep half a second apart.
+    await start.focus(); await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowRight');
+    await expect(start).toHaveAttribute('aria-valuenow', '0.2');
+    await end.focus(); await page.keyboard.press('Shift+ArrowLeft'); await page.keyboard.press('Shift+ArrowLeft');
+    await expect(end).toHaveAttribute('aria-valuenow', '0.7');
+    // Pointer: drag the end handle to about 3/4 of the bar.
+    const track = await page.locator('.lowcord-trim-track').boundingBox(), handle = await end.boundingBox();
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+    await page.mouse.down(); await page.mouse.move(track.x + track.width * .75, track.y + 10, { steps: 4 }); await page.mouse.up();
+    await expect.poll(async () => Number(await end.getAttribute('aria-valuenow'))).toBeGreaterThan(1.4);
+    // The readout counts from the trimmed start: dragging the end shows its frame.
+    await expect(page.locator('.lowcord-trim-time')).toHaveText(/^0:01\.\d \/ 0:01\.\d$/);
+    const mute = page.getByRole('button', { name: 'Mute' });
+    await mute.click();
+    await expect(mute).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: /^Play/ }).click();
+    await expect(page.getByRole('button', { name: /^Pause/ })).toBeVisible();
+    await page.screenshot({ path: info.outputPath('trim.png') });
+});
+test('attached videos can be joined in order, then their own attachments are removed', async ({ page }, info) => {
+    await setup(page); await uploadFixture(page);
+    const size = await videoBridge(page, ['first.webm', 'second.webm', 'third.webm']);
+    await page.getByRole('button', { name: 'Edit video' }).first().click();
+    await page.getByRole('button', { name: 'Add third.webm' }).click();
+    await page.getByRole('button', { name: 'Add second.webm' }).click();
+    const clips = page.locator('.lowcord-clip-list li');
+    await expect(clips).toHaveCount(3);
+    await expect(page.getByRole('button', { name: 'Add second.webm' })).toHaveCount(0);
+    // Put second before third, then trim third.
+    await page.getByRole('button', { name: 'Move second.webm earlier' }).click();
+    await expect(clips.locator('.lowcord-clip-name')).toHaveText(['1. first.webm', '2. second.webm', '3. third.webm']);
+    // One timeline holds all three clips, each with its own trim handles.
+    await expect(page.locator('.lowcord-trim-segment')).toHaveCount(3);
+    await expect(page.getByRole('slider', { name: /^Trim start, clip \d$/ })).toHaveCount(3);
+    await page.getByRole('slider', { name: 'Trim start, clip 3' }).focus(); await page.keyboard.press('Shift+ArrowRight');
+    await expect(page.locator('.lowcord-trim-time')).toHaveText(/ \/ 0:05\.1$/);
+    // Clicking in the second clip's film moves the playhead there: 2.0 s of clip one, then 1.0 s.
+    const second = await page.locator('.lowcord-trim-segment').nth(1).boundingBox();
+    await page.mouse.click(second.x + second.width / 2, second.y + second.height / 2);
+    await expect(page.locator('.lowcord-trim-time')).toHaveText(/^0:03\.0 \//);
+    await expect(clips.nth(1)).toHaveClass('is-current');
+    await page.screenshot({ path: info.outputPath('join.png') });
+    await page.getByRole('button', { name: 'Save video' }).click();
+    await expect.poll(() => page.evaluate(() => uploadFixture.uploads.map(item => item.filename))).toEqual(['first.mp4']);
+    const begin = await page.evaluate(() => videoJobs[0][1]);
+    expect(begin.sizes).toEqual([size, size, size]);
+    expect(begin.edit.clips).toEqual([{ start: 0, end: 2.028 }, { start: 0, end: 2.028 }, { start: 1, end: 2.028 }]);
+    expect(await page.evaluate(() => videoJobs.filter(([action]) => action === 'append').length)).toBe(3);
 });
 test('asking before attaching covers pixels permanently and cancelling attaches nothing', async ({ page }, info) => {
     await setup(page); await attachedFile(page);

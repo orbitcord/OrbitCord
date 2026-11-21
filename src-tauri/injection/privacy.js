@@ -688,7 +688,7 @@
         }
         const details = {
             cover: () => [header('cover', 'Hides names, addresses, faces and anything else in an image before it reaches the message box.'),
-                section('How to use it', facts([['Message bar', 'Open the actions button and choose Edit photos'], ['Paste to edit', 'Press Cmd/Ctrl+Shift+V in the message box to paste an image into the editor'], ['From the chat', 'Right-click an image in a message and choose Edit image'], ['Ask before attaching', 'When on, each image you paste, drop or choose opens the editor first']])),
+                section('How to use it', facts([['Message bar', 'Open the actions button and choose Edit photos'], ['Paste to edit', 'Press Cmd/Ctrl+Shift+V in the message box to paste an image into the editor'], ['Before sending', 'Use the pencil on an attached image or video to edit it in place. Videos can also be trimmed, muted or joined, and need FFmpeg'], ['Ask before attaching', 'When on, each image you paste, drop or choose opens the editor first']])),
                 note('Covered areas are replaced with solid pixels, so they cannot be recovered from the attached file. Animated images are not supported.')],
             walkAway: () => [header('walkAway', 'Protects your call if you step away. When your computer locks or sleeps, OrbitCord turns off what others can hear and see.'),
                 section('What happens', list('kept', ['Your microphone is muted', 'Your camera turns off', 'Your screen share stops'])),

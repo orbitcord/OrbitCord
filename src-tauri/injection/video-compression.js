@@ -214,5 +214,23 @@
         if (!extensions()?.enabled('compressVideos')) cancel('Media compression cancelled.');
     });
     window.addEventListener('pagehide', () => cancel());
-    window.Lowcord.videoCompression = { ignore: event => ignored.add(event), busy: () => Boolean(active) };
+    // Edit photos hands over a file it just edited; it is compressed like an
+    // attachment would be, to fit the open chat's limit. The original comes
+    // back when compression is off, not needed, or fails.
+    async function fit(file) {
+        const id = channelId(), limit = targetLimit(id);
+        if (!extensions()?.enabled('compressVideos') || !window.__LOWCORD_NATIVE__?.videoCompression || !limit || !mediaKind(file) || file.size < limit) return file;
+        if (file.size > maximumSource) return file;
+        if (active) { extensions().toast('Other media is still being compressed, so this file was left at its full size.', true); return file; }
+        const batch = { channel: id, limit, cancelled: false };
+        active = batch;
+        batch.status = status(batch);
+        const store = window.Lowcord.store('SelectedChannelStore');
+        const changed = () => { if (channelId() !== id) cancel('Media compression cancelled because you switched chats.'); };
+        if (typeof store?.addChangeListener === 'function') { store.addChangeListener(changed); batch.unsubscribe = () => store.removeChangeListener?.(changed); }
+        try { return await compress(file, batch, 1, 1); }
+        catch (error) { if (!batch.cancelled) extensions().toast(errorMessage(error), true); return file; }
+        finally { batch.status.end(); batch.unsubscribe?.(); if (active === batch) active = null; }
+    }
+    window.Lowcord.videoCompression = { ignore: event => ignored.add(event), busy: () => Boolean(active), fit };
 })();
