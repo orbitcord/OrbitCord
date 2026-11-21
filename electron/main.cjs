@@ -1,15 +1,11 @@
 const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, session, screen, dialog, protocol, net, shell, clipboard, ClipboardItem, systemPreferences } = require('electron');
 const { join } = require('node:path');
-const { readFileSync, writeFileSync } = require('node:fs');
+const { existsSync, readFileSync, writeFileSync } = require('node:fs');
 const { writeFile } = require('node:fs/promises');
 const { NativeBackend } = require('./native.cjs');
-const { migrateProfile } = require('./profile.cjs');
 const { setupEmbedPlugins } = require('./embed-plugins.cjs');
-const { createUpdateController, latestRelease, macAsset, downloadMacInstaller } = require('./updates.cjs');
 const { createBackgroundSaver } = require('./background.cjs');
-const { fetchRemote, fullQualityUrl } = require('./remote-fetch.cjs');
 const { watchNetwork } = require('./network-watch.cjs');
-const { createTraces } = require('./traces.cjs');
 
 app.setName('OrbitCord');
 app.setAppUserModelId('dev.lowcord.app'); // Stable identity preserves existing installs and notifications.
@@ -116,10 +112,18 @@ const mediaSources = feature('mediaSources', () => {
         onEvent:(owner,value)=>{if(!owner.isDestroyed()&&trusted(owner.getURL()))owner.send('lowcord:media-source',value);},
     });
 });
-const traces = feature('traces', () => createTraces({ file: join(userData, 'leave-no-trace.json'),
+const traces = feature('traces', () => require('./traces.cjs').createTraces({ file: join(userData, 'leave-no-trace.json'),
     sessions: () => [session.defaultSession, ...accounts.filter(account => account.id !== 'main').map(account => session.fromPartition(`persist:${account.id}`)), redditSession(),
         ...accounts.flatMap(account => require('./media-sources.cjs').SOURCES.map(source => session.fromPartition(`persist:orbitcord-source-${account.id}-${source.id}`)))],
     windows: () => [...discordWindows.values()].map(({ window }) => ({ window, session: window.webContents.session })) }));
+let nativeMedia;
+const getNativeMedia = () => {
+    if (!nativeMedia) {
+        nativeMedia = require('./native-media.cjs');
+        nativeMedia.configure(backend.executable);
+    }
+    return nativeMedia;
+};
 // Work a window started ends with it. Unloaded backends have none.
 const cancelFeatures = id => {
     features.redgifs?.cancel(id); features.reddit?.cancel(id);
@@ -236,7 +240,7 @@ const eachTrustedWindow = callback => {
 };
 let notifiedMacVersion;
 async function checkForMacUpdates() {
-    const state = await updates.check();
+    const state = await updates().check();
     if (state.status !== 'available' || state.version === notifiedMacVersion || !mainWindow || mainWindow.isDestroyed()) return;
     notifiedMacVersion = state.version;
     const result = await dialog.showMessageBox(mainWindow, {
@@ -246,7 +250,7 @@ async function checkForMacUpdates() {
         buttons: ['Download update', 'Later'], defaultId: 0, cancelId: 1,
     });
     if (result.response !== 0) return;
-    const downloaded = await updates.download();
+    const downloaded = await updates().download();
     if (downloaded.status === 'error') {
         dialog.showErrorBox('OrbitCord update failed', downloaded.error);
         return;
@@ -258,7 +262,7 @@ async function checkForMacUpdates() {
         detail: 'Open the installer, quit OrbitCord, and drag the new app to Applications to replace the old version.',
         buttons: ['Open installer', 'Later'], defaultId: 0, cancelId: 1,
     });
-    if (install.response === 0) await updates.install();
+    if (install.response === 0) await updates().install();
 }
 function initializeUpdater() {
     if (autoUpdater) return;
@@ -273,8 +277,8 @@ function initializeUpdater() {
     });
 }
 function startUpdater() {
-    if (process.platform === 'win32') updates.initialize();
-    const check = () => void (process.platform === 'darwin' ? checkForMacUpdates() : updates.check()).catch(error =>
+    if (process.platform === 'win32') updates().initialize();
+    const check = () => void (process.platform === 'darwin' ? checkForMacUpdates() : updates().check()).catch(error =>
         console.error('[lowcord] Update check failed:', error.message));
     setTimeout(check, 10_000).unref();
     setInterval(check, 24 * 60 * 60 * 1000).unref();
@@ -289,15 +293,18 @@ const updateFailed = error => {
     updateError = 'Could not restart. Try again, or quit OrbitCord to install.';
     publishUpdateNotice();
 };
-const updates = createUpdateController({
-    currentVersion: app.getVersion(), platform: process.platform, packaged: app.isPackaged,
-    getUpdater: () => { initializeUpdater(); return autoUpdater; },
-    getRelease: () => latestRelease(net.fetch),
-    downloadInstaller: (release, onProgress) => downloadMacInstaller({
-        fetch: net.fetch, directory: join(userData, 'updates'), asset: macAsset(release, process.arch), onProgress,
-    }),
-    openInstaller: path => shell.openPath(path),
-    publish: state => eachTrustedWindow(contents => contents.send('lowcord:updates-status', state)),
+const updates = feature('updates', () => {
+    const { createUpdateController, latestRelease, macAsset, downloadMacInstaller } = require('./updates.cjs');
+    return createUpdateController({
+        currentVersion: app.getVersion(), platform: process.platform, packaged: app.isPackaged,
+        getUpdater: () => { initializeUpdater(); return autoUpdater; },
+        getRelease: () => latestRelease(net.fetch),
+        downloadInstaller: (release, onProgress) => downloadMacInstaller({
+            fetch: net.fetch, directory: join(userData, 'updates'), asset: macAsset(release, process.arch), onProgress,
+        }),
+        openInstaller: path => shell.openPath(path),
+        publish: state => eachTrustedWindow(contents => contents.send('lowcord:updates-status', state)),
+    });
 });
 // Window bounds are saved per account; the main window keeps its old file.
 const stateAccount = account => account.id === 'main' ? {} : { account: account.id };
@@ -403,7 +410,7 @@ function configureSession(ses) {
     // images are touched; the switch lives on the window's embed preferences.
     ses.webRequest.onBeforeRequest({ urls: ['https://media.discordapp.net/attachments/*'] }, (details, callback) => {
         const redirectURL = details.method === 'GET' && details.resourceType === 'image'
-            && recordFor(details.webContents)?.embedPlugins.fullQualityImages ? fullQualityUrl(details.url) : null;
+            && recordFor(details.webContents)?.embedPlugins.fullQualityImages ? require('./remote-fetch.cjs').fullQualityUrl(details.url) : null;
         callback(redirectURL ? { redirectURL } : {});
     });
     ses.setPermissionRequestHandler((contents, permission, callback, details) =>
@@ -439,11 +446,14 @@ function configureSession(ses) {
 
 // Opens one Discord window for an account. Only the main window hides to the
 // tray; extra account windows are destroyed on close to free their memory.
+let initialWindowState;
 async function createDiscordWindow(account) {
     const main = account.id === 'main';
     const ses = main ? session.defaultSession : session.fromPartition(`persist:${account.id}`);
     configureSession(ses);
-    const saved = await backend.call('get_window_state', main ? null : stateAccount(account)).catch(() => null);
+    const pendingState = main && initialWindowState ? initialWindowState : null;
+    if (pendingState) initialWindowState = null;
+    const saved = await (pendingState ?? backend.call('get_window_state', main ? null : stateAccount(account)).catch(() => null));
     const onScreen = saved && screen.getAllDisplays().some(({ workArea }) =>
         saved.x + saved.width > workArea.x + 64 && saved.x < workArea.x + workArea.width - 64
         && saved.y + saved.height > workArea.y + 64 && saved.y < workArea.y + workArea.height - 64);
@@ -477,8 +487,9 @@ async function createDiscordWindow(account) {
     discordWindows.set(id, record);
     if (main) mainWindow = window;
     window.setTitle(windowTitle(record));
-    if (main) await applyAppIcon(readAppIcon());
-    else if (process.platform !== 'darwin') window.setIcon(windowIcon(readAppIcon()));
+    const deferMacIcon = main && process.platform === 'darwin';
+    if (main && !deferMacIcon) await applyAppIcon(readAppIcon());
+    else if (!main && process.platform !== 'darwin') window.setIcon(windowIcon(readAppIcon()));
     if (saved?.maximized && onScreen) window.maximize();
     // Let Explorer see the selected icon and updated launch shortcuts before
     // it creates the taskbar button. Showing first can cache the default icon.
@@ -592,7 +603,9 @@ async function createDiscordWindow(account) {
     });
     for (const event of ['resize', 'move', 'maximize', 'unmaximize']) window.on(event, () => scheduleState(record));
     if (!main) accountsChanged();
-    await window.loadURL(testing ? testURL.href : 'https://discord.com/channels/@me');
+    const loading = window.loadURL(testing ? testURL.href : 'https://discord.com/channels/@me');
+    if (deferMacIcon) applyAppIcon(readAppIcon());
+    await loading;
     return record;
 }
 
@@ -600,7 +613,7 @@ function registerIpc() {
     const gifOwners = new Map();
     ipcMain.handle('lowcord:media-process', async (event, op, args = {}, bytes) => {
         assertSender(event);
-        const media = require('./native-media.cjs').service();
+        const media = getNativeMedia().service();
         if (!args || typeof args !== 'object') throw new Error('Invalid media arguments');
         if (bytes !== undefined && (!(bytes instanceof Uint8Array || bytes instanceof Uint8ClampedArray) || bytes.byteLength > 16 * 1024 * 1024)) throw new Error('Invalid media bytes');
         if (op === 'gif_new') {
@@ -714,7 +727,10 @@ function registerIpc() {
         assertSender(event);
         return require('./spellcheck.cjs').applySpellcheck(event.sender.session, settings, { preferred: app.getPreferredSystemLanguages() });
     });
-    ipcMain.handle('lowcord:fetch-remote', (event, url, options) => { assertSender(event); return fetchRemote(url, options, (target, init) => net.fetch(target, init)); });
+    ipcMain.handle('lowcord:fetch-remote', (event, url, options) => {
+        assertSender(event);
+        return require('./remote-fetch.cjs').fetchRemote(url, options, (target, init) => net.fetch(target, init));
+    });
     ipcMain.handle('lowcord:touch-id-available', event => {
         assertSender(event);
         return process.platform === 'darwin' && systemPreferences.canPromptTouchID();
@@ -870,12 +886,12 @@ function registerIpc() {
         await writeFile(filePath, bytes);
         return true;
     });
-    ipcMain.handle('lowcord:updates-status', event => { assertSender(event); return updates.snapshot(); });
-    ipcMain.handle('lowcord:updates-check', event => { assertSender(event); return updates.check(); });
-    ipcMain.handle('lowcord:updates-download', event => { assertSender(event); return updates.download(); });
+    ipcMain.handle('lowcord:updates-status', event => { assertSender(event); return updates().snapshot(); });
+    ipcMain.handle('lowcord:updates-check', event => { assertSender(event); return updates().check(); });
+    ipcMain.handle('lowcord:updates-download', event => { assertSender(event); return updates().download(); });
     ipcMain.handle('lowcord:updates-install', async event => {
         const { window } = assertSender(event);
-        const state = updates.snapshot();
+        const state = updates().snapshot();
         if (state.status !== 'downloaded') return state;
         // The settings bridge is visible to Discord's main world. Require a
         // native confirmation before a page script could restart or install.
@@ -887,7 +903,7 @@ function registerIpc() {
             buttons: [state.installMode === 'automatic' ? 'Restart and install' : 'Open installer', 'Cancel'],
             defaultId: 0, cancelId: 1,
         });
-        return confirmation.response === 0 ? updates.install() : updates.snapshot();
+        return confirmation.response === 0 ? updates().install() : updates().snapshot();
     });
     ipcMain.handle('lowcord:update-state', event => { assertSender(event); return updateNoticeState(); });
     ipcMain.handle('lowcord:update-dismiss', event => {
@@ -962,12 +978,19 @@ function redditLogin(parent) {
     return redditLoginWork;
 }
 
+const nativeBinary = () => app.isPackaged
+    ? join(process.resourcesPath, 'native', `lowcord-native${process.platform === 'win32' ? '.exe' : ''}`)
+    : join(__dirname, '..', '.lowcord', 'native', `lowcord-native${process.platform === 'win32' ? '.exe' : ''}`);
+
 async function start() {
-    if (!testing) await migrateProfile(app.getPath('sessionData'));
-    backend = new NativeBackend(app.isPackaged ? join(process.resourcesPath, 'native', `lowcord-native${process.platform === 'win32' ? '.exe' : ''}`)
-        : join(__dirname, '..', '.lowcord', 'native', `lowcord-native${process.platform === 'win32' ? '.exe' : ''}`), userData);
-    if (testing && process.env.LOWCORD_TEST_UPDATER === '1') updates.initialize();
-    require('./native-media.cjs').configure(backend.executable);
+    if (!testing) {
+        const sessionData = app.getPath('sessionData');
+        if (!existsSync(join(sessionData, 'lowcord-migrated'))) {
+            await require('./profile.cjs').migrateProfile(sessionData);
+        }
+    }
+    backend ??= new NativeBackend(nativeBinary(), userData);
+    if (testing && process.env.LOWCORD_TEST_UPDATER === '1') updates().initialize();
     registerIpc();
     const { powerMonitor } = require('electron');
     watchNetwork({ powerMonitor, onChange: () => sendToDiscord('lowcord:network-changed') });
@@ -995,6 +1018,9 @@ async function start() {
 
 if (!testing && !app.requestSingleInstanceLock()) app.quit();
 else {
+    // Boot the Rust helper and read saved bounds in parallel with Electron's app.whenReady().
+    backend = new NativeBackend(nativeBinary(), userData);
+    initialWindowState = backend.call('get_window_state', null).catch(() => null);
     app.on('second-instance', showLast);
     app.on('activate', showLast);
     app.on('window-all-closed', () => { if (testing) app.quit(); });
@@ -1006,8 +1032,10 @@ else {
         void saveAllStates().catch(console.error).finally(async () => {
             for (const value of Object.values(features)) await value.close?.().catch(console.error);
             // An update restart is not the person leaving.
-            await traces().onQuit({ keepSignIn: updateRestarting }).catch(console.error);
-            finished = true; require('./native-media.cjs').close(); backend?.close(); app.quit();
+            if (features.traces || existsSync(join(userData, 'leave-no-trace.json'))) {
+                await traces().onQuit({ keepSignIn: updateRestarting }).catch(console.error);
+            }
+            finished = true; nativeMedia?.close(); backend?.close(); app.quit();
         });
     });
     app.whenReady().then(start).catch(error => {

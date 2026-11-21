@@ -1,6 +1,7 @@
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const adguard = readFileSync(join(__dirname, 'vendor', 'adguard-youtube.js'), 'utf8');
+let adguard;
+const adguardScript = () => adguard ??= readFileSync(join(__dirname, 'vendor', 'adguard-youtube.js'), 'utf8');
 
 function frameKind(value) {
     let url;
@@ -73,7 +74,7 @@ function setupEmbedPlugins(contents) {
         try {
             if (frame === contents.mainFrame) return;
             const kind = frameKind(frame.url);
-            if (kind === 'youtube') await frame.executeJavaScript(`(${youtubeControls.toString()})();\nwindow.__lowcordAdguardEnabled=${settings.youtubeAdblock};\n${adguard}`);
+            if (kind === 'youtube') await frame.executeJavaScript(`(${youtubeControls.toString()})();\nwindow.__lowcordAdguardEnabled=${settings.youtubeAdblock};\n${adguardScript()}`);
             if (kind === 'music' || kind === 'youtube') await frame.executeJavaScript(`(${musicVolume.toString()})(${JSON.stringify({ enabled: kind === 'youtube' || settings.musicEmbeds, volume: settings.musicVolume / 100 })})`);
         } catch { /* A virtualized or navigating embed may already be gone. */ }
     }
