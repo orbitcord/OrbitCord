@@ -68,9 +68,10 @@ function setupLowcordChatAppearance() {
     const rowMessages = new WeakMap();
     const renderedRows = new Map(), dirtyRows = new Set();
     let orderedRows = [], fullRefresh = true, structureChanged = true, storeChanged = false;
-    let context, timeCache = new WeakMap(), timeContext, timeFormat, titleFormat;
+    let context, timeCache = new WeakMap(), timeContext, timeFormat, titleFormat, timeCheckedAt = 0;
     let colorKey, textColors;
     function invalidate() { fullRefresh = true; structureChanged = true; scheduleRefresh(); }
+    function checkTimeContext() { timeCheckedAt = 0; invalidate(); }
     function messageChanged() { storeChanged = true; scheduleRefresh(); }
     // Discord loads the other person's profile after every DM switch. A user
     // change can only move an avatar picture (a change of account is caught
@@ -156,25 +157,33 @@ function setupLowcordChatAppearance() {
         return content.trim() !== "" && emojiOnlyPattern.test(content);
     }
 
+    const richContentSelector = '[class*="attachment_"], [class*="attachmentContent_"], [class*="upload_"], '
+        + '[class*="uploadProgress_"], [class*="imageWrapper_"], [class*="visualMediaItemContainer_"], '
+        + '[class*="mosaicItem_"], [class*="embed_"], [class*="embedFull_"], [class*="sticker_"], '
+        + '[class*="messageSnapshot_"], [class*="forwardedMessage_"], .lowcord-music-embeds, .lowcord-social-embeds, video, audio';
+    const skipBodySelector = '[class*="repliedMessage_"], [class*="buttonContainer_"], [class*="buttons_"], '
+        + '.lowcord-bubble-avatar, .lowcord-bubble-time';
+    const richClassPattern = /attachment_|attachmentContent_|upload_|uploadProgress_|imageWrapper_|visualMediaItemContainer_|mosaicItem_|embed_|embedFull_|sticker_|messageSnapshot_|forwardedMessage_|lowcord-music-embeds|lowcord-social-embeds|container_|avatar|decoration|emoji|reaction|repliedMessage_/i;
     function hasRichContent(message, surface) {
         // Discord's store uses camelCase; pending messages and wire payloads
         // can still use snake_case. Forwarded text also has a message snapshot.
-        if (["attachments", "embeds", "stickerItems", "sticker_items", "stickers", "components",
-            "messageSnapshots", "message_snapshots"].some(key => message[key]?.length)
+        if (message.attachments?.length || message.embeds?.length || message.stickerItems?.length
+            || message.sticker_items?.length || message.stickers?.length || message.components?.length
+            || message.messageSnapshots?.length || message.message_snapshots?.length
             || message.messageReference?.type === 1 || message.message_reference?.type === 1
             || message.poll) return true;
         // Upload placeholders and asynchronously resolved embeds can appear
         // before MessageStore receives their attachment data. Inspect only the
         // message body, never reply thumbnails, author avatars or action icons.
-        const richContent = '[class*="attachment_"], [class*="attachmentContent_"], [class*="upload_"], '
-            + '[class*="uploadProgress_"], [class*="imageWrapper_"], [class*="visualMediaItemContainer_"], '
-            + '[class*="mosaicItem_"], [class*="embed_"], [class*="embedFull_"], [class*="sticker_"], '
-            + '[class*="messageSnapshot_"], [class*="forwardedMessage_"], .lowcord-music-embeds, .lowcord-social-embeds, video, audio';
-        return Array.from(surface.children)
-            .filter(body => !body.matches('[class*="repliedMessage_"], [class*="buttonContainer_"], [class*="buttons_"], '
-                + '.lowcord-bubble-avatar, .lowcord-bubble-time'))
-            .some(body => body.matches(richContent) || body.querySelector(richContent)
-                || Array.from(body.querySelectorAll("img")).some(img => !isChromeImage(img)));
+        for (let body = surface.firstElementChild; body; body = body.nextElementSibling) {
+            if (body.matches(skipBodySelector)) continue;
+            if (body.matches(richContentSelector) || (body.childElementCount > 0 && body.querySelector(richContentSelector))) return true;
+            const imgs = body.getElementsByTagName("img");
+            for (let i = 0; i < imgs.length; i++) {
+                if (!isChromeImage(imgs[i])) return true;
+            }
+        }
+        return false;
     }
 
     // Avatar decorations are images too. Treating them as attachments dropped the
@@ -199,8 +208,15 @@ function setupLowcordChatAppearance() {
         return source;
     }
 
+    function directChildByClass(parent, className) {
+        for (let child = parent.firstElementChild; child; child = child.nextElementSibling) {
+            if (child.classList.contains(className)) return child;
+        }
+        return null;
+    }
+
     function setAvatar(surface, message, show) {
-        let avatar = surface.querySelector(":scope > .lowcord-bubble-avatar");
+        let avatar = directChildByClass(surface, "lowcord-bubble-avatar");
         if (!show) { avatar?.remove(); return; }
         if (!avatar) {
             avatar = document.createElement("img");
@@ -215,10 +231,10 @@ function setupLowcordChatAppearance() {
     // A footer under the last message of a run, outside the bubble, so text and
     // media share the same timestamp line.
     function setTime(surface, date, show) {
-        let time = surface.querySelector(":scope > .lowcord-bubble-time");
+        let time = directChildByClass(surface, "lowcord-bubble-time");
         if (!show) {
             time?.remove();
-            surface.removeAttribute("data-lowcord-timed");
+            if (surface.hasAttribute("data-lowcord-timed")) surface.removeAttribute("data-lowcord-timed");
             return;
         }
         if (!time) {
@@ -384,12 +400,23 @@ function setupLowcordChatAppearance() {
         if (!text || text.querySelector("pre, table")) return 0;
         const range = document.createRange();
         range.selectNodeContents(text);
-        const rects = [...range.getClientRects()].filter(rect => rect.width && rect.height);
-        if (!rects.length || !rects.some(rect => rect.top >= rects[0].bottom - 2)) return 0;
+        const rects = range.getClientRects();
+        let firstBottom = NaN, wrapped = false, right = -Infinity;
+        for (let i = 0; i < rects.length; i++) {
+            const rect = rects[i];
+            if (!rect.width || !rect.height) continue;
+            if (Number.isNaN(firstBottom)) firstBottom = rect.bottom - 2;
+            else if (rect.top >= firstBottom) wrapped = true;
+            if (rect.right > right) right = rect.right;
+        }
+        if (!wrapped) return 0;
         const left = text.getBoundingClientRect().left;
-        let right = Math.max(...rects.map(rect => rect.right));
         // Reactions sit inside the bubble too; never cut them off.
-        surface.querySelectorAll('[class*="reactions_"] > *').forEach(node => { right = Math.max(right, node.getBoundingClientRect().right); });
+        const reactions = surface.querySelectorAll('[class*="reactions_"] > *');
+        for (let i = 0; i < reactions.length; i++) {
+            const r = reactions[i].getBoundingClientRect().right;
+            if (r > right) right = r;
+        }
         return Math.ceil(right - left) + 1;
     }
 
@@ -397,14 +424,16 @@ function setupLowcordChatAppearance() {
         const { row, surface, message, side, alignment, media } = entry;
         const avatars = options.style === "avatars";
         if (media) {
-            surface.removeAttribute(marker);
+            if (surface.hasAttribute(marker)) surface.removeAttribute(marker);
             setAttribute(surface, "data-lowcord-media", side);
             setAttribute(surface, "data-lowcord-emoji", String(Boolean(entry.emoji)));
         } else {
-            surface.removeAttribute("data-lowcord-media");
-            surface.removeAttribute("data-lowcord-emoji");
-            surface.removeAttribute("data-lowcord-caption");
-            clearAccessories(surface);
+            if (surface.hasAttribute("data-lowcord-media")) {
+                surface.removeAttribute("data-lowcord-media");
+                surface.removeAttribute("data-lowcord-emoji");
+                surface.removeAttribute("data-lowcord-caption");
+                clearAccessories(surface);
+            }
             setAttribute(surface, marker, side);
         }
         setAttribute(surface, "data-lowcord-align", alignment);
@@ -454,30 +483,72 @@ function setupLowcordChatAppearance() {
 
     // Store notifications carry no message ID. Compare cheap message inputs,
     // then do DOM/formatting/geometry work only for changed rows and neighbors.
+    const timestampValue = ts => typeof ts === "string" || typeof ts === "number" ? ts : ts?.valueOf?.() ?? String(ts);
     function inputs(message) {
         if (!message) return null;
-        return [message.author?.id, message.author?.avatar, message.type, String(message.timestamp), message.content, message.flags,
-            message.interactionMetadata?.user?.id, message.interaction_metadata?.user?.id, message.interaction?.user?.id,
-            message.messageReference, message.messageReference?.type, message.message_reference, message.message_reference?.type, message.poll,
-            ...["attachments", "embeds", "stickerItems", "sticker_items", "stickers", "components",
-                "messageSnapshots", "message_snapshots"].flatMap(key => [message[key], message[key]?.length])];
+        return {
+            authorId: message.author?.id, authorAvatar: message.author?.avatar, type: message.type,
+            timestamp: timestampValue(message.timestamp), content: message.content, flags: message.flags,
+            imUser: message.interactionMetadata?.user?.id, imsUser: message.interaction_metadata?.user?.id, iUser: message.interaction?.user?.id,
+            mr: message.messageReference, mrType: message.messageReference?.type,
+            mrs: message.message_reference, mrsType: message.message_reference?.type, poll: message.poll,
+            att: message.attachments, attLen: message.attachments?.length,
+            emb: message.embeds, embLen: message.embeds?.length,
+            si: message.stickerItems, siLen: message.stickerItems?.length,
+            sis: message.sticker_items, sisLen: message.sticker_items?.length,
+            st: message.stickers, stLen: message.stickers?.length,
+            cmp: message.components, cmpLen: message.components?.length,
+            ms: message.messageSnapshots, msLen: message.messageSnapshots?.length,
+            mss: message.message_snapshots, mssLen: message.message_snapshots?.length,
+        };
     }
-    function sameInputs(a, b) { return a === b || Boolean(a && b && a.length === b.length && a.every((value, i) => value === b[i])); }
+    function inputsMatch(saved, message) {
+        if (!saved || !message) return saved === (message ?? null);
+        return saved.authorId === message.author?.id
+            && saved.authorAvatar === message.author?.avatar
+            && saved.type === message.type
+            && saved.content === message.content
+            && saved.flags === message.flags
+            && saved.timestamp === timestampValue(message.timestamp)
+            && saved.imUser === message.interactionMetadata?.user?.id
+            && saved.imsUser === message.interaction_metadata?.user?.id
+            && saved.iUser === message.interaction?.user?.id
+            && saved.mr === message.messageReference
+            && saved.mrType === message.messageReference?.type
+            && saved.mrs === message.message_reference
+            && saved.mrsType === message.message_reference?.type
+            && saved.poll === message.poll
+            && saved.att === message.attachments && saved.attLen === message.attachments?.length
+            && saved.emb === message.embeds && saved.embLen === message.embeds?.length
+            && saved.si === message.stickerItems && saved.siLen === message.stickerItems?.length
+            && saved.sis === message.sticker_items && saved.sisLen === message.sticker_items?.length
+            && saved.st === message.stickers && saved.stLen === message.stickers?.length
+            && saved.cmp === message.components && saved.cmpLen === message.components?.length
+            && saved.ms === message.messageSnapshots && saved.msLen === message.messageSnapshots?.length
+            && saved.mss === message.message_snapshots && saved.mssLen === message.message_snapshots?.length;
+    }
+    const rowIdPattern = /^chat-messages-(\d+)-(.+)$/;
+    function parseRowId(row, cached) {
+        const id = row.id;
+        if (cached && cached.rowId === id) return cached;
+        const match = rowIdPattern.exec(id);
+        return { rowId: id, rowChannelID: match ? match[1] : null, rowMessageID: match ? match[2] : null };
+    }
     function readRow(row, channelID, userID) {
-        const match = /^chat-messages-(\d+)-(.+)$/.exec(row.id);
-        const message = match?.[1] === channelID ? rowMessage(row, channelID, match[2]) : null;
+        const parsed = parseRowId(row, renderedRows.get(row));
+        const message = parsed.rowChannelID === channelID ? rowMessage(row, channelID, parsed.rowMessageID) : null;
         const surface = row.querySelector('[data-list-item-id^="chat-messages"]') ?? row.querySelector('[class*="message_"]');
-        if (!surface) return { message, inputs: inputs(message), entry: null };
+        if (!surface) return { ...parsed, message, inputs: inputs(message), entry: null };
         if (!message || ![0, 19, 20, 23].includes(message.type ?? 0)) {
             clearSurface(surface);
-            return { message, inputs: inputs(message), entry: null };
+            return { ...parsed, message, inputs: inputs(message), entry: null };
         }
         const invoker = message.interactionMetadata?.user?.id ?? message.interaction_metadata?.user?.id ?? message.interaction?.user?.id;
         const isCommand = message.type === 20 || message.type === 23;
         const side = message.author?.id === userID || (isCommand && invoker === userID) ? "outgoing" : "incoming";
         // A reply that is only emoji, such as a Fake Nitro reaction, has no bubble either.
         const emoji = isEmojiOnly(message);
-        return { message, inputs: inputs(message), entry: { row, surface, message, side,
+        return { ...parsed, message, inputs: inputs(message), entry: { row, surface, message, side,
             alignment: side === "outgoing" ? options.outgoingPosition : "left", emoji,
             media: emoji || hasRichContent(message, surface), date: new Date(message.timestamp), author: message.author?.id,
             timeline: row.parentElement, isReply: message.type === 19 || isCommand || Boolean(message.messageReference || message.message_reference) } };
@@ -502,18 +573,23 @@ function setupLowcordChatAppearance() {
         observeTimeline();
         const nextContext = `${channelID}:${channel.type}:${userID}`;
         if (context !== nextContext) { context = nextContext; fullRefresh = structureChanged = true; }
-        const format = Intl.DateTimeFormat().resolvedOptions();
-        const nextTimeContext = `${format.locale}:${format.timeZone}`;
-        if (timeContext !== nextTimeContext) {
-            timeContext = nextTimeContext; timeCache = new WeakMap(); fullRefresh = true;
-            // The same output as toLocaleTimeString/toLocaleString, without
-            // building a formatter for every timestamp.
-            timeFormat = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" });
-            titleFormat = new Intl.DateTimeFormat([], { year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric" });
+        const now = Date.now();
+        if (!timeContext || now - timeCheckedAt >= 30000) {
+            timeCheckedAt = now;
+            const format = Intl.DateTimeFormat().resolvedOptions();
+            const nextTimeContext = `${format.locale}:${format.timeZone}`;
+            if (timeContext !== nextTimeContext) {
+                timeContext = nextTimeContext; timeCache = new WeakMap(); fullRefresh = true;
+                // The same output as toLocaleTimeString/toLocaleString, without
+                // building a formatter for every timestamp.
+                timeFormat = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" });
+                titleFormat = new Intl.DateTimeFormat([], { year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric" });
+            }
         }
         const nextColors = `${options.incomingColor}:${options.outgoingColor}:${options.incomingTextColor}:${options.outgoingTextColor}`;
         if (colorKey !== nextColors) { colorKey = nextColors; textColors = textColorsFor(options); }
-        if (fullRefresh || structureChanged) {
+        const hadStructureChange = fullRefresh || structureChanged;
+        if (hadStructureChange) {
             // The card uses the media gutter, so it doesn't jump sideways when the upload lands.
             document.querySelectorAll(uploaderSelector).forEach(node => {
                 setAttribute(node, "data-lowcord-uploader", options.outgoingPosition);
@@ -522,70 +598,110 @@ function setupLowcordChatAppearance() {
             const previous = orderedRows;
             orderedRows = [...document.querySelectorAll('[id^="chat-messages-"]')];
             const present = new Set(orderedRows);
-            for (const row of previous) if (!present.has(row)) {
-                const surface = renderedRows.get(row)?.entry?.surface;
-                if (row.isConnected && surface) clearSurface(surface);
-                renderedRows.delete(row); dirtyRows.delete(row);
+            for (let i = 0; i < previous.length; i++) {
+                const row = previous[i];
+                if (!present.has(row)) {
+                    const surface = renderedRows.get(row)?.entry?.surface;
+                    if (row.isConnected && surface) clearSurface(surface);
+                    renderedRows.delete(row); dirtyRows.delete(row);
+                }
             }
             // Reordering/removal can change both sides of a group boundary.
-            const previousIndex = new Map(previous.map((row, i) => [row, i]));
-            orderedRows.forEach((row, i) => {
+            const previousIndex = new Map();
+            for (let i = 0; i < previous.length; i++) previousIndex.set(previous[i], i);
+            for (let i = 0; i < orderedRows.length; i++) {
+                const row = orderedRows[i];
                 const old = previousIndex.get(row);
                 if (fullRefresh || old === undefined || previous[old - 1] !== orderedRows[i - 1] || previous[old + 1] !== orderedRows[i + 1]) dirtyRows.add(row);
-            });
-        }
-        if (storeChanged && !fullRefresh) for (const row of orderedRows) {
-            const match = /^chat-messages-(\d+)-(.+)$/.exec(row.id);
-            const message = match?.[1] === channelID ? rowMessage(row, channelID, match[2]) : null;
-            if (!sameInputs(renderedRows.get(row)?.inputs, inputs(message))) dirtyRows.add(row);
-        }
-        const changed = new Set();
-        orderedRows.forEach((row, i) => {
-            if (!dirtyRows.has(row) && renderedRows.has(row)) return;
-            renderedRows.set(row, readRow(row, channelID, userID));
-            changed.add(row);
-            if (orderedRows[i - 1]) changed.add(orderedRows[i - 1]);
-            if (orderedRows[i + 1]) changed.add(orderedRows[i + 1]);
-        });
-        const entries = orderedRows.map(row => renderedRows.get(row)?.entry ?? null);
-        const work = [];
-        entries.forEach((entry, i) => {
-            if (!entry || !changed.has(entry.row)) return;
-            entry.continuation = joins(entries[i - 1], entry);
-            entry.last = !joins(entry, entries[i + 1]);
-            work.push(entry);
-        });
-        // Every write that shapes a row comes first, then every measurement in
-        // one layout, then the writes that depend on it. Each read between
-        // writes would lay out the whole new channel again.
-        for (const entry of work) apply(entry, channel);
-        const bubbles = work.filter(entry => !entry.media);
-        for (const { surface } of bubbles) surface.removeAttribute("data-lowcord-fit");
-        const seenMedia = new Set();
-        const items = markAccessories(work.filter(entry => entry.media).map(entry => ({ surface: entry.surface,
-            right: entry.side === "outgoing" && entry.alignment === "right" })), seenMedia);
-        const widths = work.map(entry => entry.row.clientWidth);
-        const fits = bubbles.map(({ surface }) => wrappedWidth(surface));
-        const shifts = measureAccessories(items);
-        const avatars = options.style === "avatars";
-        work.forEach(({ surface }, i) => {
-            const available = Math.max(0, widths[i] - 2 * (gutter + (avatars ? face : 0)));
-            setProperty(surface, "--lowcord-reply-max-width", `${Math.floor(Math.min(360, available))}px`);
-        });
-        bubbles.forEach(({ surface }, i) => fitBubble(surface, fits[i]));
-        items.forEach(({ item }, i) => setProperty(item, "--lowcord-media-shift", `${shifts[i]}px`));
-        queueActions(work);
-        for (const media of observedMedia) {
-            if (!media.isConnected || (changed.has(media.closest('[id^="chat-messages-"]')) && !seenMedia.has(media))) {
-                mediaObserver.unobserve(media); observedMedia.delete(media);
             }
         }
-        const timelines = new Set(entries.filter(Boolean).map(entry => entry.timeline));
-        for (const timeline of resizedTimelines) if (!timelines.has(timeline)) {
-            resizeObserver.unobserve(timeline); resizedTimelines.delete(timeline);
+        if (storeChanged && !fullRefresh) {
+            for (let i = 0; i < orderedRows.length; i++) {
+                const row = orderedRows[i];
+                const cached = renderedRows.get(row);
+                const parsed = parseRowId(row, cached);
+                const message = parsed.rowChannelID === channelID ? rowMessage(row, channelID, parsed.rowMessageID) : null;
+                if (!cached || !inputsMatch(cached.inputs, message)) dirtyRows.add(row);
+            }
         }
-        for (const timeline of timelines) if (timeline && !resizedTimelines.has(timeline)) {
-            resizeObserver.observe(timeline); resizedTimelines.add(timeline);
+        const directlyChanged = new Set(), neighbors = new Set();
+        for (let i = 0; i < orderedRows.length; i++) {
+            const row = orderedRows[i];
+            if (!dirtyRows.has(row) && renderedRows.has(row)) continue;
+            renderedRows.set(row, readRow(row, channelID, userID));
+            directlyChanged.add(row);
+            if (i > 0) neighbors.add(orderedRows[i - 1]);
+            if (i + 1 < orderedRows.length) neighbors.add(orderedRows[i + 1]);
+        }
+        const changed = new Set(directlyChanged);
+        const work = [];
+        if (directlyChanged.size) {
+            const entries = new Array(orderedRows.length);
+            for (let i = 0; i < orderedRows.length; i++) entries[i] = renderedRows.get(orderedRows[i])?.entry ?? null;
+            for (let i = 0; i < entries.length; i++) {
+                const entry = entries[i];
+                if (!entry) continue;
+                const direct = directlyChanged.has(entry.row);
+                if (!direct && !neighbors.has(entry.row)) continue;
+                const nextContinuation = joins(entries[i - 1], entry);
+                const nextLast = !joins(entry, entries[i + 1]);
+                if (!direct && entry.continuation === nextContinuation && entry.last === nextLast) continue;
+                entry.continuation = nextContinuation;
+                entry.last = nextLast;
+                changed.add(entry.row);
+                work.push(entry);
+            }
+        }
+        if (work.length) {
+            // Every write that shapes a row comes first, then every measurement in
+            // one layout, then the writes that depend on it. Each read between
+            // writes would lay out the whole new channel again.
+            const bubbles = [], mediaEntries = [];
+            for (let i = 0; i < work.length; i++) {
+                const entry = work[i];
+                apply(entry, channel);
+                if (entry.media) mediaEntries.push({ surface: entry.surface, right: entry.side === "outgoing" && entry.alignment === "right" });
+                else {
+                    bubbles.push(entry);
+                    entry.surface.removeAttribute("data-lowcord-fit");
+                }
+            }
+            const seenMedia = new Set();
+            const items = mediaEntries.length ? markAccessories(mediaEntries, seenMedia) : [];
+            const widths = new Array(work.length);
+            for (let i = 0; i < work.length; i++) widths[i] = work[i].row.clientWidth;
+            const fits = new Array(bubbles.length);
+            for (let i = 0; i < bubbles.length; i++) fits[i] = wrappedWidth(bubbles[i].surface);
+            const shifts = items.length ? measureAccessories(items) : [];
+            const avatars = options.style === "avatars";
+            const edgeOffset = 2 * (gutter + (avatars ? face : 0));
+            for (let i = 0; i < work.length; i++) {
+                const available = Math.max(0, widths[i] - edgeOffset);
+                setProperty(work[i].surface, "--lowcord-reply-max-width", `${Math.floor(Math.min(360, available))}px`);
+            }
+            for (let i = 0; i < bubbles.length; i++) fitBubble(bubbles[i].surface, fits[i]);
+            for (let i = 0; i < items.length; i++) setProperty(items[i].item, "--lowcord-media-shift", `${shifts[i]}px`);
+            queueActions(work);
+            if (observedMedia.size) {
+                for (const media of observedMedia) {
+                    if (!media.isConnected || (changed.has(media.closest('[id^="chat-messages-"]')) && !seenMedia.has(media))) {
+                        mediaObserver.unobserve(media); observedMedia.delete(media);
+                    }
+                }
+            }
+        }
+        if (hadStructureChange || work.length) {
+            const timelines = new Set();
+            for (let i = 0; i < orderedRows.length; i++) {
+                const tl = renderedRows.get(orderedRows[i])?.entry?.timeline;
+                if (tl) timelines.add(tl);
+            }
+            for (const timeline of resizedTimelines) if (!timelines.has(timeline)) {
+                resizeObserver.unobserve(timeline); resizedTimelines.delete(timeline);
+            }
+            for (const timeline of timelines) if (!resizedTimelines.has(timeline)) {
+                resizeObserver.observe(timeline); resizedTimelines.add(timeline);
+            }
         }
         if (avatarsChanged) for (const { entry } of renderedRows.values()) {
             if (entry && !changed.has(entry.row)) setAvatar(entry.surface, entry.message, options.style === "avatars" && entry.last);
@@ -614,6 +730,41 @@ function setupLowcordChatAppearance() {
         scheduleRefresh();
     }
 
+    const rowSelector = '[id^="chat-messages-"]', watchedSelector = `${rowSelector}, ${uploaderSelector}`;
+    function inKnownTimeline(node) {
+        for (const timeline of resizedTimelines) if (timeline.contains(node)) return true;
+        return false;
+    }
+    function allNodesMatch(list, selector) {
+        for (let i = 0; i < list.length; i++) {
+            const node = list[i];
+            if (!(node instanceof Element) || !node.matches(selector)) return false;
+        }
+        return true;
+    }
+    function markChildRows(list) {
+        let hit = false;
+        for (let i = 0; i < list.length; i++) {
+            const node = list[i];
+            if (!(node instanceof Element)) continue;
+            if (node.matches(rowSelector)) { dirtyRows.add(node); hit = true; }
+            if (node.childElementCount > 0) {
+                const nested = node.querySelectorAll(rowSelector);
+                if (nested.length) {
+                    for (let j = 0; j < nested.length; j++) dirtyRows.add(nested[j]);
+                    hit = true;
+                }
+            }
+        }
+        return hit;
+    }
+    function hasMatchingNode(list, selector) {
+        for (let i = 0; i < list.length; i++) {
+            const node = list[i];
+            if (node instanceof Element && (node.matches(selector) || (node.childElementCount > 0 && node.querySelector(selector)))) return true;
+        }
+        return false;
+    }
     function observeTimeline() {
         if (stopObserving || !document.body) return;
         // Discord virtualizes the timeline. MutationObserver already
@@ -628,34 +779,66 @@ function setupLowcordChatAppearance() {
             // The app shell, member list, composer and settings animate
             // independently. Only timeline changes need a message scan.
             let relevant = false;
-            const selector = '[id^="chat-messages-"]', watchedSelector = `${selector}, ${uploaderSelector}`;
-            for (const record of records) {
+            for (let i = 0; i < records.length; i++) {
+                const record = records[i];
                 const target = record.target instanceof Element ? record.target : record.target.parentElement;
-                // Most records are class changes across the app (hover, focus,
-                // animations). Outside a row or upload card they change nothing.
-                if (record.attributeName === "class" && !target?.closest(watchedSelector)) continue;
-                const row = target?.closest(selector);
-                const nodes = [...record.addedNodes, ...record.removedNodes];
-                if (record.type === "childList" && nodes.length && nodes.every(node => node instanceof Element &&
-                    node.matches('.lowcord-bubble-time, .lowcord-bubble-avatar'))) continue;
-                if (target?.closest('.lowcord-bubble-time, .lowcord-bubble-avatar')) continue;
+                if (!target) continue;
+                if (record.type === "attributes") {
+                    const attr = record.attributeName;
+                    if (attr === "class") {
+                        // Fast pointer-chain check skips all app-shell class
+                        // churn (member list, sidebar, tooltips) without CSS matching.
+                        if (resizedTimelines.size > 0 && !inKnownTimeline(target)) continue;
+                        const watched = target.closest(watchedSelector);
+                        if (!watched) continue;
+                        // Toggling hover/selected/replying/mentioned classes on
+                        // the message surface itself never alters bubble layout.
+                        if (target.hasAttribute("data-lowcord-cluster")) continue;
+                        if (target.closest('.lowcord-bubble-time, .lowcord-bubble-avatar') || target.closest(actionsSelector)) continue;
+                        const row = watched.matches(rowSelector) ? watched : target.closest(rowSelector);
+                        if (row) {
+                            const cls = typeof target.className === "string" ? target.className : "";
+                            if (renderedRows.get(row)?.entry?.media || richClassPattern.test(cls)) {
+                                dirtyRows.add(row); relevant = true;
+                            }
+                        } else {
+                            structureChanged = true; relevant = true;
+                        }
+                        continue;
+                    }
+                    if (attr === "src") {
+                        if (resizedTimelines.size > 0 && !inKnownTimeline(target)) continue;
+                        if (target instanceof HTMLImageElement && isChromeImage(target)) continue;
+                        if (target.closest('.lowcord-bubble-time, .lowcord-bubble-avatar') || target.closest(actionsSelector)) continue;
+                        const row = target.closest(rowSelector);
+                        if (row) { dirtyRows.add(row); relevant = true; }
+                        else if (target.closest(uploaderSelector)) { structureChanged = true; relevant = true; }
+                        continue;
+                    }
+                    // attr === "id"
+                    if (renderedRows.has(target)) { structureChanged = true; relevant = true; }
+                    const row = target.closest(rowSelector);
+                    if (row) { dirtyRows.add(row); structureChanged = true; relevant = true; }
+                    else if (target.closest(uploaderSelector)) { structureChanged = true; relevant = true; }
+                    continue;
+                }
+                // childList mutation
+                const added = record.addedNodes, removed = record.removedNodes;
+                const hasNodes = added.length > 0 || removed.length > 0;
+                if (hasNodes && allNodesMatch(added, '.lowcord-bubble-time, .lowcord-bubble-avatar')
+                    && allNodesMatch(removed, '.lowcord-bubble-time, .lowcord-bubble-avatar')) continue;
+                if (target.closest('.lowcord-bubble-time, .lowcord-bubble-avatar')) continue;
                 // Hovering mounts Discord's toolbar; CSS alone places it.
-                if (target?.closest(actionsSelector) || (nodes.length && nodes.every(node => node instanceof Element && node.matches(actionsSelector)))) continue;
-                // Hovering swaps faces and avatar decorations to animated
-                // images. They never change a bubble; refreshing for each
-                // swap forced layouts while the pointer moved.
-                if (record.attributeName === "src" && target instanceof HTMLImageElement && isChromeImage(target)) continue;
+                if (target.closest(actionsSelector) || (hasNodes && allNodesMatch(added, actionsSelector) && allNodesMatch(removed, actionsSelector))) continue;
+                const row = target.closest(rowSelector);
                 if (row) { dirtyRows.add(row); relevant = true; }
-                if (record.attributeName === "id" && row) structureChanged = true;
-                if (record.attributeName === "id" && renderedRows.has(target)) { structureChanged = true; relevant = true; }
-                for (const node of nodes) if (node instanceof Element &&
-                    (node.matches(selector) || node.querySelector(selector))) {
-                    if (node.matches(selector)) dirtyRows.add(node);
-                    node.querySelectorAll(selector).forEach(row => dirtyRows.add(row));
+                if ((added.length && markChildRows(added)) || (removed.length && markChildRows(removed))) {
                     structureChanged = true; relevant = true;
                 }
-                if (target?.closest(uploaderSelector) || nodes.some(node => node instanceof Element &&
-                    (node.matches(uploaderSelector) || node.querySelector(uploaderSelector)))) { structureChanged = true; relevant = true; }
+                if (target.closest(uploaderSelector) || (added.length && hasMatchingNode(added, uploaderSelector))
+                    || (removed.length && hasMatchingNode(removed, uploaderSelector))) {
+                    structureChanged = true; relevant = true;
+                }
             }
             if (relevant) {
                 if (frame !== undefined) cancelAnimationFrame(frame);
@@ -805,7 +988,8 @@ function setupLowcordChatAppearance() {
     window.__lowcordChatAppearance = { get enabled() { return enabled; }, setEnabled, get options() { return { ...options }; }, setOptions,
         SettingsPanel: ChatAppearanceSettings };
     window.addEventListener("resize", invalidate);
-    window.addEventListener("languagechange", invalidate);
+    window.addEventListener("languagechange", checkTimeContext);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) timeCheckedAt = 0; });
     window.addEventListener("storage", event => {
         if (event.storageArea !== storage || (event.key !== storageKey && event.key !== optionsKey && event.key !== null)) return;
         enabled = storage.getItem(storageKey) !== "false";
