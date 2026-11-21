@@ -7,33 +7,38 @@
     const chunks = (window.webpackChunkdiscord_app ??= []);
     chunks.push([[Symbol("lowcord")], {}, require => { wreq = require; }]);
 
-    // Visits every module export and its properties until visit() returns
-    // true. A plain loop: a generator costs a resumption per value, and a
-    // Discord-sized cache yields hundreds of thousands of them.
-    function eachExport(visit) {
-        if (!wreq?.c) return;
-        for (const id in wreq.c) {
-            const exports = wreq.c[id]?.exports;
-            if (exports == null || exports === window) continue;
-            if (visit(exports)) return;
-            if (typeof exports !== "object") continue;
-            for (const key in exports) {
-                let value;
-                try { value = exports[key]; } catch { continue; }
-                if (value != null && value !== exports && value !== window && visit(value)) return;
-            }
-        }
-    }
     // Discord's translation table is a Proxy that answers every property name;
     // anything that has a made-up property is skipped.
     const probe = "__lowcordProbe__";
+    const cache = new Map(), misses = new Map();
+    const isReal = value => {
+        try { return value[probe] === undefined; } catch { return false; }
+    };
+    const moduleCount = () => wreq?.c ? Object.keys(wreq.c).length : 0;
+
+    // Scans webpack exports with minimal per-value overhead: skips primitives,
+    // avoids closure indirection, and checks the translation-proxy probe only
+    // when a candidate actually matches the filter.
     function find(filter) {
-        let found = null;
-        eachExport(value => {
-            try { if (value[probe] === undefined && filter(value)) { found = value; return true; } } catch {}
-            return false;
-        });
-        return found;
+        const modules = wreq?.c;
+        if (!modules) return null;
+        for (const id in modules) {
+            const exports = modules[id]?.exports;
+            if (exports == null || exports === window) continue;
+            const type = typeof exports;
+            if (type !== "object" && type !== "function") continue;
+            try { if (filter(exports) && isReal(exports)) return exports; } catch {}
+            if (type !== "object") continue;
+            for (const key in exports) {
+                let value;
+                try { value = exports[key]; } catch { continue; }
+                if (value == null || value === exports || value === window) continue;
+                const valueType = typeof value;
+                if (valueType !== "object" && valueType !== "function") continue;
+                try { if (filter(value) && isReal(value)) return value; } catch {}
+            }
+        }
+        return null;
     }
     const filters = {
         byProps: (...props) => value => props.every(prop => typeof value?.[prop] === "function"),
@@ -48,19 +53,81 @@
     const pending = new Set(), pendingStores = new Map();
     let timer, scannedModules = -1, scannedAt = 0;
     function poll() {
-        const modules = wreq?.c ? Object.keys(wreq.c).length : 0;
-        if (modules === scannedModules && Date.now() - scannedAt < 5000) return;
-        scannedModules = modules; scannedAt = Date.now();
-        const unresolved = new Set(pending), resolved = [];
-        // Enumerate exports once, rather than once for every pending feature.
-        eachExport(value => {
-            try { if (value[probe] !== undefined) return false; } catch { return false; }
-            for (const entry of unresolved) {
-                try { if (!entry.filter(value)) continue; } catch { continue; }
-                unresolved.delete(entry); resolved.push([entry, value]);
+        const modules = moduleCount();
+        const now = Date.now();
+        if (modules === scannedModules && now - scannedAt < 5000) return;
+        scannedModules = modules; scannedAt = now;
+        const unresolvedStores = new Map(), unresolvedFilters = [], resolved = [];
+        for (const entry of pending) {
+            if (entry.name) unresolvedStores.set(entry.name, entry);
+            else unresolvedFilters.push(entry);
+        }
+        const raw = wreq?.c;
+        if (raw && (unresolvedStores.size || unresolvedFilters.length)) {
+            const hasFilters = unresolvedFilters.length > 0;
+            outer: for (const id in raw) {
+                const exports = raw[id]?.exports;
+                if (exports == null || exports === window) continue;
+                const type = typeof exports;
+                if (type !== "object" && type !== "function") continue;
+                if (unresolvedStores.size && type === "object") {
+                    let name;
+                    try { name = exports.constructor?.displayName; } catch {}
+                    if (name) {
+                        const entry = unresolvedStores.get(name);
+                        if (entry && isReal(exports)) {
+                            unresolvedStores.delete(name); resolved.push([entry, exports]);
+                            if (!unresolvedStores.size && !unresolvedFilters.length) break;
+                        }
+                    }
+                }
+                if (hasFilters && unresolvedFilters.length) {
+                    let real;
+                    for (let i = unresolvedFilters.length - 1; i >= 0; i--) {
+                        const entry = unresolvedFilters[i];
+                        let matched = false;
+                        try { matched = Boolean(entry.filter(exports)); } catch {}
+                        if (!matched) continue;
+                        real ??= isReal(exports);
+                        if (!real) break;
+                        unresolvedFilters.splice(i, 1); resolved.push([entry, exports]);
+                    }
+                    if (!unresolvedStores.size && !unresolvedFilters.length) break;
+                }
+                if (type !== "object") continue;
+                for (const key in exports) {
+                    let value;
+                    try { value = exports[key]; } catch { continue; }
+                    if (value == null || value === exports || value === window) continue;
+                    const valueType = typeof value;
+                    if (valueType !== "object" && valueType !== "function") continue;
+                    if (unresolvedStores.size && valueType === "object") {
+                        let name;
+                        try { name = value.constructor?.displayName; } catch {}
+                        if (name) {
+                            const entry = unresolvedStores.get(name);
+                            if (entry && isReal(value)) {
+                                unresolvedStores.delete(name); resolved.push([entry, value]);
+                                if (!unresolvedStores.size && !unresolvedFilters.length) break outer;
+                            }
+                        }
+                    }
+                    if (hasFilters && unresolvedFilters.length) {
+                        let real;
+                        for (let i = unresolvedFilters.length - 1; i >= 0; i--) {
+                            const entry = unresolvedFilters[i];
+                            let matched = false;
+                            try { matched = Boolean(entry.filter(value)); } catch {}
+                            if (!matched) continue;
+                            real ??= isReal(value);
+                            if (!real) break;
+                            unresolvedFilters.splice(i, 1); resolved.push([entry, value]);
+                        }
+                        if (!unresolvedStores.size && !unresolvedFilters.length) break outer;
+                    }
+                }
             }
-            return !unresolved.size;
-        });
+        }
         for (const [entry, value] of resolved) {
             pending.delete(entry);
             if (entry.name) { pendingStores.delete(entry.name); cache.set(`store:${entry.name}`, value); }
@@ -88,10 +155,9 @@
     // A lookup that found nothing is not repeated until the module cache grows
     // or a second passes: clicks, keys and uploads look up stores Discord may
     // not have loaded, and each miss would scan the whole cache again.
-    const cache = new Map(), misses = new Map();
     function cached(key, filter) {
         if (cache.has(key)) return cache.get(key);
-        const modules = wreq?.c ? Object.keys(wreq.c).length : 0, miss = misses.get(key);
+        const modules = moduleCount(), miss = misses.get(key);
         if (miss && miss.modules === modules && Date.now() - miss.at < 1000) return null;
         const value = find(filter);
         if (!value) { misses.set(key, { modules, at: Date.now() }); return null; }
@@ -106,23 +172,92 @@
     // before-paint listener needs them.
     const mutationListeners = new Set(), domListeners = new Set();
     let domFrame, domObserver, domRecords = [], observedAttributes = "";
+    const batchCache = new WeakMap();
+    function nodeMatches(nodes, selector) {
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            if (node instanceof Element && (node.matches(selector) || (node.childElementCount > 0 && node.querySelector(selector)))) return true;
+        }
+        return false;
+    }
+    function batchFor(records) {
+        let info = batchCache.get(records);
+        if (info) return info;
+        const targets = new Set(), elements = new Set();
+        for (let i = 0; i < records.length; i++) {
+            const record = records[i];
+            const target = record.target instanceof Element ? record.target : record.target.parentElement;
+            if (target) targets.add(target);
+            if (record.type === "childList") {
+                const added = record.addedNodes;
+                for (let j = 0; j < added.length; j++) if (added[j] instanceof Element) elements.add(added[j]);
+                const removed = record.removedNodes;
+                for (let j = 0; j < removed.length; j++) if (removed[j] instanceof Element) elements.add(removed[j]);
+            }
+        }
+        info = { targets: [...targets], elements: [...elements], results: new Map() };
+        batchCache.set(records, info);
+        return info;
+    }
     function domChanged(records, selector) {
         if (!Array.isArray(records)) return true;
-        return records.some(record => {
-            const target = record.target instanceof Element ? record.target : record.target.parentElement;
-            if (target?.closest(selector)) return true;
-            return [...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element &&
-                (node.matches(selector) || node.querySelector(selector)));
-        });
+        const len = records.length;
+        if (!len) return false;
+        // Small batches skip Set/Map allocations entirely; larger bursts are
+        // indexed once and shared across every listener in the frame.
+        if (len <= 4) {
+            for (let i = 0; i < len; i++) {
+                const record = records[i];
+                const target = record.target instanceof Element ? record.target : record.target.parentElement;
+                if (target?.closest(selector)) return true;
+                if (record.type === "childList" && (nodeMatches(record.addedNodes, selector) || nodeMatches(record.removedNodes, selector))) return true;
+            }
+            return false;
+        }
+        const info = batchFor(records);
+        const hit = info.results.get(selector);
+        if (hit !== undefined) return hit;
+        let matched = false;
+        const { targets, elements } = info;
+        for (let i = 0; i < targets.length; i++) {
+            if (targets[i].closest(selector)) { matched = true; break; }
+        }
+        if (!matched) {
+            for (let i = 0; i < elements.length; i++) {
+                const node = elements[i];
+                if (node.matches(selector) || (node.childElementCount > 0 && node.querySelector(selector))) { matched = true; break; }
+            }
+        }
+        info.results.set(selector, matched);
+        return matched;
     }
     function mutated(records) {
         for (const fn of mutationListeners) { try { fn(records); } catch (error) { console.error("[Lowcord]", error); } }
         if (!domListeners.size) return;
-        const batch = mutationListeners.size ? records.filter(record => record.type === "childList" || record.attributeName === "src") : records;
-        if (!batch.length) return;
+        let count = 0;
+        if (mutationListeners.size) {
+            for (let i = 0; i < records.length; i++) {
+                const r = records[i];
+                if (r.type === "childList" || r.attributeName === "src") count++;
+            }
+            if (!count) return;
+        } else {
+            count = records.length;
+            if (!count) return;
+        }
         // A hidden window may not run rAF. Bound retained mutation records;
         // null requests a complete reconciliation after a large burst.
-        if (domRecords !== null) domRecords = domRecords.length + batch.length > 1000 ? null : domRecords.concat(batch);
+        if (domRecords !== null) {
+            if (domRecords.length + count > 1000) domRecords = null;
+            else if (mutationListeners.size) {
+                for (let i = 0; i < records.length; i++) {
+                    const r = records[i];
+                    if (r.type === "childList" || r.attributeName === "src") domRecords.push(r);
+                }
+            } else {
+                for (let i = 0; i < records.length; i++) domRecords.push(records[i]);
+            }
+        }
         domFrame ??= requestAnimationFrame(() => {
             domFrame = undefined;
             const records = domRecords; domRecords = [];
