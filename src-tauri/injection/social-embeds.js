@@ -5,12 +5,41 @@
 (() => {
     const { socialLinks: links, extensions } = window.Lowcord;
     const rowSelector = '[id^="chat-messages-"]';
+    const rowIdPattern = /^chat-messages-(\d+)-(\d+)$/;
     const ownSelector = '.lowcord-social-embeds, .lowcord-social-lightbox';
     // Fix providers such as vxReddit answer with a components embed, not an article.
     const embedSelector = '[id^="message-accessories-"] article, [id^="message-accessories-"] [class*="embedWrapper_"], '
         + '[id^="message-accessories-"] [class*="componentEmbedContainer_"]';
-    const posts = new Map(), rows = new Set(), rowState = new WeakMap();
-    let frame;
+    const posts = new Map(), rows = new Set(), rowState = new WeakMap(), trackedRows = new Map();
+    let frame, storeDirty = false, messageStore = null;
+
+    function trackRow(row) {
+        let entry = trackedRows.get(row);
+        const id = row.id;
+        if (entry) {
+            if (entry.id !== id) {
+                const match = rowIdPattern.exec(id);
+                entry.id = id; entry.ch = match ? match[1] : null; entry.mid = match ? match[2] : null;
+            }
+            return entry;
+        }
+        const match = rowIdPattern.exec(id);
+        entry = { id, ch: match ? match[1] : null, mid: match ? match[2] : null,
+            msg: undefined, content: undefined, flags: undefined, embeds: undefined, embedsLen: undefined, hasSeen: false };
+        trackedRows.set(row, entry);
+        return entry;
+    }
+    function syncTrackedRows() {
+        const list = document.querySelectorAll(rowSelector);
+        for (let i = 0; i < list.length; i++) trackRow(list[i]);
+        for (const row of trackedRows.keys()) if (!row.isConnected) trackedRows.delete(row);
+    }
+    function directEmbedHost(surface) {
+        for (let child = surface.firstElementChild; child; child = child.nextElementSibling) {
+            if (child.classList.contains("lowcord-social-embeds")) return child;
+        }
+        return null;
+    }
 
     // ----- Data ---------------------------------------------------------------
     function load(target) {
@@ -25,7 +54,9 @@
             entry.post = post && Array.isArray(post.media) ? post : null;
             entry.status = entry.post ? "ready" : "failed";
         }, () => { entry.status = "failed"; }).finally(() => {
-            document.querySelectorAll(rowSelector).forEach(row => { if (rowState.get(row)?.keys.includes(target.key)) rows.add(row); });
+            for (const row of trackedRows.keys()) {
+                if (row.isConnected && rowState.get(row)?.keys.includes(target.key)) rows.add(row);
+            }
             schedule();
         });
         return entry;
@@ -218,47 +249,80 @@
         });
     }
     function updateRow(row) {
-        if (!row.isConnected) return;
-        const ids = /^chat-messages-(\d+)-(\d+)$/.exec(row.id);
-        if (!ids) return;
+        if (!row.isConnected) { trackedRows.delete(row); return; }
+        const tracked = trackRow(row);
+        if (!tracked.ch || !tracked.mid) return;
         const surface = row.querySelector(':scope > [data-list-item-id^="chat-messages"]') ?? row.firstElementChild;
         if (!surface) return;
-        const message = window.Lowcord.store("MessageStore")?.getMessage?.(ids[1], ids[2]);
+        const store = messageStore ?? window.Lowcord.store("MessageStore");
+        const message = store?.getMessage?.(tracked.ch, tracked.mid);
+        tracked.msg = message; tracked.content = message?.content; tracked.flags = message?.flags;
+        tracked.embeds = message?.embeds; tracked.embedsLen = message?.embeds?.length; tracked.hasSeen = true;
         // Read the markdown so code blocks and <suppressed> links are skipped.
         const suppressed = Boolean((message?.flags ?? 0) & 4);
-        const targets = typeof message?.content === "string" && !suppressed ? links.collect(message.content, 3) : [];
+        const content = typeof message?.content === "string" ? message.content : "";
+        const targets = content && !suppressed && content.includes("://") ? links.collect(content, 3) : [];
+        const prior = rowState.get(row);
+        if (!targets.length && !prior?.hadLinks) {
+            if (prior?.host || directEmbedHost(surface)) (prior?.host ?? directEmbedHost(surface))?.remove();
+            rowState.set(row, { keys: [], signature: "none", hadLinks: false, host: null });
+            return;
+        }
         const entries = targets.map(target => [target.key, load(target)]);
         const ready = entries.filter(([, entry]) => entry.status === "ready");
         const keys = new Set(ready.map(([key]) => key));
         // A share link (/r/sub/s/code) names the same post as the embed's permalink.
         hideNative(row, new Set(ready.flatMap(([key, entry]) => [key, links.parse(entry.post.url ?? "")?.key]).filter(Boolean)), message);
         // A message that is only the link reads as the card alone.
-        const text = row.querySelector(`#message-content-${ids[2]}`);
+        const text = row.querySelector(`#message-content-${tracked.mid}`);
         if (text) {
-            const linkOnly = targets.length === 1 && keys.has(targets[0].key) && message.content.trim() === targets[0].url;
+            const linkOnly = targets.length === 1 && keys.has(targets[0].key) && content.trim() === targets[0].url;
             if (linkOnly) text.dataset.lowcordSocialLinkOnly = "true";
             else delete text.dataset.lowcordSocialLinkOnly;
         }
-        const nsfw = Boolean(window.Lowcord.store("ChannelStore")?.getChannel?.(ids[1])?.nsfw);
+        const nsfw = Boolean(window.Lowcord.store("ChannelStore")?.getChannel?.(tracked.ch)?.nsfw);
         const signature = `${nsfw}:${[...keys].join(",")}`;
-        const prior = rowState.get(row);
-        let host = surface.querySelector(":scope > .lowcord-social-embeds");
-        rowState.set(row, { keys: targets.map(target => target.key), signature });
-        if (prior?.signature === signature && (!keys.size || host)) return;
-        if (!keys.size) { host?.remove(); return; }
+        let host = directEmbedHost(surface);
+        if (prior?.signature === signature && (!keys.size || host)) {
+            rowState.set(row, { keys: targets.map(target => target.key), signature, hadLinks: targets.length > 0 || keys.size > 0, host });
+            return;
+        }
+        if (!keys.size) {
+            host?.remove();
+            rowState.set(row, { keys: targets.map(target => target.key), signature, hadLinks: targets.length > 0, host: null });
+            return;
+        }
         if (!host) {
             host = el("div", "lowcord-social-embeds");
             surface.append(host);
         }
         const existing = new Map([...host.children].map(node => [node.dataset.socialKey, node]));
         const desired = ready.map(([key, entry]) => existing.get(key) ?? card(entry.post, key, nsfw));
-        for (const node of host.children) if (!desired.includes(node)) node.remove();
+        for (const node of [...host.children]) if (!desired.includes(node)) node.remove();
         desired.forEach((node, index) => { if (host.children[index] !== node) host.insertBefore(node, host.children[index] ?? null); });
+        rowState.set(row, { keys: targets.map(target => target.key), signature, hadLinks: true, host });
     }
     function flush() {
         if (frame !== undefined) cancelAnimationFrame(frame);
         frame = undefined;
-        if (!extensions.enabled("socialCards")) { rows.clear(); return; }
+        if (!extensions.enabled("socialCards")) { rows.clear(); storeDirty = false; return; }
+        if (storeDirty && messageStore) {
+            storeDirty = false;
+            const getMessage = messageStore.getMessage;
+            if (typeof getMessage === "function") {
+                for (const [row, entry] of trackedRows) {
+                    if (!row.isConnected) { trackedRows.delete(row); continue; }
+                    if (row.id !== entry.id) trackRow(row);
+                    const message = entry.ch && entry.mid ? getMessage.call(messageStore, entry.ch, entry.mid) : undefined;
+                    if (entry.hasSeen && entry.msg === message && entry.content === message?.content
+                        && entry.flags === message?.flags && entry.embeds === message?.embeds
+                        && entry.embedsLen === message?.embeds?.length) continue;
+                    entry.msg = message; entry.content = message?.content; entry.flags = message?.flags;
+                    entry.embeds = message?.embeds; entry.embedsLen = message?.embeds?.length; entry.hasSeen = true;
+                    rows.add(row);
+                }
+            }
+        }
         for (const row of rows) updateRow(row);
         rows.clear();
     }
@@ -268,28 +332,60 @@
             document.querySelectorAll(".lowcord-social-embeds").forEach(host => host.remove());
             document.querySelectorAll("[data-lowcord-social-hidden]").forEach(embed => delete embed.dataset.lowcordSocialHidden);
             document.querySelectorAll("[data-lowcord-social-link-only]").forEach(text => delete text.dataset.lowcordSocialLinkOnly);
-            rows.clear(); return;
+            rows.clear(); trackedRows.clear(); storeDirty = false; return;
         }
-        document.querySelectorAll(rowSelector).forEach(row => { rowState.delete(row); rows.add(row); });
+        trackedRows.clear();
+        const list = document.querySelectorAll(rowSelector);
+        for (let i = 0; i < list.length; i++) {
+            const row = list[i];
+            trackRow(row); rowState.delete(row); rows.add(row);
+        }
         schedule();
     }
     window.addEventListener(extensions.changeEvent, refresh);
     function domChanged(records) {
-        if (!Array.isArray(records)) { document.querySelectorAll(rowSelector).forEach(row => rows.add(row)); flush(); return; }
-        for (const record of records) {
+        if (!Array.isArray(records)) {
+            syncTrackedRows();
+            for (const row of trackedRows.keys()) rows.add(row);
+            flush(); return;
+        }
+        for (let i = 0; i < records.length; i++) {
+            const record = records[i];
+            if (record.type !== "childList") continue;
             const target = record.target instanceof Element ? record.target : record.target.parentElement;
             if (!target || target.closest(ownSelector)) continue;
-            const added = [...record.addedNodes].filter(node => node instanceof Element && !node.matches(ownSelector));
-            if (!added.length && ![...record.removedNodes].some(node => !(node instanceof Element && node.matches(ownSelector)))) continue;
-            const row = target.closest(rowSelector);
-            if (row) rows.add(row);
-            for (const node of added) {
-                if (node.matches(rowSelector)) rows.add(node);
-                node.querySelectorAll(rowSelector).forEach(item => rows.add(item));
+            const added = record.addedNodes, removed = record.removedNodes;
+            let hasAdded = false, hasRemoved = false;
+            for (let j = 0; j < added.length; j++) {
+                const node = added[j];
+                if (node instanceof Element && !node.matches(ownSelector)) {
+                    hasAdded = true;
+                    if (node.matches(rowSelector)) { trackRow(node); rows.add(node); }
+                    if (node.childElementCount > 0) {
+                        const nested = node.querySelectorAll(rowSelector);
+                        for (let k = 0; k < nested.length; k++) { trackRow(nested[k]); rows.add(nested[k]); }
+                    }
+                }
             }
+            for (let j = 0; j < removed.length; j++) {
+                const node = removed[j];
+                if (!(node instanceof Element && node.matches(ownSelector))) {
+                    hasRemoved = true;
+                    if (node instanceof Element) {
+                        if (trackedRows.has(node)) trackedRows.delete(node);
+                        if (node.childElementCount > 0) {
+                            const nested = node.querySelectorAll(rowSelector);
+                            for (let k = 0; k < nested.length; k++) trackedRows.delete(nested[k]);
+                        }
+                    }
+                }
+            }
+            if (!hasAdded && !hasRemoved) continue;
+            const row = target.closest(rowSelector);
+            if (row) { trackRow(row); rows.add(row); }
         }
         // Already inside the shared frame callback: render in this frame.
-        if (rows.size) flush();
+        if (rows.size || storeDirty) flush();
     }
     let stopObserving;
     function observe() {
@@ -301,21 +397,14 @@
     function start() { observe(); refresh(); }
     if (document.body) start(); else document.addEventListener("DOMContentLoaded", start, { once: true });
     window.Lowcord.waitForStore("MessageStore", store => {
+        messageStore = store;
         // Store changes cover edits and suppression flags with no DOM change.
-        // Most notifications are for messages in other channels: re-check only
-        // rows whose message changed since the store last reported it.
-        const seen = new WeakMap();
+        // Most notifications are for messages in other channels: coalesce to
+        // one per-frame pass over tracked rows without DOM queries or arrays.
         store.addChangeListener?.(() => {
             if (!extensions.enabled("socialCards")) return;
-            for (const row of document.querySelectorAll(rowSelector)) {
-                const ids = /^chat-messages-(\d+)-(\d+)$/.exec(row.id);
-                const message = ids ? store.getMessage?.(ids[1], ids[2]) : undefined;
-                const inputs = [message, message?.content, message?.flags, message?.embeds, message?.embeds?.length];
-                const prior = seen.get(row);
-                if (prior?.every((value, i) => value === inputs[i])) continue;
-                seen.set(row, inputs); rows.add(row);
-            }
-            if (rows.size) schedule();
+            storeDirty = true;
+            schedule();
         });
         refresh();
     });

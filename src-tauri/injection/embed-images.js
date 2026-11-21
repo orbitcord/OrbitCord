@@ -44,26 +44,58 @@
         image.src = sources[0];
         card.after(box);
     }
-    function scan() {
+    const rowIdPattern = /^chat-messages-(\d+)-(\d+)$/;
+    function scanRow(row, messages) {
+        const match = rowIdPattern.exec(row.id);
+        const attachments = match && messages.getMessage?.(match[1], match[2])?.attachments;
+        if (!attachments?.length) return;
+        for (const attachment of attachments) {
+            if (!attachment?.url || !pattern.test(attachment.filename ?? "") || !(attachment.size <= MAX_SIZE)) continue;
+            const card = cardFor(row, attachment);
+            if (card) embed(card, attachment);
+        }
+    }
+    function scan(targets) {
         if (!extensions.enabled(ID)) return;
         const messages = window.Lowcord.store("MessageStore");
         if (!messages) return;
-        for (const row of document.querySelectorAll('[id^="chat-messages-"]')) {
-            if (!row.querySelector('a[href*="/attachments/"]')) continue;
-            const match = /^chat-messages-(\d+)-(\d+)$/.exec(row.id);
-            const attachments = match && messages.getMessage?.(match[1], match[2])?.attachments;
-            if (!attachments?.length) continue;
-            for (const attachment of attachments) {
-                if (!attachment?.url || !pattern.test(attachment.filename ?? "") || !(attachment.size <= MAX_SIZE)) continue;
-                const card = cardFor(row, attachment);
-                if (card) embed(card, attachment);
+        if (targets) {
+            for (const row of targets) {
+                if (row.isConnected && row.getElementsByTagName("a").length && row.querySelector('a[href*="/attachments/"]')) scanRow(row, messages);
             }
+            return;
+        }
+        const links = document.querySelectorAll('[id^="chat-messages-"] a[href*="/attachments/"]');
+        if (!links.length) return;
+        const seen = new Set();
+        for (let i = 0; i < links.length; i++) {
+            const row = links[i].closest('[id^="chat-messages-"]');
+            if (row && !seen.has(row)) { seen.add(row); scanRow(row, messages); }
         }
     }
-    let frame = 0, stop, active = false;
+    let stop, active = false;
     function dom(records) {
-        if (frame || !window.Lowcord.domChanged(records, '[id^="chat-messages-"]')) return;
-        frame = requestAnimationFrame(() => { frame = 0; scan(); });
+        if (!Array.isArray(records)) { scan(); return; }
+        if (!window.Lowcord.domChanged(records, '[id^="chat-messages-"]')) return;
+        const targets = new Set();
+        for (let i = 0; i < records.length; i++) {
+            const record = records[i];
+            if (record.type !== "childList") continue;
+            const target = record.target instanceof Element ? record.target : record.target.parentElement;
+            const row = target?.closest('[id^="chat-messages-"]');
+            if (row) targets.add(row);
+            const added = record.addedNodes;
+            for (let j = 0; j < added.length; j++) {
+                const node = added[j];
+                if (!(node instanceof Element)) continue;
+                if (node.matches('[id^="chat-messages-"]')) targets.add(node);
+                else if (node.childElementCount > 0) {
+                    const nested = node.querySelectorAll('[id^="chat-messages-"]');
+                    for (let k = 0; k < nested.length; k++) targets.add(nested[k]);
+                }
+            }
+        }
+        if (targets.size) scan(targets);
     }
     function sync() {
         const on = extensions.enabled(ID);
@@ -72,7 +104,6 @@
         if (on) { stop = window.Lowcord.onDomChange(dom); scan(); }
         else {
             stop?.(); stop = undefined;
-            if (frame) { cancelAnimationFrame(frame); frame = 0; }
             for (const box of document.querySelectorAll(".lowcord-embed-image")) box.remove();
         }
     }

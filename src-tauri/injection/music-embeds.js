@@ -3,10 +3,40 @@
 (() => {
     const { musicLinks, socialLinks, extensions } = window.Lowcord;
     const rowSelector = '[id^="chat-messages-"]';
+    const rowIdPattern = /^chat-messages-(\d+)-(\d+)$/;
+    const musicHint = /spotify\.com|apple\.com/i;
     const editorSelector = '[contenteditable="true"][role="textbox"], textarea';
     const ownSelector = '.lowcord-music-embeds, .lowcord-music-draft';
-    const rows = new Set(), drafts = new Map(), rowState = new WeakMap();
-    let frame, discoverDrafts = true;
+    const rows = new Set(), drafts = new Map(), rowState = new WeakMap(), trackedRows = new Map();
+    let frame, discoverDrafts = true, storeDirty = false, messageStore = null;
+
+    function trackRow(row) {
+        let entry = trackedRows.get(row);
+        const id = row.id;
+        if (entry) {
+            if (entry.id !== id) {
+                const match = rowIdPattern.exec(id);
+                entry.id = id; entry.ch = match ? match[1] : null; entry.mid = match ? match[2] : null;
+            }
+            return entry;
+        }
+        const match = rowIdPattern.exec(id);
+        entry = { id, ch: match ? match[1] : null, mid: match ? match[2] : null,
+            msg: undefined, content: undefined, flags: undefined, embeds: undefined, embedsLen: undefined, hasSeen: false };
+        trackedRows.set(row, entry);
+        return entry;
+    }
+    function syncTrackedRows() {
+        const list = document.querySelectorAll(rowSelector);
+        for (let i = 0; i < list.length; i++) trackRow(list[i]);
+        for (const row of trackedRows.keys()) if (!row.isConnected) trackedRows.delete(row);
+    }
+    function directEmbedHost(surface) {
+        for (let child = surface.firstElementChild; child; child = child.nextElementSibling) {
+            if (child.classList.contains('lowcord-music-embeds')) return child;
+        }
+        return null;
+    }
 
     function player(item, draft) {
         const card = document.createElement('section');
@@ -41,29 +71,49 @@
         }
     }
     function updateRow(row) {
-        if (!row.isConnected) return;
-        const ids = /^chat-messages-(\d+)-(\d+)$/.exec(row.id);
-        if (!ids) return;
+        if (!row.isConnected) { trackedRows.delete(row); return; }
+        const entry = trackRow(row);
+        if (!entry.ch || !entry.mid) return;
         const surface = row.querySelector(':scope > [data-list-item-id^="chat-messages"]') ?? row.firstElementChild;
         const body = row.querySelector('[id^="message-content-"]');
         if (!surface || !body) return;
-        const store = window.Lowcord.store('MessageStore');
-        const message = typeof store?.getMessage === 'function' ? store.getMessage(ids[1], ids[2]) : null;
+        const store = messageStore ?? window.Lowcord.store('MessageStore');
+        const message = typeof store?.getMessage === 'function' ? store.getMessage(entry.ch, entry.mid) : null;
+        // Record the message state we just reconciled so the next MessageStore
+        // emit skips unchanged rows with zero allocations.
+        entry.msg = message; entry.content = message?.content; entry.flags = message?.flags;
+        entry.embeds = message?.embeds; entry.embedsLen = message?.embeds?.length; entry.hasSeen = true;
         // Render from the actual message markdown, not flattened DOM text:
         // Discord removes code fences and <suppressed-link> syntax in its DOM.
         if (!message || typeof message.content !== 'string') {
-            surface.querySelector(':scope > .lowcord-music-embeds')?.remove();
+            directEmbedHost(surface)?.remove();
             rowState.delete(row); return;
         }
         const content = message.content;
         const suppressed = Boolean((message?.flags ?? 0) & 4);
-        const native = new Set([...surface.querySelectorAll('iframe[src]:not([data-lowcord-music-player])')]
-            .map(iframe => musicLinks.parse(iframe.src)?.key).filter(Boolean));
-        const signature = `${suppressed}:${content}:${[...native].join(',')}`;
         const prior = rowState.get(row);
+        if (suppressed || !musicHint.test(content)) {
+            if (prior?.host || directEmbedHost(surface)) {
+                (prior?.host ?? directEmbedHost(surface))?.remove();
+            }
+            rowState.set(row, { signature: 'none', host: null });
+            return;
+        }
+        const iframes = surface.querySelectorAll('iframe[src]:not([data-lowcord-music-player])');
+        let native = null, nativeSig = '';
+        if (iframes.length) {
+            native = new Set();
+            for (let i = 0; i < iframes.length; i++) {
+                const key = musicLinks.parse(iframes[i].src)?.key;
+                if (key) native.add(key);
+            }
+            if (native.size) nativeSig = [...native].join(',');
+        }
+        const signature = `${suppressed}:${content}:${nativeSig}`;
         if (prior?.signature === signature && (!prior.host || prior.host.isConnected)) return;
-        const items = suppressed ? [] : musicLinks.collect(content, socialLinks.mapUrls).filter(item => !native.has(item.key));
-        let host = surface.querySelector(':scope > .lowcord-music-embeds');
+        const collected = musicLinks.collect(content, socialLinks.mapUrls);
+        const items = native?.size ? collected.filter(item => !native.has(item.key)) : collected;
+        let host = directEmbedHost(surface);
         if (!items.length) { host?.remove(); host = null; }
         else {
             if (!host) {
@@ -83,10 +133,17 @@
         // but it forces a layout, and this runs on most page changes. Read it
         // only when the text or the number of lines changed.
         const prior = drafts.get(editor);
-        const key = editor.value ?? `${editor.childElementCount}:${editor.textContent}`;
+        const raw = editor.value ?? editor.textContent;
+        const key = editor.value !== undefined ? raw : `${editor.childElementCount}:${raw}`;
         if (prior?.key === key && (!prior.host || prior.host.isConnected)) return;
+        // Drafts without a Spotify or Apple Music URL never need innerText layout.
+        if (!musicHint.test(raw)) {
+            if (prior?.host) prior.host.remove();
+            drafts.set(editor, { key, content: raw, host: null });
+            return;
+        }
         // An empty draft (most channel switches) has no links to lay out.
-        const content = editor.value ?? (/[^\s\u200b\ufeff]/.test(editor.textContent) ? editor.innerText : '');
+        const content = editor.value ?? (/[^\s\u200b\ufeff]/.test(raw) ? editor.innerText : '');
         if (prior?.content === content && (!prior.host || prior.host.isConnected)) { prior.key = key; return; }
         const items = musicLinks.collect(content, socialLinks.mapUrls);
         let host = prior?.host;
@@ -107,7 +164,24 @@
     function flush() {
         if (frame !== undefined) cancelAnimationFrame(frame);
         frame = undefined;
-        if (!extensions.enabled('musicEmbeds')) { rows.clear(); return; }
+        if (!extensions.enabled('musicEmbeds')) { rows.clear(); storeDirty = false; return; }
+        if (storeDirty && messageStore) {
+            storeDirty = false;
+            const getMessage = messageStore.getMessage;
+            if (typeof getMessage === 'function') {
+                for (const [row, entry] of trackedRows) {
+                    if (!row.isConnected) { trackedRows.delete(row); continue; }
+                    if (row.id !== entry.id) trackRow(row);
+                    const message = entry.ch && entry.mid ? getMessage.call(messageStore, entry.ch, entry.mid) : undefined;
+                    if (entry.hasSeen && entry.msg === message && entry.content === message?.content
+                        && entry.flags === message?.flags && entry.embeds === message?.embeds
+                        && entry.embedsLen === message?.embeds?.length) continue;
+                    entry.msg = message; entry.content = message?.content; entry.flags = message?.flags;
+                    entry.embeds = message?.embeds; entry.embedsLen = message?.embeds?.length; entry.hasSeen = true;
+                    rows.add(row);
+                }
+            }
+        }
         for (const row of rows) updateRow(row);
         rows.clear();
         for (const [editor, state] of drafts) {
@@ -115,7 +189,9 @@
         }
         // An observer keeps the nodes it watches alive: drop composers that
         // left the page by watching only the ones still on it.
-        if ([...watchedEditors].some(editor => !editor.isConnected)) {
+        let staleEditor = false;
+        for (const editor of watchedEditors) if (!editor.isConnected) { staleEditor = true; break; }
+        if (staleEditor) {
             draftText.disconnect();
             for (const editor of watchedEditors) {
                 if (editor.isConnected) draftText.observe(editor, { characterData: true, subtree: true });
@@ -135,10 +211,15 @@
         if (!extensions.enabled('musicEmbeds')) {
             document.querySelectorAll(ownSelector).forEach(host => host.remove());
             draftText.disconnect(); watchedEditors.clear();
-            drafts.clear(); rows.clear(); return;
+            drafts.clear(); rows.clear(); trackedRows.clear(); storeDirty = false; return;
         }
         // Clear signatures on toggles so enabling after cleanup recreates cards.
-        document.querySelectorAll(rowSelector).forEach(row => { rowState.delete(row); rows.add(row); });
+        trackedRows.clear();
+        const list = document.querySelectorAll(rowSelector);
+        for (let i = 0; i < list.length; i++) {
+            const row = list[i];
+            trackRow(row); rowState.delete(row); rows.add(row);
+        }
         discoverDrafts = true; schedule();
     }
     function input(event) {
@@ -157,27 +238,52 @@
     const watchedEditors = new Set();
     function domChanged(records) {
         if (!Array.isArray(records)) {
-            document.querySelectorAll(rowSelector).forEach(row => rows.add(row));
+            syncTrackedRows();
+            for (const row of trackedRows.keys()) rows.add(row);
             discoverDrafts = true; flush(); return;
         }
-        for (const record of records) {
+        for (let i = 0; i < records.length; i++) {
+            const record = records[i];
             const target = record.target instanceof Element ? record.target : record.target.parentElement;
             if (!target || target.closest(ownSelector)) continue;
-            const added = [...record.addedNodes].filter(node => node instanceof Element && !node.matches(ownSelector));
-            const removed = [...record.removedNodes].filter(node => !(node instanceof Element && node.matches(ownSelector)));
-            if (record.type === 'childList' && !added.length && !removed.length) continue;
-            const row = target.closest(rowSelector);
-            if (row) rows.add(row);
-            if (target.closest('[class*="channelTextArea_"]')) discoverDrafts = true;
-            for (const node of added) {
-                if (node.matches(rowSelector)) rows.add(node);
-                node.querySelectorAll(rowSelector).forEach(row => rows.add(row));
-                if (node.matches(editorSelector) || node.querySelector(editorSelector)) discoverDrafts = true;
+            let hasAdded = false, hasRemoved = false;
+            if (record.type === 'childList') {
+                const added = record.addedNodes, removed = record.removedNodes;
+                for (let j = 0; j < added.length; j++) {
+                    const node = added[j];
+                    if (node instanceof Element && !node.matches(ownSelector)) {
+                        hasAdded = true;
+                        if (node.matches(rowSelector)) { trackRow(node); rows.add(node); }
+                        if (node.childElementCount > 0) {
+                            const nested = node.querySelectorAll(rowSelector);
+                            for (let k = 0; k < nested.length; k++) { trackRow(nested[k]); rows.add(nested[k]); }
+                            if (!discoverDrafts && node.querySelector(editorSelector)) discoverDrafts = true;
+                        }
+                        if (!discoverDrafts && node.matches(editorSelector)) discoverDrafts = true;
+                    }
+                }
+                for (let j = 0; j < removed.length; j++) {
+                    const node = removed[j];
+                    if (!(node instanceof Element && node.matches(ownSelector))) {
+                        hasRemoved = true;
+                        if (node instanceof Element) {
+                            if (trackedRows.has(node)) trackedRows.delete(node);
+                            if (node.childElementCount > 0) {
+                                const nested = node.querySelectorAll(rowSelector);
+                                for (let k = 0; k < nested.length; k++) trackedRows.delete(nested[k]);
+                            }
+                        }
+                    }
+                }
+                if (!hasAdded && !hasRemoved) continue;
             }
-            if (removed.length && drafts.size) discoverDrafts = true;
+            const row = target.closest(rowSelector);
+            if (row) { trackRow(row); rows.add(row); }
+            if (!discoverDrafts && target.closest('[class*="channelTextArea_"]')) discoverDrafts = true;
+            if (hasRemoved && drafts.size) discoverDrafts = true;
         }
         // Already inside the shared frame callback: render in this frame.
-        if (rows.size || discoverDrafts) flush();
+        if (rows.size || discoverDrafts || storeDirty) flush();
     }
     let stopObserving;
     function observe() {
@@ -189,21 +295,14 @@
     function start() { observe(); refresh(); }
     if (document.body) start(); else document.addEventListener('DOMContentLoaded', start, { once: true });
     window.Lowcord.waitForStore('MessageStore', store => {
+        messageStore = store;
         // Store changes cover edits and suppression flags with no DOM change.
-        // Most notifications are for messages in other channels: re-check only
-        // rows whose message changed since the store last reported it.
-        const seen = new WeakMap();
+        // Most notifications are for messages in other channels: coalesce to
+        // one per-frame pass over tracked rows without DOM queries or arrays.
         store.addChangeListener?.(() => {
             if (!extensions.enabled('musicEmbeds')) return;
-            for (const row of document.querySelectorAll(rowSelector)) {
-                const ids = /^chat-messages-(\d+)-(\d+)$/.exec(row.id);
-                const message = ids ? store.getMessage?.(ids[1], ids[2]) : undefined;
-                const inputs = [message, message?.content, message?.flags, message?.embeds, message?.embeds?.length];
-                const prior = seen.get(row);
-                if (prior?.every((value, i) => value === inputs[i])) continue;
-                seen.set(row, inputs); rows.add(row);
-            }
-            if (rows.size) schedule();
+            storeDirty = true;
+            schedule();
         });
         refresh();
     });
