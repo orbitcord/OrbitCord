@@ -32,6 +32,8 @@
 
     // ----- Entries -------------------------------------------------------------
     const go = path => () => window.Lowcord.transitionTo?.(path);
+    // A chat entry keeps its path so Tabs can open it in a tab.
+    const chat = (entry, path) => ({ ...entry, path, run: go(path) });
     function userName(id) {
         const user = store("UserStore")?.getUser?.(id);
         return user?.globalName || user?.global_name || user?.username || "Unknown user";
@@ -44,17 +46,15 @@
             const recipients = channel.recipients ?? channel.rawRecipients?.map(user => user.id) ?? [];
             const name = channel.name || recipients.map(id => typeof id === "string" ? userName(id) : id.username).join(", ");
             if (!name) continue;
-            list.push({ group: "Direct messages", label: name, detail: recipients.length > 1 ? "Group DM" : "Direct message", recent: index,
-                run: go(`/channels/@me/${channel.id}`) });
+            list.push(chat({ group: "Direct messages", label: name, detail: recipients.length > 1 ? "Group DM" : "Direct message", recent: index }, `/channels/@me/${channel.id}`));
         }
         for (const guild of Object.values(guilds)) {
-            list.push({ group: "Servers", label: guild.name, detail: "Server", run: go(`/channels/${guild.id}`) });
+            list.push(chat({ group: "Servers", label: guild.name, detail: "Server" }, `/channels/${guild.id}`));
             const groups = guildChannels?.getChannels?.(guild.id);
             for (const { channel } of [...groups?.SELECTABLE ?? [], ...groups?.VOCAL ?? []]) {
                 if (!channel?.name) continue;
                 const voice = channel.type === 2 || channel.type === 13;
-                list.push({ group: "Channels", label: `${voice ? "🔊 " : "#"}${channel.name}`, match: channel.name, detail: guild.name,
-                    run: go(`/channels/${guild.id}/${channel.id}`) });
+                list.push(chat({ group: "Channels", label: `${voice ? "🔊 " : "#"}${channel.name}`, match: channel.name, detail: guild.name }, `/channels/${guild.id}/${channel.id}`));
             }
         }
         return list;
@@ -65,6 +65,7 @@
         for (const action of extensions.composerActions ?? []) {
             if (enabled(action.id)) list.push({ group: "Actions", label: action.label, detail: "Message bar", suggested: true, run: () => action.run() });
         }
+        list.push(...window.Lowcord.tabs?.paletteEntries?.() ?? []);
         list.push({ group: "Actions", label: "Mark all as read", detail: "Every unread server", suggested: true, run: () => window.Lowcord.readAll?.markAll() });
         if (enabled("mediaGallery") && window.Lowcord.mediaGallery) list.push({ group: "Actions", label: "Media gallery", detail: "This chat's photos and videos", run: () => window.Lowcord.mediaGallery.toggle() });
         const privacy = window.Lowcord.privacy;
@@ -203,5 +204,5 @@
         show();
     }, true);
     window.addEventListener(changeEvent, () => { if (!enabled(ID)) open?.close(); });
-    window.Lowcord.commandPalette = { open: show, close: () => open?.close(), score, get isOpen() { return Boolean(open); } };
+    window.Lowcord.commandPalette = { open: show, close: () => open?.close(), score, chats, get isOpen() { return Boolean(open); } };
 })();

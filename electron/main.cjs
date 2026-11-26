@@ -476,7 +476,11 @@ async function createDiscordWindow(account) {
     });
     contents.on('render-process-gone', () => cancelFeatures(id));
     contents.on('before-input-event', (event, input) => {
-        if (discordWindows.get(id)?.lockMatch?.(input)) { event.preventDefault(); lockAll(); }
+        if (discordWindows.get(id)?.lockMatch?.(input)) { event.preventDefault(); lockAll(); return; }
+        // Handled here, before the window menu's Close shortcut can see it.
+        if (input.type === 'keyDown' && !input.isAutoRepeat && input.key.toLowerCase() === 'w' && !input.alt && !input.shift
+            && (process.platform === 'darwin' ? input.meta && !input.control : input.control && !input.meta)
+            && discordWindows.get(id)?.tabsCloseable) { event.preventDefault(); contents.send('lowcord:close-tab'); }
     });
     const record = { account, window, badge: 0, stateTimer: undefined,
         embedPlugins: setupEmbedPlugins(contents),
@@ -919,6 +923,11 @@ function registerIpc() {
         updateError = null;
         publishUpdateNotice();
         try { autoUpdater.quitAndInstall(); } catch (error) { updateFailed(error); }
+    });
+    // Tabs: while more than one tab is open, Cmd/Ctrl+W closes the tab
+    // instead of the window (see before-input-event).
+    ipcMain.handle('lowcord:tabs-closeable', (event, value) => {
+        assertSender(event).tabsCloseable = value === true;
     });
     ipcMain.handle('lowcord:badge', (event, count) => {
         const record = assertSender(event);

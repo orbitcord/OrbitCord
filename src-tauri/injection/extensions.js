@@ -37,6 +37,7 @@
         { id: "socialPhotoUpload", defaultEnabled: false, title: "Photos and carousels as files", description: "Upload linked Instagram, Reddit and X photos or carousels as files." },
         { id: "splitMessages", title: "Split long messages", description: "Send messages over the length limit as several messages." },
         { id: "commandPalette", title: "Command palette", description: "Press ⌘⇧K or Ctrl+Shift+K to jump to any chat or run any OrbitCord action." },
+        { id: "tabs", title: "Tabs", description: "Keep chats, threads, messages and pages open as tabs in the top bar. Save sets of tabs as workspaces." },
         { id: "readAll", defaultEnabled: false, title: "Mark all as read", description: "Adds a button to the server list that clears every unread badge." },
         { id: "callTimer", title: "Call timer", description: "Shows how long you've been in a voice call." },
         { id: "onlineFriendCount", defaultEnabled: false, title: "Online friend count", description: "Shows how many friends are online under the Home button." },

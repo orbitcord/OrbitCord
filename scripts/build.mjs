@@ -76,7 +76,7 @@ export async function buildPreload({ sourceRoot = root, output = join(sourceRoot
     const [videoCompression, rawVideoCompressionCSS] = await Promise.all(['video-compression.js', 'video-compression.css'].map(read));
     const [mediaSources, rawMediaSourcesCSS] = await Promise.all(['media-sources.js', 'media-sources.css'].map(read));
     const imageDrop = await read('image-drop.js');
-    const extraScripts = await Promise.all(['split-messages.js', 'read-all.js', 'call-timer.js', 'online-friends.js', 'translate.js', 'spellcheck.js', 'quick-reactions.js', 'command-palette.js', 'embed-images.js', 'zip-preview.js', 'gif-captioner.js', 'tenor.js'].map(read));
+    const extraScripts = await Promise.all(['split-messages.js', 'read-all.js', 'call-timer.js', 'online-friends.js', 'translate.js', 'spellcheck.js', 'quick-reactions.js', 'command-palette.js', 'tabs.js', 'embed-images.js', 'zip-preview.js', 'gif-captioner.js', 'tenor.js'].map(read));
     const [rawUiExtrasCSS, rawMediaExtrasCSS, rawGifCaptionerCSS] = await Promise.all(['ui-extras.css', 'media-extras.css', 'gif-captioner.css'].map(read));
     const [privacyCore, privacyMedia, privacy, rawPrivacyCSS, imageCover] = await Promise.all(['privacy-core.js', 'privacy-media.js', 'privacy.js', 'privacy.css', 'image-cover.js'].map(read));
     const [themesCSS, appearanceCSS, uiCSS, privacyCSS, videoCompressionCSS, redgifsCSS, redditCSS, mediaSourcesCSS, pictureInPictureCSS, gifCaptionerCSS, mediaExtrasCSS] = await Promise.all([
@@ -104,6 +104,12 @@ if (process.isMainFrame && location.protocol !== 'data:') {
     contextBridge.exposeInMainWorld('__LOWCORD_NATIVE__', {
         notify: (title, body) => ipcRenderer.invoke('lowcord:notify', title, body),
         setBadge: count => ipcRenderer.invoke('lowcord:badge', count),
+        setTabsCloseable: value => ipcRenderer.invoke('lowcord:tabs-closeable', value === true),
+        onCloseTab: callback => {
+            const listener = () => callback();
+            ipcRenderer.on('lowcord:close-tab', listener);
+            return () => ipcRenderer.removeListener('lowcord:close-tab', listener);
+        },
         log: message => ipcRenderer.invoke('lowcord:log', message),
         openExternal: url => ipcRenderer.invoke('lowcord:open-external', url),
         updateStatus: () => ipcRenderer.invoke('lowcord:updates-status'),

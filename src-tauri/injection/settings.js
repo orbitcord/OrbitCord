@@ -366,6 +366,7 @@ function setupLowcordSettings() {
         socialPhotoUpload: ["Uploads", "Send an Instagram, Reddit or X photo post or carousel link to upload its photos as files.", "Off by default. Turn it on with the card switch."],
         splitMessages: ["Messaging", "Send a message longer than Discord's limit and OrbitCord posts it as several messages in order."],
         commandPalette: ["Utilities", "Press ⌘⇧K on a Mac or Ctrl+Shift+K elsewhere. Type to find a DM, channel or server, run a message bar action, switch theme, open a settings page or turn an extension on or off. Use the arrow keys and Enter.", "Discord's quick switcher stays on ⌘K or Ctrl+K. The palette's last result opens it to search messages and members."],
+        tabs: ["Utilities", "Right-click a chat, server or message and choose Open in New Tab, or ⌘/Ctrl-click or middle-click it. Use + or ⌘T / Ctrl+T to search, reopen a closed tab or open Friends, Shop and other pages. Switch with ⌘1–9 / Ctrl+1–9 or Ctrl+Tab, close with ⌘W / Ctrl+W and reopen with ⌘⇧T / Ctrl+Shift+T. Drag tabs to reorder them.", "Save your tabs as a workspace from the + menu to switch between sets, like Work and Gaming. Tabs come back when you restart."],
         readAll: ["Utilities", "Use the button in the server list to clear every unread badge at once."],
         callTimer: ["Utilities", "See how long you have been in a voice call, beside the call controls."],
         onlineFriendCount: ["Utilities", "See how many friends are online under the Home button."],
