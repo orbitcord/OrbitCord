@@ -1379,6 +1379,56 @@ test("right-clicking chat media adds Copy Media Link to Discord's message menu",
     await expect(item).toHaveCount(0);
 });
 
+test("Copy Media Link on a linked GIF, video or player copies the media's own URL from the embed", async ({ page }) => {
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.evaluate(() => {
+        const proxy = path => `https://images-ext-1.discordapp.net/external/${path}`;
+        const embeds = [
+            // Discord's originalLink names the page; the file is the embed's video.
+            { type: "gifv", url: "https://imgur.com/2x0MU75", provider: { name: "Imgur" },
+                thumbnail: { url: "https://i.imgur.com/2x0MU75h.jpg", proxyURL: proxy("a/https/i.imgur.com/2x0MU75h.jpg") },
+                video: { url: "https://i.imgur.com/2x0MU75.mp4", proxyURL: proxy("b/https/i.imgur.com/2x0MU75.mp4") } },
+            { type: "video", url: "https://example.com/clip.mp4",
+                thumbnail: { url: proxy("c/https/example.com/clip.mp4") },
+                video: { url: "https://example.com/clip.mp4", proxyURL: proxy("c/https/example.com/clip.mp4") } },
+            { type: "video", url: "https://www.youtube.com/watch?v=abc", provider: { name: "YouTube" },
+                thumbnail: { url: "https://i.ytimg.com/vi/abc/hq.jpg", proxyURL: proxy("d/https/i.ytimg.com/vi/abc/hq.jpg") },
+                video: { url: "https://www.youtube.com/embed/abc" } },
+        ];
+        const stores = { MessageStore: { getMessage: (channelId, id) => channelId === "700" && id === "5" ? { embeds } : null } };
+        const store = Lowcord.store;
+        Lowcord.store = name => stores[name] ?? store(name);
+        document.body.insertAdjacentHTML("beforeend", `<ol style="position:fixed;top:0;left:300px;z-index:50;margin:0;list-style:none">
+            <li id="chat-messages-700-5"><div id="message-accessories-5">
+                <div class="imageWrapper_test" id="gif" style="width:120px;height:60px;position:relative">
+                    <a class="originalLink_test" href="https://imgur.com/2x0MU75" style="position:absolute;inset:0"></a>
+                    <video src="${proxy("b/https/i.imgur.com/2x0MU75.mp4")}" width="120" height="60"></video></div>
+                <div class="embedVideo_test" id="clip" style="width:120px;height:60px;position:relative">
+                    <video src="${proxy("c/https/example.com/clip.mp4")}" width="120" height="60"></video>
+                    <div class="cover_test" style="position:absolute;inset:0"></div></div>
+                <div class="embedVideo_test" id="player" style="width:120px;height:60px;position:relative">
+                    <img src="${proxy("d/https/i.ytimg.com/vi/abc/hq.jpg?width=400")}" width="120" height="60">
+                    <a class="anchor_test" href="https://www.youtube.com/watch?v=abc" style="position:absolute;inset:0"></a></div>
+            </div></li></ol>`);
+        window.addEventListener("contextmenu", event => {
+            event.preventDefault();
+            requestAnimationFrame(() => {
+                document.querySelector("#message")?.remove();
+                document.body.insertAdjacentHTML("beforeend", `<div id="message" role="menu" style="position:fixed;top:200px;left:300px;z-index:60">
+                    <div class="item_test" role="menuitem" id="message-copy-text"><div class="label_test">Copy Text</div></div></div>`);
+            });
+        });
+        document.addEventListener("keydown", event => { if (event.key === "Escape") document.querySelector("#message")?.remove(); });
+    });
+    const item = page.locator("#message").getByRole("menuitem", { name: "Copy Media Link" });
+    for (const [target, link] of [["#gif", "https://i.imgur.com/2x0MU75.mp4"], ["#clip", "https://example.com/clip.mp4"],
+        ["#player", "https://www.youtube.com/watch?v=abc"]]) {
+        await page.locator(target).click({ button: "right" });
+        await item.click();
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(link);
+    }
+});
+
 test("media gallery months: headings open a month picker that scrolls or restarts from an older month", async ({ page }) => {
     await page.setViewportSize({ width: 900, height: 380 });
     await page.evaluate(() => {

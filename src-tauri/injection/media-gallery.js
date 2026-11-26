@@ -555,9 +555,54 @@
     // opens, a "Copy Media Link" item joins it, styled from its own items.
     const linkPath = "M16.32 14.72a1 1 0 0 1 0-1.41l2.51-2.51a3.98 3.98 0 0 0-5.62-5.63l-2.52 2.51a1 1 0 0 1-1.41-1.41l2.52-2.52a5.98 5.98 0 0 1 8.45 8.46l-2.52 2.51a1 1 0 0 1-1.41 0ZM7.68 9.29a1 1 0 0 1 0 1.41l-2.52 2.51a3.98 3.98 0 1 0 5.63 5.63l2.51-2.52a1 1 0 0 1 1.42 1.42l-2.52 2.51a5.98 5.98 0 0 1-8.45-8.45l2.51-2.51a1 1 0 0 1 1.42 0Zm1.92 6.37a1 1 0 0 1-1.41-1.41l6.07-6.07a1 1 0 1 1 1.41 1.41l-6.07 6.07Z";
     const skipImages = '[class*="emoji"], [class*="avatar"], [class*="icon"], [class*="reaction"]';
+    // Discord serves a link preview through its media proxy, and its
+    // originalLink points at the page the link named (imgur.com/…,
+    // tenor.com/view/…), so the DOM alone cannot tell the media's own URL.
+    // The message's embeds can: each proxied or original media URL in the
+    // embed maps to the link worth copying.
+    const urlKey = link => {
+        try {
+            const url = new URL(link, location.href);
+            return /(^|\.)discordapp\.(net|com)$/.test(url.hostname) ? url.pathname : url.origin + url.pathname;
+        } catch { return null; }
+    };
+    function embedLinks(embed) {
+        const video = embed.video?.url;
+        // A player page (YouTube, Vimeo) has no file to link; its page does.
+        const main = !video ? null : embed.type === "gifv" || !embed.provider || videoFile(video) ? video : embed.url || video;
+        const links = new Map();
+        const add = (media, link) => { if (link) for (const url of [media?.url, media?.proxyURL]) if (url) links.set(urlKey(url), link); };
+        for (const image of [embed.thumbnail, embed.image, ...(embed.images ?? [])]) add(image, main ?? image?.url);
+        add(embed.video, main);
+        // The originalLink over a link preview carries the embed's own URL.
+        const preview = main ?? (embed.type === "image" ? embed.thumbnail?.url ?? embed.image?.url : null);
+        if (embed.url && preview) links.set(urlKey(embed.url), preview);
+        links.delete(null);
+        return links;
+    }
+    function embedMediaLink(target, accessories) {
+        const [, channelId] = /^chat-messages-(\d+)-\d+$/.exec(accessories.closest('[id^="chat-messages-"]')?.id ?? "") ?? [];
+        const messageId = accessories.id.slice("message-accessories-".length);
+        const embeds = channelId && store("MessageStore")?.getMessage?.(channelId, messageId)?.embeds;
+        if (!embeds?.length) return null;
+        const maps = embeds.map(embedLinks);
+        for (let node = target; node && node !== accessories; node = node.parentElement) {
+            const elements = [node, ...node.querySelectorAll('a[class*="originalLink_"], img, video, source')]
+                .filter(element => element.matches('a[class*="originalLink_"], img, video, source') && !element.matches(skipImages));
+            const keys = new Set(elements.flatMap(element => [element.href, element.currentSrc, element.src])
+                .filter(url => typeof url === "string" && /^https?:/.test(url)).map(urlKey));
+            const found = new Set();
+            for (const key of keys) for (const links of maps) if (links.has(key)) found.add(links.get(key));
+            // Several previews under one node: the target names none of them.
+            if (found.size) return found.size === 1 ? [...found][0] : null;
+        }
+        return null;
+    }
     function mediaLink(target) {
         const accessories = target instanceof Element ? target.closest('[id^="message-accessories-"]') : null;
         if (!accessories || target.closest('[class*="reactions_"]')) return null;
+        const embedded = embedMediaLink(target, accessories);
+        if (embedded) return embedded;
         for (let node = target; node && node !== accessories; node = node.parentElement) {
             const original = node.matches('a[class*="originalLink_"]') ? node : node.querySelector(':scope > a[class*="originalLink_"]');
             if (original?.href) return original.href;
